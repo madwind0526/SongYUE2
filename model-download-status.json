@@ -1,0 +1,371 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-09-11T18:41:57Z",
+  "state": "complete",
+  "totalBytes": 23314925299,
+  "completedBytes": 23314925299,
+  "repositories": [
+    {
+      "id": "m-a-p/YuE2-3B",
+      "revision": "29b3558dd46954a0cd9021dc76d5c91864a0f1c7",
+      "path": "models/m-a-p/YuE2-3B",
+      "state": "complete",
+      "totalBytes": 7264150626,
+      "completedBytes": 7264150626,
+      "files": [
+        {
+          "path": ".gitattributes",
+          "size": 2134,
+          "sha256": "12ed2bedb5bdcaec199eeee105d8f37af6ecb6d1eabcde581268fda26c09c3ec",
+          "state": "complete",
+          "completedBytes": 2134
+        },
+        {
+          "path": "LICENSE",
+          "size": 20309,
+          "sha256": "060985741d20e70613b4c189c7de106cabd3fb2109fbbfb6d705c9d619417dd0",
+          "state": "complete",
+          "completedBytes": 20309
+        },
+        {
+          "path": "README.md",
+          "size": 19745,
+          "sha256": "e17313e4d754339c207d3242fd6ef1ca86d9894879f0ce6f81087131e5206d35",
+          "state": "complete",
+          "completedBytes": 19745
+        },
+        {
+          "path": "THIRD_PARTY_NOTICES.md",
+          "size": 793,
+          "sha256": "14d3fd9f6fee86b4260b69b0979735b99ffec8c6b4db254567047a4215cd9af3",
+          "state": "complete",
+          "completedBytes": 793
+        },
+        {
+          "path": "config.json",
+          "size": 959,
+          "sha256": "ad3477bbef890bf98ae196c1e4b44779494a6231c4ab66f32708eabadf265329",
+          "state": "complete",
+          "completedBytes": 959
+        },
+        {
+          "path": "examples/tonight-awake.json",
+          "size": 1734,
+          "sha256": "96087e19caa63beda8a0509afe2f2fe9f8779d300c31bd8947d6504733bd54cf",
+          "state": "complete",
+          "completedBytes": 1734
+        },
+        {
+          "path": "generation_config.json",
+          "size": 204,
+          "sha256": "ccc842772f029049fadf9b288393bcdd9f79271b361c0f1875ec1218e4ba5170",
+          "state": "complete",
+          "completedBytes": 204
+        },
+        {
+          "path": "licenses/SnakeBeta-NVIDIA-MIT.txt",
+          "size": 1076,
+          "sha256": "da9858d516047d82096d01c112a61bd67f26d289039464d668a1d45f91738ecc",
+          "state": "complete",
+          "completedBytes": 1076
+        },
+        {
+          "path": "licenses/stable-audio-tools-MIT.txt",
+          "size": 1069,
+          "sha256": "a1fac33b7bcd791b74fb33aeb439f825e7277e239fc119fb7d2ab6f084a0c101",
+          "state": "complete",
+          "completedBytes": 1069
+        },
+        {
+          "path": "model.safetensors",
+          "size": 7261441640,
+          "sha256": "1d55c42c1a9875c34f5d736e15078449992b044e807ce2a138e6cf289a1e59e9",
+          "state": "complete",
+          "completedBytes": 7261441640
+        },
+        {
+          "path": "modeling_yue2.py",
+          "size": 32983,
+          "sha256": "62d2bd758c8fff1a0d64584a699343076fca9a7880db5d8e19263bc30ae79d7c",
+          "state": "complete",
+          "completedBytes": 32983
+        },
+        {
+          "path": "qwen.tiktoken",
+          "size": 2561218,
+          "sha256": "b2b1b8dfb5cc5f024bafc373121c6aba3f66f9a5a0269e243470a1de16a33186",
+          "state": "complete",
+          "completedBytes": 2561218
+        },
+        {
+          "path": "weights_manifest.json",
+          "size": 179,
+          "sha256": "2296f82c29dcb11aeefde07e216403a32fc86c8f6da2ec15a70102abfd936a93",
+          "state": "complete",
+          "completedBytes": 179
+        },
+        {
+          "path": "yue2_generation_config.json",
+          "size": 466,
+          "sha256": "203830cebde6e3644eb291925362990d198e66c3b6006cd11f1aaa21904bcc61",
+          "state": "complete",
+          "completedBytes": 466
+        },
+        {
+          "path": "yue2_infer-0.1.5-py3-none-any.whl",
+          "size": 66117,
+          "sha256": "8801e2c0d969db02df78d2994150b4ccd86077d87c24fdb8509b1f6f31462641",
+          "state": "complete",
+          "completedBytes": 66117
+        }
+      ]
+    },
+    {
+      "id": "m-a-p/YuE2-Vae",
+      "revision": "9a94e1d0ea9f8087e98f77fa88df4a4068104d2a",
+      "path": "models/m-a-p/YuE2-Vae",
+      "state": "complete",
+      "totalBytes": 530573783,
+      "completedBytes": 530573783,
+      "files": [
+        {
+          "path": ".gitattributes",
+          "size": 1634,
+          "sha256": "2344624b5ce0c6809fc513e84f41a93ba7f9bd82cd80dc916dd404f19edc9a3d",
+          "state": "complete",
+          "completedBytes": 1634
+        },
+        {
+          "path": "LICENSE",
+          "size": 20309,
+          "sha256": "060985741d20e70613b4c189c7de106cabd3fb2109fbbfb6d705c9d619417dd0",
+          "state": "complete",
+          "completedBytes": 20309
+        },
+        {
+          "path": "README.md",
+          "size": 9361,
+          "sha256": "f0f8b87c51534138e9b386e0c6ab3d85ad58295e437ef287eef556fe9c091f02",
+          "state": "complete",
+          "completedBytes": 9361
+        },
+        {
+          "path": "THIRD_PARTY_NOTICES.md",
+          "size": 793,
+          "sha256": "14d3fd9f6fee86b4260b69b0979735b99ffec8c6b4db254567047a4215cd9af3",
+          "state": "complete",
+          "completedBytes": 793
+        },
+        {
+          "path": "config.json",
+          "size": 1378,
+          "sha256": "f0191bb9694009956de44e0c361a6f1334760be4c8f848e599bde242a54a0970",
+          "state": "complete",
+          "completedBytes": 1378
+        },
+        {
+          "path": "licenses/SnakeBeta-NVIDIA-MIT.txt",
+          "size": 1076,
+          "sha256": "da9858d516047d82096d01c112a61bd67f26d289039464d668a1d45f91738ecc",
+          "state": "complete",
+          "completedBytes": 1076
+        },
+        {
+          "path": "licenses/stable-audio-tools-MIT.txt",
+          "size": 1069,
+          "sha256": "a1fac33b7bcd791b74fb33aeb439f825e7277e239fc119fb7d2ab6f084a0c101",
+          "state": "complete",
+          "completedBytes": 1069
+        },
+        {
+          "path": "model.safetensors",
+          "size": 530512720,
+          "sha256": "807ce9d5149fa27c5ad3e6582058469852e908f6c5acc8c8aa338e7ab7751346",
+          "state": "complete",
+          "completedBytes": 530512720
+        },
+        {
+          "path": "modeling_vae.py",
+          "size": 25265,
+          "sha256": "b6578ff461e6be9fd079ca5ddf12893940f3b3338ff3435fceae89c466486f5a",
+          "state": "complete",
+          "completedBytes": 25265
+        },
+        {
+          "path": "weights_manifest.json",
+          "size": 178,
+          "sha256": "017d64a4d288217a43fcac3866a0e1d55f796fa891d4dfb6de0bd170ab750026",
+          "state": "complete",
+          "completedBytes": 178
+        }
+      ]
+    },
+    {
+      "id": "m-a-p/YuE2-Vae-legacy",
+      "revision": "5ddd12f79acb90d24b3a672dcd2ebf88da7c92a9",
+      "path": "models/m-a-p/YuE2-Vae-legacy",
+      "state": "complete",
+      "totalBytes": 530573418,
+      "completedBytes": 530573418,
+      "files": [
+        {
+          "path": ".gitattributes",
+          "size": 1634,
+          "sha256": "2344624b5ce0c6809fc513e84f41a93ba7f9bd82cd80dc916dd404f19edc9a3d",
+          "state": "complete",
+          "completedBytes": 1634
+        },
+        {
+          "path": "LICENSE",
+          "size": 20309,
+          "sha256": "060985741d20e70613b4c189c7de106cabd3fb2109fbbfb6d705c9d619417dd0",
+          "state": "complete",
+          "completedBytes": 20309
+        },
+        {
+          "path": "README.md",
+          "size": 8998,
+          "sha256": "922f4e5fa3bbd70e45aa5adf1ee9afdb2a55d323e935709d9f80140ee1262e0b",
+          "state": "complete",
+          "completedBytes": 8998
+        },
+        {
+          "path": "THIRD_PARTY_NOTICES.md",
+          "size": 793,
+          "sha256": "14d3fd9f6fee86b4260b69b0979735b99ffec8c6b4db254567047a4215cd9af3",
+          "state": "complete",
+          "completedBytes": 793
+        },
+        {
+          "path": "config.json",
+          "size": 1376,
+          "sha256": "a5053282e619d241155769b9b26751a5badd1f5644707ea3ebb0c6ed849a038c",
+          "state": "complete",
+          "completedBytes": 1376
+        },
+        {
+          "path": "licenses/SnakeBeta-NVIDIA-MIT.txt",
+          "size": 1076,
+          "sha256": "da9858d516047d82096d01c112a61bd67f26d289039464d668a1d45f91738ecc",
+          "state": "complete",
+          "completedBytes": 1076
+        },
+        {
+          "path": "licenses/stable-audio-tools-MIT.txt",
+          "size": 1069,
+          "sha256": "a1fac33b7bcd791b74fb33aeb439f825e7277e239fc119fb7d2ab6f084a0c101",
+          "state": "complete",
+          "completedBytes": 1069
+        },
+        {
+          "path": "model.safetensors",
+          "size": 530512720,
+          "sha256": "b6d283628913bb41145ba99e2314eef613905ee95f690eb70e8212d5f4965044",
+          "state": "complete",
+          "completedBytes": 530512720
+        },
+        {
+          "path": "modeling_vae.py",
+          "size": 25265,
+          "sha256": "b6578ff461e6be9fd079ca5ddf12893940f3b3338ff3435fceae89c466486f5a",
+          "state": "complete",
+          "completedBytes": 25265
+        },
+        {
+          "path": "weights_manifest.json",
+          "size": 178,
+          "sha256": "92652174b1218d24303dbad37cc420058de3d90229c218e0cf9a57c1114ed0aa",
+          "state": "complete",
+          "completedBytes": 178
+        }
+      ]
+    },
+    {
+      "id": "audio-cpp/Yue2-3B-GGUF",
+      "revision": "9c31f1c64f73d36799693aa89295b410c76928c3",
+      "path": "models/audio-cpp/Yue2-3B-GGUF",
+      "state": "complete",
+      "totalBytes": 14989627472,
+      "completedBytes": 14989627472,
+      "files": [
+        {
+          "path": ".gitattributes",
+          "size": 2788,
+          "sha256": "e65e81b4ef9a76877b43a2465653e671b09b036dc7811ba17a32c6961bc06236",
+          "state": "complete",
+          "completedBytes": 2788
+        },
+        {
+          "path": "README.md",
+          "size": 10103,
+          "sha256": "f40028178b5e9f8820f078fd25336a14fc8c5bdca81c45262eee9abbdf6db7a3",
+          "state": "complete",
+          "completedBytes": 10103
+        },
+        {
+          "path": "sidecars/yue2-generation-config.json",
+          "size": 466,
+          "sha256": "203830cebde6e3644eb291925362990d198e66c3b6006cd11f1aaa21904bcc61",
+          "state": "complete",
+          "completedBytes": 466
+        },
+        {
+          "path": "sidecars/yue2-model-config.json",
+          "size": 959,
+          "sha256": "ad3477bbef890bf98ae196c1e4b44779494a6231c4ab66f32708eabadf265329",
+          "state": "complete",
+          "completedBytes": 959
+        },
+        {
+          "path": "sidecars/yue2-qwen.tiktoken",
+          "size": 2561218,
+          "sha256": "b2b1b8dfb5cc5f024bafc373121c6aba3f66f9a5a0269e243470a1de16a33186",
+          "state": "complete",
+          "completedBytes": 2561218
+        },
+        {
+          "path": "sidecars/yue2-vae-config.json",
+          "size": 1378,
+          "sha256": "f0191bb9694009956de44e0c361a6f1334760be4c8f848e599bde242a54a0970",
+          "state": "complete",
+          "completedBytes": 1378
+        },
+        {
+          "path": "yue2-3b-bf16.gguf",
+          "size": 7261475392,
+          "sha256": "18fe0cda4687a565fc6f2045759f446a67f0d775ea479b87da45de90e7ddc9bc",
+          "state": "complete",
+          "completedBytes": 7261475392
+        },
+        {
+          "path": "yue2-3b-q4_0.gguf",
+          "size": 2665632320,
+          "sha256": "97af67d7f800b362faee6e6bec806bddfcccb93f25fd3f9a1012724d95af6f4a",
+          "state": "complete",
+          "completedBytes": 2665632320
+        },
+        {
+          "path": "yue2-3b-q8_0.gguf",
+          "size": 4264186432,
+          "sha256": "f3a9e3b197bfd05aa4ae6ab2d4b93f6d57c8cc0ea39a4af7d151f58697c7cfb6",
+          "state": "complete",
+          "completedBytes": 4264186432
+        },
+        {
+          "path": "yue2-vae-f16.gguf",
+          "size": 265218656,
+          "sha256": "d4f4a05d8f291ae820cd1e43609da3fa91b56465810091a2b08c3350b751719d",
+          "state": "complete",
+          "completedBytes": 265218656
+        },
+        {
+          "path": "yue2-vae-f32.gguf",
+          "size": 530537760,
+          "sha256": "cf3b71c6ef13b8b7970f8c1013b899e4af6ff9756c93bda45bef542dd6e10546",
+          "state": "complete",
+          "completedBytes": 530537760
+        }
+      ]
+    }
+  ]
+}

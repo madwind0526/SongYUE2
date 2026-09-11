@@ -1,0 +1,13 @@
+{
+  "name": "songyue2-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/start-studio.mjs",
+    "build": "npm --prefix app run build",
+    "test": "node --test backend/server.test.mjs",
+    "check": "npm --prefix app exec tsc -- --noEmit -p app/tsconfig.json",
+    "models": "python scripts/download_models.py"
+  }
+}
