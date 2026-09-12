@@ -950,6 +950,31 @@ export default function Studio() {
   const audioRef = useRef<HTMLAudioElement>(null);
   const holdForwardTimer = useRef<number | null>(null);
   const reverseTimer = useRef<number | null>(null);
+  const mainWaveCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const mainAudioCtxRef = useRef<AudioContext | null>(null);
+  const mainAnalyserRef = useRef<AnalyserNode | null>(null);
+  const mainIsPlayingRef = useRef(false);
+  const mainWaveHistoryRef = useRef<{ t: number; data: Uint8Array }[]>([]);
+  useEffect(() => { mainIsPlayingRef.current = isPlaying; }, [isPlaying]);
+  // A MediaElementAudioSourceNode can only ever be created once per <audio> element for its
+  // whole lifetime (a second call throws), so build the graph lazily on first play and reuse
+  // it for every song afterward instead of tying it to this component's mount/unmount.
+  function ensureMainAnalyser() {
+    if (mainAnalyserRef.current) { if (mainAudioCtxRef.current?.state === 'suspended') void mainAudioCtxRef.current.resume(); return; }
+    const audio = audioRef.current;
+    if (!audio) return;
+    try {
+      const ctx = new AudioContext();
+      const source = ctx.createMediaElementSource(audio);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 128;
+      analyser.smoothingTimeConstant = 0.75;
+      source.connect(analyser);
+      analyser.connect(ctx.destination);
+      mainAudioCtxRef.current = ctx;
+      mainAnalyserRef.current = analyser;
+    } catch { /* Web Audio unavailable; the player-bar waveform just stays blank. */ }
+  }
   const coverInputRef = useRef<HTMLInputElement>(null);
   const coverAudioInputRef = useRef<HTMLInputElement>(null);
   const coverTargetRef = useRef<{ type: 'project'; item: Project } | { type: 'abc-note'; item: AbcNote } | null>(null);
@@ -1230,6 +1255,7 @@ export default function Studio() {
     const playable = songs.filter(song => song.status === 'completed');
     if (!playable.length) return;
     const clampedIndex = Math.max(0, Math.min(startIndex, playable.length - 1));
+    ensureMainAnalyser();
     setQueue(playable); setQueueIndex(clampedIndex); setIsPlaying(true);
   }
   useEffect(() => {
@@ -1249,7 +1275,101 @@ export default function Studio() {
     if (isPlaying) void audio.play().catch(() => setIsPlaying(false)); else audio.pause();
   }, [isPlaying]);
   useEffect(() => () => { stopHoldForward(); stopReverse(); }, []);
-  function togglePlay() { if (!queue[queueIndex]) return; setIsPlaying(previous => !previous); }
+  useEffect(() => {
+    // Same rendering as the post-process dialog's circular visualizer (same settings, same
+    // per-point bin-margin/amplitude math) -- only the coordinate mapping differs: instead of
+    // extending each ring around 0-360 degrees, extend it along a straight x=0..width line.
+    const points = 64;
+    let raf = 0;
+    const tick = () => {
+      const canvas = mainWaveCanvasRef.current;
+      const analyser = mainAnalyserRef.current;
+      const ctx2d = canvas?.getContext('2d');
+      if (canvas && ctx2d) {
+        const displayWidth = Math.round(canvas.clientWidth);
+        const displayHeight = Math.round(canvas.clientHeight);
+        if (displayWidth > 0 && displayHeight > 0 && (canvas.width !== displayWidth || canvas.height !== displayHeight)) {
+          canvas.width = displayWidth;
+          canvas.height = displayHeight;
+        }
+        const { width, height } = canvas;
+        const playing = settings.visualizerEnabled && mainIsPlayingRef.current;
+        if (playing && settings.visualizerTrail > 0) {
+          ctx2d.globalCompositeOperation = 'destination-out';
+          ctx2d.fillStyle = `rgba(0, 0, 0, ${1 - settings.visualizerTrail / 100})`;
+          ctx2d.fillRect(0, 0, width, height);
+          ctx2d.globalCompositeOperation = 'source-over';
+        } else {
+          ctx2d.clearRect(0, 0, width, height);
+        }
+        if (playing && width > 0 && height > 0) {
+          const cy = height / 2;
+          const frame = new Uint8Array(analyser?.frequencyBinCount || points);
+          if (analyser) analyser.getByteFrequencyData(frame);
+          const now = performance.now();
+          const ringCount = Math.max(1, Math.min(30, Math.round(settings.visualizerRingCount)));
+          if (settings.visualizerRingMode === 'time') {
+            const history = mainWaveHistoryRef.current;
+            history.push({ t: now, data: frame });
+            const maxAgeMs = Math.pow(Math.max(0, ringCount - 1), settings.visualizerTimeSkew) * settings.visualizerTimeStep * 1000 + 200;
+            while (history.length > 1 && now - history[0].t > maxAgeMs) history.shift();
+          }
+          for (let ringIndex = 0; ringIndex < ringCount; ringIndex++) {
+            const radiusFactor = 0.1 + ringIndex * (settings.visualizerRingStep / 100);
+            const hue = (settings.visualizerHue + ((ringIndex * 37) % 100)) % 360;
+            const offset = Math.floor((ringIndex * points) / ringCount * (settings.visualizerSpiral / 100));
+            let source: Uint8Array | undefined;
+            if (settings.visualizerRingMode === 'time') {
+              const targetT = now - Math.pow(ringIndex, settings.visualizerTimeSkew) * settings.visualizerTimeStep * 1000;
+              const history = mainWaveHistoryRef.current;
+              if (history.length && history[0].t <= targetT) {
+                for (let h = history.length - 1; h >= 0; h--) { if (history[h].t <= targetT) { source = history[h].data; break; } }
+              }
+            } else {
+              source = frame;
+            }
+            if (!source) continue;
+            // The circle's baseRadius (how far a ring sits from the shared center) becomes how
+            // far this ring's line sits from the shared vertical center, alternating above/below
+            // it -- the closest a single line has to "concentric" on one axis instead of two.
+            const baseOffset = Math.min(width, height) * (settings.visualizerRingMode === 'time' ? 0.22 : radiusFactor);
+            const centerY = cy + (ringIndex % 2 === 0 ? -baseOffset : baseOffset);
+            const binMarginLow = 2;
+            const binMarginHigh = Math.round(source.length * 0.35);
+            const activeBins = Math.max(1, source.length - binMarginLow - binMarginHigh);
+            const nodes: { x: number; y: number }[] = [];
+            for (let i = 0; i < points; i++) {
+              const x = (i / (points - 1)) * width;
+              const bin = binMarginLow + Math.floor(((i + offset) % points) * activeBins / points);
+              const value = source[bin] / 255;
+              const centered = value - 0.5;
+              const directional = centered >= 0 ? centered : centered * 0.5;
+              const y = centerY - directional * baseOffset * settings.visualizerAmplitude;
+              nodes.push({ x, y });
+            }
+            ctx2d.beginPath();
+            ctx2d.moveTo(nodes[0].x, nodes[0].y);
+            for (let i = 1; i < points - 1; i++) {
+              const p0 = nodes[i];
+              const p1 = nodes[i + 1];
+              const mid = { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 };
+              ctx2d.quadraticCurveTo(p0.x, p0.y, mid.x, mid.y);
+            }
+            ctx2d.lineTo(nodes[points - 1].x, nodes[points - 1].y);
+            ctx2d.strokeStyle = `hsla(${hue}, 95%, 78%, 0.55)`;
+            ctx2d.lineWidth = settings.visualizerLineWidth;
+            ctx2d.stroke();
+          }
+        } else if (!playing) {
+          mainWaveHistoryRef.current = [];
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [settings.visualizerEnabled, settings.visualizerRingCount, settings.visualizerHue, settings.visualizerLineWidth, settings.visualizerTrail, settings.visualizerSpiral, settings.visualizerRingMode, settings.visualizerTimeStep, settings.visualizerTimeSkew, settings.visualizerRingStep, settings.visualizerAmplitude]);
+  function togglePlay() { if (!queue[queueIndex]) return; ensureMainAnalyser(); setIsPlaying(previous => !previous); }
   function playNext() { if (queueIndex + 1 < queue.length) setQueueIndex(previous => previous + 1); else setIsPlaying(false); }
   function playPrev() { if (queueIndex > 0) setQueueIndex(previous => previous - 1); }
   const nowPlaying = queue[queueIndex] || null;
@@ -1409,7 +1529,7 @@ export default function Studio() {
     <input ref={coverInputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={event => void handleCoverFile(event)}/>
     <input ref={coverAudioInputRef} type="file" accept="audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/mp4,audio/ogg" hidden onChange={event => void handleCoverAudioFile(event)}/>
     <input ref={abcImportInputRef} type="file" accept=".abc,.txt,.json,text/plain,application/json" hidden onChange={event => void handleAbcImportFile(event)}/>
-    {nowPlaying ? <footer className="player-bar expanded"><div className="player-seek-row"><span className="player-time">{formatTime(playbackTime)}</span><input className="player-seek" type="range" aria-label="재생 위치" min={0} max={playbackDuration || 0} step={0.1} value={Math.min(playbackTime, playbackDuration || playbackTime)} onChange={event => seekTo(Number(event.target.value))}/><span className="player-time">{formatTime(playbackDuration)}</span></div><div className="player-main-row"><div className="player-art">{nowPlaying.coverPath ? <img className="song-cover" src={coverUrl(nowPlaying)} alt=""/> : <Music2 size={20}/>}</div><div className="player-copy"><strong>{nowPlaying.title}</strong><span>{nowPlaying.style}</span></div><div className="player-controls"><Button variant="ghost" size="icon" aria-label="이전 곡" onClick={playPrev} disabled={queueIndex === 0}><SkipBack/></Button><Button variant="ghost" size="icon" aria-label="10초 뒤로" onClick={() => seekBy(-10)}><Rewind/></Button><Button variant="ghost" size="icon" aria-label={isPlaying ? '일시정지' : '재생'} onClick={togglePlay}>{isPlaying ? <Pause/> : <Play/>}</Button><Button variant="ghost" size="icon" aria-label="눌러서 앞으로 이동, 꾹 누르면 계속 이동" onMouseDown={startHoldForward} onMouseUp={stopHoldForward} onMouseLeave={stopHoldForward} onTouchStart={startHoldForward} onTouchEnd={stopHoldForward}><FastForward/></Button><Button variant="ghost" size="icon" aria-label="다음 곡" onClick={playNext} disabled={queueIndex + 1 >= queue.length}><SkipForward/></Button><Button variant="ghost" size="icon" aria-label="역재생" aria-pressed={reversePlaying} className={reversePlaying ? 'active' : ''} onClick={toggleReverse}><RotateCcw/></Button></div><div className="player-extra"><button className="speed-btn" aria-label="재생 속도" onClick={cycleSpeed}>{playbackRate}x</button><Volume2 size={15}/><input className="player-volume" type="range" aria-label="볼륨" min={0} max={1} step={0.01} value={volume} onChange={event => changeVolume(Number(event.target.value))}/></div></div></footer>
+    {nowPlaying ? <footer className="player-bar expanded"><div className="player-seek-row"><span className="player-time">{formatTime(playbackTime)}</span><input className="player-seek" type="range" aria-label="재생 위치" min={0} max={playbackDuration || 0} step={0.1} value={Math.min(playbackTime, playbackDuration || playbackTime)} onChange={event => seekTo(Number(event.target.value))}/><span className="player-time">{formatTime(playbackDuration)}</span></div><div className="player-main-row"><div className="player-art">{nowPlaying.coverPath ? <img className="song-cover" src={coverUrl(nowPlaying)} alt=""/> : <Music2 size={20}/>}</div><div className="player-copy"><strong>{nowPlaying.title}</strong><span>{nowPlaying.style}</span></div><div className="player-controls"><Button variant="ghost" size="icon" aria-label="이전 곡" onClick={playPrev} disabled={queueIndex === 0}><SkipBack/></Button><Button variant="ghost" size="icon" aria-label="10초 뒤로" onClick={() => seekBy(-10)}><Rewind/></Button><Button variant="ghost" size="icon" aria-label={isPlaying ? '일시정지' : '재생'} onClick={togglePlay}>{isPlaying ? <Pause/> : <Play/>}</Button><Button variant="ghost" size="icon" aria-label="눌러서 앞으로 이동, 꾹 누르면 계속 이동" onMouseDown={startHoldForward} onMouseUp={stopHoldForward} onMouseLeave={stopHoldForward} onTouchStart={startHoldForward} onTouchEnd={stopHoldForward}><FastForward/></Button><Button variant="ghost" size="icon" aria-label="다음 곡" onClick={playNext} disabled={queueIndex + 1 >= queue.length}><SkipForward/></Button><Button variant="ghost" size="icon" aria-label="역재생" aria-pressed={reversePlaying} className={reversePlaying ? 'active' : ''} onClick={toggleReverse}><RotateCcw/></Button></div><div className="player-wave"><canvas ref={mainWaveCanvasRef} className="player-wave-canvas" aria-hidden="true"/></div><div className="player-extra"><button className="speed-btn" aria-label="재생 속도" onClick={cycleSpeed}>{playbackRate}x</button><Volume2 size={15}/><input className="player-volume" type="range" aria-label="볼륨" min={0} max={1} step={0.01} value={volume} onChange={event => changeVolume(Number(event.target.value))}/></div></div></footer>
     : <footer className="player-bar"><div className="player-art"><Music2 size={20}/></div><div className="player-copy"><strong>아직 재생할 노래가 없어요</strong><span>완성된 노래를 선택하면 이곳에서 재생됩니다.</span></div><div className="player-empty"><Headphones size={17}/><span>당신의 다음 곡을 기다리는 중</span></div><span className="player-time">— : —</span></footer>}</main>
     {notice && <div className={`toast ${notice.error ? 'error' : ''}`} role={notice.error ? 'alert' : 'status'}>{notice.error ? <CircleHelp size={19}/> : <Check size={19}/>}<span>{notice.text}</span><button onClick={() => setNotice(null)} aria-label="알림 닫기"><X size={16}/></button></div>}
     <Dialog open={presetOpen} onOpenChange={setPresetOpen}><DialogContent className="studio-dialog example-browser"><DialogTitle>어떤 분위기로 시작할까요?</DialogTitle><DialogDescription>직접 작성한 예시입니다. 카드를 선택하면 바로 편집기의 가사와 스타일이 바뀝니다.</DialogDescription><div className="dialog-scroll"><div className="example-card-grid">{examples.map(example => <button className={`inspiration-card ${example.color || ''}`} key={example.id} onClick={() => useExample(example)}><div className="preset-top"><Music2 size={21}/><ArrowRight size={15}/></div><span className="genre-label">{example.genre || '예시'}</span><strong>{example.title}</strong><small>{example.caption}</small></button>)}</div></div></DialogContent></Dialog>
