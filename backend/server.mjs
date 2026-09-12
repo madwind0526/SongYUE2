@@ -58,6 +58,9 @@ const DEFAULT_VISUALIZER_TRAIL = 0;
 const DEFAULT_VISUALIZER_SPIRAL = 100;
 const VISUALIZER_RING_MODES = new Set(['radial', 'time']);
 const DEFAULT_VISUALIZER_RING_MODE = 'radial';
+const DEFAULT_VISUALIZER_TIME_STEP = 0.5;
+const DEFAULT_VISUALIZER_TIME_SKEW = 1;
+const DEFAULT_VISUALIZER_RING_STEP = 1;
 const VOCAL_HINTS = { male: ', male vocal', female: ', female vocal', duet: ', duet: male and female vocals' };
 const vocalHint = (gender) => VOCAL_HINTS[gender] || '';
 // YuE2 has no dedicated instrumental flag and both the audio.cpp and Python engines require
@@ -174,6 +177,9 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     visualizerTrail: Number.isFinite(stored.visualizerTrail) ? Math.max(0, Math.min(95, stored.visualizerTrail)) : DEFAULT_VISUALIZER_TRAIL,
     visualizerSpiral: Number.isFinite(stored.visualizerSpiral) ? Math.max(0, Math.min(100, stored.visualizerSpiral)) : DEFAULT_VISUALIZER_SPIRAL,
     visualizerRingMode: VISUALIZER_RING_MODES.has(stored.visualizerRingMode) ? stored.visualizerRingMode : DEFAULT_VISUALIZER_RING_MODE,
+    visualizerTimeStep: Number.isFinite(stored.visualizerTimeStep) ? Math.max(0.02, Math.min(2, stored.visualizerTimeStep)) : DEFAULT_VISUALIZER_TIME_STEP,
+    visualizerTimeSkew: Number.isFinite(stored.visualizerTimeSkew) ? Math.max(0.2, Math.min(4, stored.visualizerTimeSkew)) : DEFAULT_VISUALIZER_TIME_SKEW,
+    visualizerRingStep: Number.isFinite(stored.visualizerRingStep) ? Math.max(0.1, Math.min(20, stored.visualizerRingStep)) : DEFAULT_VISUALIZER_RING_STEP,
     pythonMemoryBudgetGib: Number.isFinite(stored.pythonMemoryBudgetGib) ? stored.pythonMemoryBudgetGib : (Number(process.env.PYTHON_MEMORY_BUDGET_GIB) || 11),
     saveFormat: SAVE_FORMATS.has(stored.saveFormat) ? stored.saveFormat : (SAVE_FORMATS.has(process.env.SAVE_FORMAT) ? process.env.SAVE_FORMAT : 'wav'),
     viewMode: VIEW_MODES.has(stored.viewMode) ? stored.viewMode : 'list',
@@ -504,7 +510,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   }
   const publicSettings = () => {
     const env = providerFromEnv(settings.provider);
-    return { provider: settings.provider, endpoint: env.endpoint, llmModel: env.model, enginePath: settings.enginePath, pythonEnginePath: settings.pythonEnginePath, pythonScriptPath: settings.pythonScriptPath, pythonMemoryBudgetGib: settings.pythonMemoryBudgetGib, sheetSagePythonPath: settings.sheetSagePythonPath, settingPath: settings.settingPath, musicPath: settings.musicPath, examplesPath: settings.examplesPath, coversPath: settings.coversPath, abcNotesPath: settings.abcNotesPath, stylePresets: settings.stylePresets, visualizerEnabled: settings.visualizerEnabled, visualizerRingCount: settings.visualizerRingCount, visualizerHue: settings.visualizerHue, visualizerLineWidth: settings.visualizerLineWidth, visualizerTrail: settings.visualizerTrail, visualizerSpiral: settings.visualizerSpiral, visualizerRingMode: settings.visualizerRingMode, saveFormat: settings.saveFormat, viewMode: settings.viewMode, outputDirectory: path.relative(root, outputDirectory) || '.', hasApiKey: Boolean(env.apiKey), apiKey: env.apiKey ? '***' : null, apiKeyStorage: 'env' };
+    return { provider: settings.provider, endpoint: env.endpoint, llmModel: env.model, enginePath: settings.enginePath, pythonEnginePath: settings.pythonEnginePath, pythonScriptPath: settings.pythonScriptPath, pythonMemoryBudgetGib: settings.pythonMemoryBudgetGib, sheetSagePythonPath: settings.sheetSagePythonPath, settingPath: settings.settingPath, musicPath: settings.musicPath, examplesPath: settings.examplesPath, coversPath: settings.coversPath, abcNotesPath: settings.abcNotesPath, stylePresets: settings.stylePresets, visualizerEnabled: settings.visualizerEnabled, visualizerRingCount: settings.visualizerRingCount, visualizerHue: settings.visualizerHue, visualizerLineWidth: settings.visualizerLineWidth, visualizerTrail: settings.visualizerTrail, visualizerSpiral: settings.visualizerSpiral, visualizerRingMode: settings.visualizerRingMode, visualizerTimeStep: settings.visualizerTimeStep, visualizerTimeSkew: settings.visualizerTimeSkew, visualizerRingStep: settings.visualizerRingStep, saveFormat: settings.saveFormat, viewMode: settings.viewMode, outputDirectory: path.relative(root, outputDirectory) || '.', hasApiKey: Boolean(env.apiKey), apiKey: env.apiKey ? '***' : null, apiKeyStorage: 'env' };
   };
   async function localFile(relativePath) {
     const file = path.join(root, relativePath);
@@ -627,9 +633,12 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           if (input.visualizerTrail !== undefined) next.visualizerTrail = Math.max(0, Math.min(95, Number(input.visualizerTrail) || 0));
           if (input.visualizerSpiral !== undefined) next.visualizerSpiral = Math.max(0, Math.min(100, Number.isFinite(Number(input.visualizerSpiral)) ? Number(input.visualizerSpiral) : DEFAULT_VISUALIZER_SPIRAL));
           if (input.visualizerRingMode !== undefined) next.visualizerRingMode = VISUALIZER_RING_MODES.has(input.visualizerRingMode) ? input.visualizerRingMode : DEFAULT_VISUALIZER_RING_MODE;
+          if (input.visualizerTimeStep !== undefined) next.visualizerTimeStep = Math.max(0.02, Math.min(2, Number.isFinite(Number(input.visualizerTimeStep)) ? Number(input.visualizerTimeStep) : DEFAULT_VISUALIZER_TIME_STEP));
+          if (input.visualizerTimeSkew !== undefined) next.visualizerTimeSkew = Math.max(0.2, Math.min(4, Number.isFinite(Number(input.visualizerTimeSkew)) ? Number(input.visualizerTimeSkew) : DEFAULT_VISUALIZER_TIME_SKEW));
+          if (input.visualizerRingStep !== undefined) next.visualizerRingStep = Math.max(0.1, Math.min(20, Number.isFinite(Number(input.visualizerRingStep)) ? Number(input.visualizerRingStep) : DEFAULT_VISUALIZER_RING_STEP));
           if (input.saveFormat !== undefined) next.saveFormat = input.saveFormat;
           if (input.viewMode !== undefined) next.viewMode = input.viewMode;
-          await saveJson(settingsFile, { provider: next.provider, enginePath: next.enginePath, pythonEnginePath: next.pythonEnginePath, pythonScriptPath: next.pythonScriptPath, pythonMemoryBudgetGib: next.pythonMemoryBudgetGib, sheetSagePythonPath: next.sheetSagePythonPath, settingPath: next.settingPath, musicPath: next.musicPath, examplesPath: next.examplesPath, coversPath: next.coversPath, abcNotesPath: next.abcNotesPath, stylePresets: next.stylePresets, visualizerEnabled: next.visualizerEnabled, visualizerRingCount: next.visualizerRingCount, visualizerHue: next.visualizerHue, visualizerLineWidth: next.visualizerLineWidth, visualizerTrail: next.visualizerTrail, visualizerSpiral: next.visualizerSpiral, visualizerRingMode: next.visualizerRingMode, saveFormat: next.saveFormat, viewMode: next.viewMode });
+          await saveJson(settingsFile, { provider: next.provider, enginePath: next.enginePath, pythonEnginePath: next.pythonEnginePath, pythonScriptPath: next.pythonScriptPath, pythonMemoryBudgetGib: next.pythonMemoryBudgetGib, sheetSagePythonPath: next.sheetSagePythonPath, settingPath: next.settingPath, musicPath: next.musicPath, examplesPath: next.examplesPath, coversPath: next.coversPath, abcNotesPath: next.abcNotesPath, stylePresets: next.stylePresets, visualizerEnabled: next.visualizerEnabled, visualizerRingCount: next.visualizerRingCount, visualizerHue: next.visualizerHue, visualizerLineWidth: next.visualizerLineWidth, visualizerTrail: next.visualizerTrail, visualizerSpiral: next.visualizerSpiral, visualizerRingMode: next.visualizerRingMode, visualizerTimeStep: next.visualizerTimeStep, visualizerTimeSkew: next.visualizerTimeSkew, visualizerRingStep: next.visualizerRingStep, saveFormat: next.saveFormat, viewMode: next.viewMode });
           settings = next;
           if (input.settingPath !== undefined) await mkdir(settingDir(), { recursive: true });
           if (input.musicPath !== undefined) await mkdir(musicDir(), { recursive: true });
