@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/compone
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogFooter, AlertDialogTitle, AlertDialogDescription, AlertDialogAction, AlertDialogCancel } from '@/components/ui/alert-dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Progress } from '@/components/ui/progress';
-import { toInstrumentalAbc, DEFAULT_INSTRUMENTAL_ABC, api, emptyDraft, initialSettings, models, providers, saveFormats, viewModes, titles, gb, DEFAULT_SETTING_PATH, DEFAULT_MUSIC_PATH, DEFAULT_EXAMPLES_PATH, DEFAULT_COVERS_PATH, DEFAULT_ABC_NOTES_PATH, DEFAULT_STYLE_PRESETS, DEFAULT_VISUALIZER_RING_COUNT, DEFAULT_VISUALIZER_HUE, DEFAULT_VISUALIZER_LINE_WIDTH, DEFAULT_VISUALIZER_TRAIL, DEFAULT_ENGINE_PATH, PYTHON_MODEL_MIN_VRAM_MB, type Page, type Draft, type Project, type Settings, type Inventory, type Example, type Playlist, type AbcNote, type SaveFormat, type SystemInfo, type VocalGender } from './studio-data';
+import { toInstrumentalAbc, DEFAULT_INSTRUMENTAL_ABC, COVER_PRESETS, api, emptyDraft, initialSettings, models, providers, saveFormats, viewModes, titles, gb, DEFAULT_SETTING_PATH, DEFAULT_MUSIC_PATH, DEFAULT_EXAMPLES_PATH, DEFAULT_COVERS_PATH, DEFAULT_ABC_NOTES_PATH, DEFAULT_STYLE_PRESETS, DEFAULT_VISUALIZER_RING_COUNT, DEFAULT_VISUALIZER_HUE, DEFAULT_VISUALIZER_LINE_WIDTH, DEFAULT_VISUALIZER_TRAIL, DEFAULT_ENGINE_PATH, PYTHON_MODEL_MIN_VRAM_MB, type Page, type Draft, type Project, type Settings, type Inventory, type Example, type Playlist, type AbcNote, type SaveFormat, type SystemInfo, type VocalGender } from './studio-data';
 
 type SaveFilePickerFn = (options?: { suggestedName?: string; types?: { description: string; accept: Record<string, string[]> }[] }) => Promise<{ name: string; createWritable: () => Promise<{ write: (data: string | Blob) => Promise<void>; close: () => Promise<void> }> }>;
 const RANDOMIZE_SEED_KEY = 'songyue2-randomize-seed';
@@ -1458,270 +1458,499 @@ export default function Studio() {
     }
   }
 
-  function coverStudioPage() {
-    return <section className="library-page page-scroll" style={{ maxWidth: '1120px', margin: '0 auto', paddingBottom: '80px' }}>
-      <div className="page-heading library-heading">
-        <div>
-          <span className="eyebrow">SheetSage2 × YuE2</span>
-          <h1>{titles.cover}</h1>
-          <p>원곡 오디오에서 멜로디를 자동으로 채보하고, 새로운 스타일과 편곡으로 독창적인 커버곡을 만듭니다.</p>
-        </div>
-        <Button variant="outline" onClick={() => navigate('create')}>
-          <Sparkles size={16}/>일반 작곡으로
-        </Button>
-      </div>
+function coverStudioPage() {
+    const STYLE_TAGS = ['+시티팝', '+어쿠스틱', '+발라드', '+로파이', '+재즈', '+신스웨이브', '+오케스트라', '+K-댄스', '+애니메이션 록'];
 
-      {coverResult && (
-        <div className="download-overview" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '14px', background: 'linear-gradient(135deg, rgba(46, 62, 39, 0.7), rgba(30, 36, 29, 0.9))', borderColor: '#5a7a52', marginTop: '14px' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-              <Check size={24} style={{ color: '#add7a5' }}/>
-              <div>
-                <h2 style={{ margin: 0, color: '#e8ece2', fontSize: '18px' }}>커버곡 완성!</h2>
-                <p style={{ margin: 0, fontSize: '13px', color: '#aec4ab' }}>{coverResult.title} · {coverResult.style}</p>
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <Button variant="outline" size="sm" onClick={() => { loadProject(coverResult); }}>프로젝트 열기</Button>
-              <Button size="sm" onClick={() => { playQueue([coverResult]); }}>
-                <Play size={14}/>커버곡 재생
-              </Button>
-            </div>
-          </div>
-          
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '14px', marginTop: '4px' }}>
-            <div style={{ background: 'rgba(0,0,0,0.3)', padding: '12px', borderRadius: '8px', border: '1px solid #384038' }}>
-              <strong style={{ display: 'block', marginBottom: '8px', fontSize: '12px', color: '#a6b4a5' }}>1. 업로드한 원곡 오디오</strong>
-              {coverAudioUrl ? (
-                <audio src={coverAudioUrl} controls style={{ width: '100%', height: '36px' }}/>
-              ) : <span className="field-hint">원곡 파일</span>}
-            </div>
-            <div style={{ background: 'rgba(0,0,0,0.3)', padding: '12px', borderRadius: '8px', border: '1px solid #5a7a52' }}>
-              <strong style={{ display: 'block', marginBottom: '8px', fontSize: '12px', color: '#add7a5' }}>2. 새로 생성된 커버곡 (YuE2)</strong>
-              <audio src={`/api/projects/${coverResult.id}/audio`} controls style={{ width: '100%', height: '36px' }}/>
-            </div>
-          </div>
-        </div>
-      )}
+    function addStyleTag(tag: string) {
+      const cleanTag = tag.replace('+', '');
+      setCoverStyle(previous => {
+        if (!previous.trim()) return cleanTag;
+        if (previous.toLowerCase().includes(cleanTag.toLowerCase())) return previous;
+        return `${previous.trim()}, ${cleanTag}`;
+      });
+    }
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '20px', marginTop: '16px' }}>
-        <div className="composer" style={{ padding: '20px', borderRadius: '12px', border: '1px solid #384038', background: '#1c221b' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '26px', height: '26px', borderRadius: '50%', background: '#2e3e27', color: '#add7a5', fontWeight: 'bold', fontSize: '13px' }}>1</span>
-            <h2 style={{ fontSize: '16px', fontWeight: 600, margin: 0 }}>원곡 오디오 및 멜로디 채보</h2>
+    const completedAudioProjects = projects.filter(item => item.status === 'completed');
+
+    return <div className="creation-layout cover-studio-layout">
+      {/* LEFT COLUMN: COVER PRODUCER CONTROLS */}
+      <section className="composer cover-composer" aria-label="커버 프로듀서">
+        <div className="composer-scroll">
+          <div className="composer-heading">
+            <div>
+              <span className="eyebrow">SheetSage2 × YuE2 원곡 편곡</span>
+              <h1>커버 프로듀서</h1>
+            </div>
+            <Disc3 size={24} className={busy ? 'spin' : ''} style={{ color: '#88bf82' }}/>
           </div>
 
-          <input
-            ref={coverStudioFileInputRef}
-            type="file"
-            accept="audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/mp4,audio/ogg"
-            hidden
-            onChange={handleCoverStudioFileChange}
-          />
-
-          <div
-            style={{
-              border: '2px dashed #3b453b',
-              borderRadius: '8px',
-              padding: '24px 16px',
-              textAlign: 'center',
-              cursor: 'pointer',
-              background: coverAudioFile ? 'rgba(46, 62, 39, 0.25)' : 'rgba(255, 255, 255, 0.02)',
-              transition: 'all 0.2s',
-            }}
-            onClick={() => coverStudioFileInputRef.current?.click()}
-          >
-            <Upload size={28} style={{ margin: '0 auto 8px', color: '#add7a5' }}/>
-            <strong style={{ display: 'block', fontSize: '14px', marginBottom: '4px' }}>
-              {coverAudioFile ? coverAudioFile.name : '원곡 오디오 파일 선택 (또는 드래그앤드롭)'}
-            </strong>
-            <p style={{ fontSize: '12px', color: '#8a978c', margin: 0 }}>
-              WAV, MP3, FLAC, M4A, OGG 지원 (최대 50MB)
-            </p>
-          </div>
-
-          {coverAudioUrl && (
-            <div style={{ marginTop: '12px' }}>
-              <audio src={coverAudioUrl} controls style={{ width: '100%', height: '36px' }}/>
+          {/* STEP 1: ORIGINAL AUDIO & TRANSCRIPTION */}
+          <div className="cover-step-card">
+            <div className="cover-step-header">
+              <span className="cover-step-badge">
+                <span className="cover-step-num">1</span> 원곡 오디오 및 멜로디 채보
+              </span>
+              {coverAbc && (
+                <span style={{ fontSize: '11px', color: '#9ec497', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <Check size={13}/> 채보 완료
+                </span>
+              )}
             </div>
-          )}
 
-          <div style={{ marginTop: '16px' }}>
-            <label style={{ display: 'block', fontSize: '12px', color: '#a6b4a5', marginBottom: '6px' }}>채보 작업 유형 (SheetSage2)</label>
-            <select
-              value={coverTask}
-              onChange={event => setCoverTask(event.target.value as 'melody-full' | 'melody-vocal' | 'full')}
-              style={{ width: '100%', height: '38px', borderRadius: '6px', background: '#161a15', border: '1px solid #384038', color: '#e8ece2', padding: '0 10px', fontSize: '13px' }}
+            <input
+              ref={coverStudioFileInputRef}
+              type="file"
+              accept="audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/mp4,audio/ogg"
+              hidden
+              onChange={handleCoverStudioFileChange}
+            />
+
+            <div
+              className={`cover-dropzone ${coverAudioFile ? 'has-file' : ''}`}
+              onClick={() => coverStudioFileInputRef.current?.click()}
             >
-              <option value="melody-full">보컬 + 리드 악기 멜로디 전체 채보 (권장)</option>
-              <option value="melody-vocal">보컬 전용 멜로디 채보</option>
-              <option value="full">멜로디 및 코드 진행 전체 채보</option>
-            </select>
-          </div>
+              <Upload size={24} style={{ margin: '0 auto 6px', color: coverAudioFile ? '#add7a5' : '#889886' }}/>
+              <strong style={{ display: 'block', fontSize: '13px', color: '#e0ece0', marginBottom: '3px' }}>
+                {coverAudioFile ? coverAudioFile.name : '원곡 오디오 선택 (또는 드래그앤드롭)'}
+              </strong>
+              <p style={{ fontSize: '11px', color: '#7a8a77', margin: 0 }}>
+                {coverAudioFile ? `${(coverAudioFile.size / (1024 * 1024)).toFixed(1)} MB · 다른 파일 선택하려면 클릭` : 'WAV, MP3, FLAC, M4A, OGG 지원 (최대 50MB)'}
+              </p>
+            </div>
 
-          <div style={{ marginTop: '16px' }}>
-            <Button
-              style={{ width: '100%', height: '42px' }}
-              onClick={() => void runCoverTranscribe()}
-              disabled={!coverAudioDataUrl || busy === 'cover-transcribe' || !online}
-            >
-              {busy === 'cover-transcribe' ? <LoaderCircle className="spin"/> : <WandSparkles size={16}/>}
-              SheetSage2로 멜로디 채보하기
-            </Button>
-          </div>
-
-          {coverAbc && (
-            <div style={{ marginTop: '20px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                <span style={{ fontSize: '12px', fontWeight: 600, color: '#add7a5' }}>채보된 ABC 악보</span>
-                <Button variant="ghost" size="sm" onClick={() => void checkAbcScore(coverAbc)}>
-                  <ShieldCheck size={14}/>악보 검사
-                </Button>
+            {coverAudioUrl && (
+              <div style={{ marginTop: '2px' }}>
+                <audio src={coverAudioUrl} controls style={{ width: '100%', height: '34px' }}/>
               </div>
-              <Textarea
-                value={coverAbc}
-                onChange={event => setCoverAbc(event.target.value)}
-                style={{ height: '140px', fontFamily: 'monospace', fontSize: '11px' }}
-                placeholder="추출된 ABC 악보가 표시됩니다."
-              />
-              <div style={{ marginTop: '8px' }}>
-                <AbcPreview abc={coverAbc}/>
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="composer" style={{ padding: '20px', borderRadius: '12px', border: '1px solid #384038', background: '#1c221b' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '26px', height: '26px', borderRadius: '50%', background: '#2e3e27', color: '#add7a5', fontWeight: 'bold', fontSize: '13px' }}>2</span>
-            <h2 style={{ fontSize: '16px', fontWeight: 600, margin: 0 }}>새로운 스타일 및 커버곡 생성</h2>
-          </div>
-
-          <div className="form-section">
-            <label style={{ display: 'block', fontSize: '12px', color: '#a6b4a5', marginBottom: '4px' }}>커버곡 제목</label>
-            <Input
-              value={coverTitle}
-              onChange={event => setCoverTitle(event.target.value)}
-              placeholder="예: 아이유 - 밤편지 (City Pop Cover)"
-            />
-          </div>
-
-          <div className="form-section" style={{ marginTop: '12px' }}>
-            <label style={{ display: 'block', fontSize: '12px', color: '#a6b4a5', marginBottom: '4px' }}>새로운 음악 스타일 (Target Style)</label>
-            <Textarea
-              value={coverStyle}
-              onChange={event => setCoverStyle(event.target.value)}
-              placeholder="예: Korean city pop, retro synthesizer, funky bass, groovy drums, nostalgic female vocal, 115 BPM"
-              style={{ height: '70px', fontSize: '12px' }}
-            />
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '6px' }}>
-              {settings.stylePresets.split('\n').filter(Boolean).slice(0, 6).map(preset => (
-                <button
-                  key={preset}
-                  type="button"
-                  style={{ fontSize: '11px', padding: '3px 8px', borderRadius: '4px', background: '#222722', border: '1px solid #384038', color: '#a6b4a5', cursor: 'pointer' }}
-                  onClick={() => setCoverStyle(coverStyle.trim() ? `${coverStyle}, ${preset}` : preset)}
-                >
-                  +{preset}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="form-section" style={{ marginTop: '12px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-              <label style={{ fontSize: '12px', color: '#a6b4a5' }}>커버 가사</label>
-              <button
-                type="button"
-                className="text-action"
-                onClick={() => void applyCoverInstrumentalRule()}
-              >
-                <Guitar size={13}/>[Instrumental] 삽입
-              </button>
-            </div>
-            <Textarea
-              value={coverLyrics}
-              onChange={event => setCoverLyrics(event.target.value)}
-              placeholder={coverInstrumental ? '[악기만 모드: 가사를 비워두어도 자동으로 악기 반주만 생성됩니다]' : '[Verse]\n원곡 가사 또는 개사한 가사를 적어주세요.\n\n[Chorus]\n비워두면 멜로디 허밍으로 생성됩니다.'}
-              style={{ height: '80px', fontSize: '12px' }}
-            />
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '12px' }}>
-            <div>
-              <label style={{ display: 'block', fontSize: '11px', color: '#a6b4a5', marginBottom: '4px' }}>보컬 모드</label>
-              <div className="mode-switch vocal-mode-switch" aria-label="보컬 여부"><button className={!draft.instrumental ? 'active' : ''} aria-pressed={!draft.instrumental} onClick={() => update({ instrumental: false, lyrics: draft.lyrics.trim() === '[Instrumental]' ? '' : draft.lyrics })}><Mic size={14}/>보컬+악기</button><button className={draft.instrumental ? 'active' : ''} aria-pressed={draft.instrumental} onClick={() => update({ instrumental: true, lyrics: draft.lyrics.trim() ? draft.lyrics : '[Instrumental]' })}><Guitar size={14}/>악기만</button></div>
-            </div>
+            )}
 
             <div>
-              <label style={{ display: 'block', fontSize: '11px', color: '#a6b4a5', marginBottom: '4px' }}>보컬 성별</label>
-              <div className="vocal-gender-toggle" style={{ display: 'flex', gap: '4px' }}>
-                <button
-                  type="button"
-                  className={`vocal-gender-btn${coverVocalGender === 'female' ? ' active' : ''}`}
-                  onClick={() => setCoverVocalGender('female')}
-                >여성</button>
-                <button
-                  type="button"
-                  className={`vocal-gender-btn${coverVocalGender === 'male' ? ' active' : ''}`}
-                  onClick={() => setCoverVocalGender('male')}
-                >남성</button>
-                <button
-                  type="button"
-                  className={`vocal-gender-btn${coverVocalGender === 'duet' ? ' active' : ''}`}
-                  onClick={() => setCoverVocalGender('duet')}
-                >듀엣</button>
-              </div>
-            </div>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '12px' }}>
-            <div>
-              <label style={{ display: 'block', fontSize: '11px', color: '#a6b4a5', marginBottom: '4px' }}>작곡 계획 (CoT)</label>
+              <label style={{ display: 'block', fontSize: '11px', color: '#9bb098', marginBottom: '5px' }}>
+                채보 작업 유형 (SheetSage2)
+              </label>
               <select
-                value={coverCot}
-                onChange={event => setCoverCot(event.target.value)}
-                style={{ width: '100%', height: '34px', borderRadius: '6px', background: '#161a15', border: '1px solid #384038', color: '#e8ece2', padding: '0 8px', fontSize: '12px' }}
+                value={coverTask}
+                onChange={event => setCoverTask(event.target.value as 'melody-full' | 'melody-vocal' | 'full')}
+                style={{ width: '100%', height: '36px', borderRadius: '6px', background: '#141813', border: '1px solid #2e382d', color: '#e8ece2', padding: '0 10px', fontSize: '12px' }}
               >
-                <option value="melody">멜로디 유지 (재화성화 편곡, 추천)</option>
-                <option value="full">멜로디와 코드 유지</option>
+                <option value="melody-full">보컬 + 리드 악기 멜로디 전체 채보 (권장)</option>
+                <option value="melody-vocal">보컬 전용 멜로디 채보</option>
+                <option value="full">멜로디 및 코드 진행 전체 채보</option>
               </select>
             </div>
 
+            <Button
+              style={{ width: '100%', height: '38px', marginTop: '2px' }}
+              onClick={() => void runCoverTranscribe()}
+              disabled={!coverAudioDataUrl || busy === 'cover-transcribe' || !online}
+            >
+              {busy === 'cover-transcribe' ? <LoaderCircle className="spin"/> : <WandSparkles size={15}/>}
+              {busy === 'cover-transcribe' ? 'SheetSage2로 멜로디 채보 중...' : 'SheetSage2로 멜로디 채보하기'}
+            </Button>
+          </div>
+
+          {/* STEP 2: TARGET STYLE & REARRANGEMENT */}
+          <div className="cover-step-card">
+            <div className="cover-step-header">
+              <span className="cover-step-badge">
+                <span className="cover-step-num">2</span> 새로운 편곡 스타일 및 제작
+              </span>
+            </div>
+
             <div>
-              <label style={{ display: 'block', fontSize: '11px', color: '#a6b4a5', marginBottom: '4px' }}>
-                Seed <button type="button" className="dice-btn" onClick={() => setCoverSeed(Math.floor(Math.random() * 2147483648))}><Dices size={12}/></button>
+              <label style={{ display: 'block', fontSize: '11px', color: '#9bb098', marginBottom: '5px' }}>
+                커버곡 제목
               </label>
-              <Input
-                type="number"
-                value={coverSeed}
-                onChange={event => setCoverSeed(Number(event.target.value))}
-                style={{ height: '34px', fontSize: '12px' }}
+              <input
+                type="text"
+                value={coverTitle}
+                onChange={event => setCoverTitle(event.target.value)}
+                placeholder="예: 아이유 - 밤편지 (City Pop Cover)"
+                style={{ width: '100%', height: '36px', borderRadius: '6px', background: '#141813', border: '1px solid #2e382d', color: '#e8ece2', padding: '0 10px', fontSize: '13px' }}
               />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '11px', color: '#9bb098', marginBottom: '5px' }}>
+                새로운 음악 스타일 (Target Style)
+              </label>
+              <textarea
+                value={coverStyle}
+                onChange={event => setCoverStyle(event.target.value)}
+                placeholder="새로운 편곡 스타일, 장르, 악기 편성, 보컬 무드를 적어주세요"
+                rows={3}
+                style={{ width: '100%', borderRadius: '6px', background: '#141813', border: '1px solid #2e382d', color: '#e8ece2', padding: '8px 10px', fontSize: '12px', lineHeight: 1.5, resize: 'vertical' }}
+              />
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginTop: '6px' }}>
+                {STYLE_TAGS.map(tag => (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => addStyleTag(tag)}
+                    style={{ fontSize: '11px', background: '#20281e', border: '1px solid #334230', color: '#a0bda0', padding: '2px 8px', borderRadius: '4px', cursor: 'pointer' }}
+                  >
+                    {tag}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+                <label style={{ fontSize: '11px', color: '#9bb098' }}>커버 가사</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const current = coverLyrics.trim();
+                    if (!current) setCoverLyrics('[Instrumental]');
+                    else if (!current.includes('[Instrumental]')) setCoverLyrics(`[Instrumental]\n\n${current}`);
+                    notify('[Instrumental] 섹션이 추가되었습니다.');
+                  }}
+                  style={{ fontSize: '10px', background: 'transparent', border: 'none', color: '#88bf82', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '3px' }}
+                >
+                  <Pencil size={11}/> [Instrumental] 삽입
+                </button>
+              </div>
+              <textarea
+                value={coverLyrics}
+                onChange={event => setCoverLyrics(event.target.value)}
+                placeholder={'[Verse]\n원곡 가사 또는 개사한 가사를 적어주세요\n\n[Chorus]\n가사를 비우면 허밍 또는 연주 중심이 됩니다'}
+                rows={4}
+                style={{ width: '100%', borderRadius: '6px', background: '#141813', border: '1px solid #2e382d', color: '#e8ece2', padding: '8px 10px', fontSize: '12px', lineHeight: 1.5, resize: 'vertical' }}
+              />
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '11px', color: '#9bb098', marginBottom: '5px' }}>
+                보컬 구성 및 성별
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
+                <div className="mode-switch" style={{ margin: 0 }}>
+                  <button
+                    type="button"
+                    className={!coverInstrumental ? 'active' : ''}
+                    onClick={() => setCoverInstrumental(false)}
+                  >
+                    <Mic size={13}/> 보컬+악기
+                  </button>
+                  <button
+                    type="button"
+                    className={coverInstrumental ? 'active' : ''}
+                    onClick={() => {
+                      setCoverInstrumental(true);
+                      if (coverAbc) setCoverAbc(toInstrumentalAbc(coverAbc));
+                      if (!coverLyrics.includes('[Instrumental]')) {
+                        setCoverLyrics(previous => previous ? `[Instrumental]\n\n${previous}` : '[Instrumental]');
+                      }
+                      notify('악기 전용 모드로 전환되었습니다.');
+                    }}
+                  >
+                    <Guitar size={13}/> 악기만
+                  </button>
+                </div>
+
+                <div className="mode-switch" style={{ margin: 0 }}>
+                  <button
+                    type="button"
+                    className={coverVocalGender === 'female' ? 'active' : ''}
+                    onClick={() => setCoverVocalGender('female')}
+                  >
+                    여성 보컬
+                  </button>
+                  <button
+                    type="button"
+                    className={coverVocalGender === 'male' ? 'active' : ''}
+                    onClick={() => setCoverVocalGender('male')}
+                  >
+                    남성 보컬
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
 
-          <div style={{ marginTop: '20px' }}>
+          {/* GENERATE BUTTON & PROGRESS */}
+          <div style={{ marginTop: '4px', marginBottom: '20px' }}>
             <Button
-              className="generate-button"
-              style={{ width: '100%', height: '44px', fontSize: '15px' }}
+              style={{ width: '100%', height: '46px', fontSize: '14px', fontWeight: 600, background: 'linear-gradient(135deg, #375331, #243521)', borderColor: '#567e4e' }}
               onClick={() => void runCoverGenerate()}
               disabled={!coverAbc.trim() || !coverStyle.trim() || !!busy || !online}
             >
               {busy === 'cover-generate' ? <LoaderCircle className="spin"/> : <Sparkles size={17}/>}
-              YuE2 제로샷 커버곡 생성하기
+              YuE2 원곡 커버 생성하기
             </Button>
+
+            {busy === 'cover-generate' && (
+              <div className="generate-progress" style={{ marginTop: '10px' }}>
+                <Progress aria-label="커버 생성 진행률" value={generateProgress}/>
+                <span>커버곡 생성 중... {generateProgress}%</span>
+              </div>
+            )}
+
+            <p style={{ fontSize: '11px', color: '#7a8a77', textAlign: 'center', margin: '8px 0 0', lineHeight: 1.5 }}>
+              SheetSage2 멜로디 골격 기반 · YuE2 Zero-Shot 모델로 편곡
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* RIGHT COLUMN: WORKSPACE, COMPARISON, SCORE & PRESETS */}
+      <section className="workspace cover-workspace" aria-label="커버 작업 공간">
+        {/* HERO BANNER OR COMPLETED RESULT CARD */}
+        {coverResult ? (
+          <div className="cover-section-card" style={{ background: 'linear-gradient(135deg, rgba(38, 54, 32, 0.85), rgba(20, 26, 18, 0.95))', borderColor: '#4d6945' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div style={{ width: '42px', height: '42px', borderRadius: '10px', background: '#2f4228', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#add7a5' }}>
+                  <Disc3 size={24} className="spin"/>
+                </div>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 600, color: '#e8ece2' }}>{coverResult.title}</h2>
+                    <span style={{ fontSize: '11px', background: '#2e3e27', color: '#b5e2ad', border: '1px solid #4a6341', padding: '2px 8px', borderRadius: '12px' }}>커버 완성</span>
+                  </div>
+                  <p style={{ margin: '4px 0 0', fontSize: '12px', color: '#9bb098' }}>{coverResult.style}</p>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                <Button size="sm" onClick={() => playQueue([coverResult])}>
+                  <Play size={14}/> 지금 재생
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => loadProject(coverResult)}>
+                  <SlidersHorizontal size={14}/> 믹서/이펙터 열기
+                </Button>
+                <a href={`/api/projects/${coverResult.id}/audio`} download={`${coverResult.title || 'cover'}.mp3`}>
+                  <Button variant="outline" size="sm">
+                    <Download size={14}/> 다운로드
+                  </Button>
+                </a>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '14px', marginTop: '6px' }}>
+              <div style={{ background: 'rgba(0,0,0,0.35)', padding: '14px', borderRadius: '9px', border: '1px solid #333d31' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                  <Headphones size={15} style={{ color: '#8fa48c' }}/>
+                  <strong style={{ fontSize: '12px', color: '#c0cdc0' }}>1. 업로드한 원곡 오디오</strong>
+                </div>
+                {coverAudioUrl ? (
+                  <audio src={coverAudioUrl} controls style={{ width: '100%', height: '36px' }}/>
+                ) : <p style={{ fontSize: '11px', color: '#7a8878', margin: 0 }}>원곡 오디오 파일</p>}
+              </div>
+              <div style={{ background: 'rgba(0,0,0,0.35)', padding: '14px', borderRadius: '9px', border: '1px solid #486142' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
+                  <Sparkles size={15} style={{ color: '#add7a5' }}/>
+                  <strong style={{ fontSize: '12px', color: '#add7a5' }}>2. 새로 탄생한 커버곡 (YuE2)</strong>
+                </div>
+                <audio src={`/api/projects/${coverResult.id}/audio`} controls style={{ width: '100%', height: '36px' }}/>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="cover-hero-banner">
+            <div className="cover-hero-header">
+              <div>
+                <span className="eyebrow" style={{ color: '#9ec497' }}>Zero-Shot Melody Transcription & Rearrangement</span>
+                <h2 style={{ margin: '4px 0 0', fontSize: '19px', fontWeight: 600, color: '#eef3eb', letterSpacing: '-0.5px' }}>
+                  SheetSage2 × YuE2 원곡 편곡 파이프라인
+                </h2>
+                <p style={{ margin: '6px 0 0', fontSize: '12px', color: '#9fb19b', lineHeight: 1.6 }}>
+                  원곡 음원에서 멜로디 시퀀스를 SheetSage2 AI로 정밀 채보하고, YuE2 음악 언어모델로 완전히 새로운 장르와 반주를 입힙니다.
+                </p>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => navigate('create')}>
+                <Sparkles size={14}/> 일반 작곡으로
+              </Button>
+            </div>
+
+            <div className="cover-pipeline-steps">
+              <div className="cover-pipeline-step">
+                <span className="cover-pipeline-step-num">1</span>
+                <div>
+                  <strong style={{ display: 'block', fontSize: '12px', color: '#dce5da', marginBottom: '2px' }}>원곡 음원 분석</strong>
+                  <p style={{ margin: 0, fontSize: '11px', color: '#889885', lineHeight: 1.5 }}>
+                    MP3, WAV 음원을 업로드하여 보컬 및 리드 선율을 준비합니다.
+                  </p>
+                </div>
+              </div>
+              <div className="cover-pipeline-step">
+                <span className="cover-pipeline-step-num">2</span>
+                <div>
+                  <strong style={{ display: 'block', fontSize: '12px', color: '#dce5da', marginBottom: '2px' }}>AI 멜로디 채보</strong>
+                  <p style={{ margin: 0, fontSize: '11px', color: '#889885', lineHeight: 1.5 }}>
+                    SheetSage2가 마디, 박자, 음표를 ABC 악보 형식으로 자동 추출합니다.
+                  </p>
+                </div>
+              </div>
+              <div className="cover-pipeline-step">
+                <span className="cover-pipeline-step-num">3</span>
+                <div>
+                  <strong style={{ display: 'block', fontSize: '12px', color: '#dce5da', marginBottom: '2px' }}>신규 스타일 편곡</strong>
+                  <p style={{ margin: 0, fontSize: '11px', color: '#889885', lineHeight: 1.5 }}>
+                    시티팝, 어쿠스틱 등 원하는 스타일에 맞춰 풀 트랙 커버곡을 생성합니다.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TRANSCRIBED MELODY SCORE CARD */}
+        <div className="cover-section-card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <FileText size={18} style={{ color: '#a4c99c' }}/>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 600, color: '#e2ece0' }}>SheetSage2 채보 멜로디 악보 (ABC Notation)</h3>
+                <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#889885' }}>
+                  {coverAbc ? `${coverAbc.split('\n').filter(l => !l.startsWith('%') && l.trim()).length}개 시퀀스 추출됨 · 편곡의 기준 선율로 사용됩니다` : '원곡을 채보하면 여기에 추출된 멜로디 악보가 표시됩니다'}
+                </p>
+              </div>
+            </div>
+            {coverAbc && (
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <Button variant="outline" size="sm" onClick={() => {
+                  setCoverAbc(toInstrumentalAbc(coverAbc));
+                  setCoverInstrumental(true);
+                  notify('악기 전용 악보로 변환되었습니다!');
+                }}>
+                  <Guitar size={13}/> 악기 전용 변환
+                </Button>
+                <Button variant="outline" size="sm" onClick={() => {
+                  void navigator.clipboard.writeText(coverAbc);
+                  notify('ABC 악보가 클립보드에 복사되었습니다.');
+                }}>
+                  악보 복사
+                </Button>
+              </div>
+            )}
           </div>
 
-          {busy === 'cover-generate' && (
-            <div className="generate-progress" style={{ marginTop: '12px' }}>
-              <Progress aria-label="커버 생성 진행률" value={generateProgress}/>
-              <span>커버곡 생성 중... {generateProgress}%</span>
+          {coverAbc ? (
+            <textarea
+              className="cover-score-box"
+              value={coverAbc}
+              onChange={event => setCoverAbc(event.target.value)}
+              rows={7}
+              spellCheck={false}
+              style={{ width: '100%', resize: 'vertical' }}
+            />
+          ) : (
+            <div style={{ padding: '24px 20px', textAlign: 'center', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px dashed #2d382c' }}>
+              <Music2 size={28} style={{ margin: '0 auto 8px', color: '#4d5d4b' }}/>
+              <strong style={{ display: 'block', fontSize: '13px', color: '#aab8a6', marginBottom: '3px' }}>
+                채보된 멜로디 악보 대기 중
+              </strong>
+              <p style={{ fontSize: '11px', color: '#758572', margin: 0 }}>
+                좌측 [1단계]에서 원곡 오디오를 업로드하고 <b>SheetSage2로 멜로디 채보하기</b>를 클릭하세요.
+              </p>
             </div>
           )}
         </div>
-      </div>
-    </section>;
+
+        {/* COVER STYLE INSPIRATION PRESETS */}
+        <div className="cover-section-card">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '2px' }}>
+            <Sparkles size={16} style={{ color: '#a8c79f' }}/>
+            <div>
+              <strong style={{ fontSize: '14px', color: '#e0eae0', display: 'block' }}>인기 커버 편곡 프리셋</strong>
+              <span style={{ fontSize: '11px', color: '#889885' }}>장르 카드를 클릭하면 좌측 커버곡 스타일에 즉시 세팅됩니다</span>
+            </div>
+          </div>
+
+          <div className="cover-preset-grid">
+            {COVER_PRESETS.map(preset => (
+              <div
+                key={preset.id}
+                className="cover-preset-card"
+                onClick={() => {
+                  setCoverStyle(preset.style);
+                  if (!coverTitle || coverTitle.includes('Cover') || coverTitle.includes('커버')) {
+                    const base = coverTitle ? coverTitle.replace(/\s*\(.*?\)/, '').trim() : '';
+                    setCoverTitle(base ? `${base} (${preset.name} Cover)` : `원곡 (${preset.name} Cover)`);
+                  }
+                  notify(`${preset.name} 편곡 프리셋이 적용되었습니다!`);
+                }}
+              >
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                    <span style={{ fontSize: '18px' }}>{preset.icon}</span>
+                    <span style={{ fontSize: '10px', background: '#252e22', color: '#a0c495', border: '1px solid #3d4f39', padding: '1px 6px', borderRadius: '4px' }}>
+                      {preset.badge}
+                    </span>
+                  </div>
+                  <strong style={{ display: 'block', fontSize: '12px', color: '#e4ebe0', marginBottom: '3px' }}>{preset.name}</strong>
+                  <p style={{ margin: 0, fontSize: '11px', color: '#8c9c89', lineHeight: 1.4 }}>{preset.desc}</p>
+                </div>
+                <div style={{ marginTop: '10px', display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10px', color: '#7a9e72' }}>
+                  <span>원클릭 스타일 적용</span>
+                  <ChevronRight size={11}/>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* RECENT AUDIO & COVER PROJECTS */}
+        <div className="cover-section-card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <Folder size={16} style={{ color: '#a4c99c' }}/>
+              <div>
+                <strong style={{ fontSize: '14px', color: '#e0eae0', display: 'block' }}>최근 생성된 음악 & 커버 보관함</strong>
+                <span style={{ fontSize: '11px', color: '#889885' }}>완성된 곡을 바로 재생하거나 편곡 레퍼런스로 활용할 수 있습니다</span>
+              </div>
+            </div>
+            <Button variant="ghost" size="sm" onClick={() => navigate('projects')}>
+              전체 프로젝트 보기 <ArrowRight size={12}/>
+            </Button>
+          </div>
+
+          {completedAudioProjects.length > 0 ? (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: '10px' }}>
+              {completedAudioProjects.slice(0, 6).map(item => (
+                <div
+                  key={item.id}
+                  style={{
+                    background: '#191f17',
+                    border: '1px solid #2d382b',
+                    borderRadius: '8px',
+                    padding: '10px 12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '10px',
+                  }}
+                >
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <strong style={{ display: 'block', fontSize: '12px', color: '#e2ece0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {item.title}
+                    </strong>
+                    <span style={{ fontSize: '11px', color: '#839580', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {item.style || '스타일 미지정'}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', gap: '4px' }}>
+                    <Button variant="ghost" size="icon" style={{ width: '30px', height: '30px' }} onClick={() => playQueue([item])}>
+                      <Play size={13}/>
+                    </Button>
+                    <Button variant="ghost" size="icon" style={{ width: '30px', height: '30px' }} onClick={() => loadProject(item)}>
+                      <SlidersHorizontal size={13}/>
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={{ padding: '20px', textAlign: 'center', background: 'rgba(0,0,0,0.15)', borderRadius: '8px', border: '1px dashed #293327' }}>
+              <p style={{ margin: 0, fontSize: '12px', color: '#7e8f7c' }}>
+                새로운 커버곡을 완성하면 이곳에 자동으로 보관되어 언제든 다시 듣고 이어 작업할 수 있습니다.
+              </p>
+            </div>
+          )}
+        </div>
+      </section>
+    </div>;
   }
 
   return <div className="studio-shell">

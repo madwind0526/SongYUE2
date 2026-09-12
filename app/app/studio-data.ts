@@ -9,6 +9,81 @@ export type AbcNote = { id: string; title: string; abc: string; coverPath?: stri
 export type ViewMode = 'list' | 'card';
 export type Settings = { provider: Provider; endpoint: string; llmModel: string; hasApiKey?: boolean; apiKey?: string | null; enginePath: string; pythonEnginePath: string; pythonScriptPath: string; pythonMemoryBudgetGib: number; sheetSagePythonPath: string; settingPath: string; musicPath: string; examplesPath: string; coversPath: string; abcNotesPath: string; stylePresets: string; visualizerEnabled: boolean; visualizerRingCount: number; visualizerHue: number; visualizerLineWidth: number; visualizerTrail: number; saveFormat: SaveFormat; viewMode: ViewMode; outputDirectory: string };
 export const DEFAULT_STYLE_PRESETS = 'Acoustic\nCity Pop\nBallad\nLo-fi\nJazz';
+export type CoverPreset = {
+  id: string;
+  name: string;
+  badge: string;
+  desc: string;
+  style: string;
+  icon: string;
+};
+
+export const COVER_PRESETS: CoverPreset[] = [
+  {
+    id: 'city-pop',
+    name: '시티팝',
+    badge: 'City Pop',
+    desc: '80s 레트로 신스, 펑키한 슬랩 베이스, 그루비 드럼 (115 BPM)',
+    style: 'Korean city pop, 80s retro synthesizer, funky slap bass, groovy drums, nostalgic female vocal, 115 BPM',
+    icon: '🌆',
+  },
+  {
+    id: 'acoustic',
+    name: '어쿠스틱 발라드',
+    badge: 'Acoustic',
+    desc: '따뜻한 핑거스타일 기타, 잔잔한 그랜드 피아노, 서정적 현악 (74 BPM)',
+    style: 'Acoustic ballad, warm fingerstyle acoustic guitar, gentle grand piano, soft strings, emotional vocal, 74 BPM',
+    icon: '🎸',
+  },
+  {
+    id: 'lofi',
+    name: '로파이 칠홉',
+    badge: 'Lo-Fi Chill',
+    desc: '바이닐 크랙클 노이즈, 빈티지 로즈 피아노, 칠한 힙합 비트 (84 BPM)',
+    style: 'Lo-fi chillhop, vintage Rhodes piano, vinyl dust crackle, smooth jazz chords, laid-back boom bap drum, 84 BPM',
+    icon: '☕',
+  },
+  {
+    id: 'synthwave',
+    name: '신스웨이브',
+    badge: 'Synthwave',
+    desc: '질주하는 아날로그 베이스 아르페지오, 네온 신스 리드 (126 BPM)',
+    style: 'Synthwave, cyberpunk retro electro, driving analog bass arp, lush neon synth lead, punchy gated snare, 126 BPM',
+    icon: '⚡',
+  },
+  {
+    id: 'orchestral',
+    name: '심포닉 오케스트라',
+    badge: 'Orchestral',
+    desc: '웅장한 풀 현악 앙상블, 프렌치 호른 브라스, 시네마틱 퍼커션 (92 BPM)',
+    style: 'Cinematic orchestral, grand string quartet, powerful French horns, cinematic percussion, epic choral swells, 92 BPM',
+    icon: '🎻',
+  },
+  {
+    id: 'jazz',
+    name: '재즈 라운지',
+    badge: 'Jazz Trio',
+    desc: '스윙 리듬, 어쿠스틱 콘트라베이스, 감미로운 즉흥 피아노 (108 BPM)',
+    style: 'Jazz lounge, upright double bass, brush snare rhythm, sweet improvisational jazz piano, mellow vibe, 108 BPM',
+    icon: '🎹',
+  },
+  {
+    id: 'k-dance',
+    name: 'K-Pop 댄스',
+    badge: 'K-Dance',
+    desc: '강렬한 808 베이스, 세련된 하이햇 롤과 댄서블 신스 (122 BPM)',
+    style: 'Modern K-pop dance, punchy 808 bass, crisp trap hi-hats, vibrant catchy vocal chops, energetic drop, 122 BPM',
+    icon: '✨',
+  },
+  {
+    id: 'anime-rock',
+    name: '애니메이션 록',
+    badge: 'Anime Rock',
+    desc: '청량한 일렉기타 리프, 폭발적인 드럼, 감성적인 멜로디 (165 BPM)',
+    style: 'Energetic J-rock, anime opening style, driving electric guitar riffs, passionate melody, dynamic drums, 165 BPM',
+    icon: '🔥',
+  },
+];
 export const DEFAULT_VISUALIZER_ENABLED = true;
 export const DEFAULT_VISUALIZER_RING_COUNT = 18;
 export const DEFAULT_VISUALIZER_HUE = 190;
