@@ -830,9 +830,13 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         const entry = await findEntry(input.projectId);
         if (!entry) throw fail(404, '프로젝트를 찾을 수 없습니다.');
         if (UNSUPPORTED_MODEL_MESSAGES[entry.project.modelId]) throw fail(400, UNSUPPORTED_MODEL_MESSAGES[entry.project.modelId]);
+        const isPython = Boolean(PYTHON_MODELS[entry.project.modelId]);
+        // audio.cpp's CLI has no ABC-file input at all (runAudioCpp never passes one), so an
+        // ABC score would be silently ignored on GGUF instead of shaping the generation --
+        // reject up front so users don't mistake a lyrics-only result for a working cover/plan.
+        if (!isPython && entry.project.abc && entry.project.abc.trim()) throw fail(400, 'ABC 악보(심볼릭 작곡/커버)는 GGUF 모델에서 생성에 반영되지 않습니다. "원본" 모델을 선택하거나 악보를 비워 주세요.');
         if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
         generating = true;
-        const isPython = Boolean(PYTHON_MODELS[entry.project.modelId]);
         const runner = isPython ? runPythonYue2 : runAudioCpp;
         const expectedMs = isPython ? 240000 : Math.round(60000 * (Math.max(1, entry.project.steps) / 8));
         generationStatus = { projectId: entry.project.id, startedAt: Date.now(), expectedMs };
