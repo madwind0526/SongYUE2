@@ -17,7 +17,7 @@
 
 ## 실제 환경에서 검증 필요 (코드는 준비됐지만 종단 테스트 못 함)
 
-- [ ] **SheetSage2 제로샷 커버**: `models/m-a-p/SheetSage2/`에 `config.json`+전체 코드가 이미 설치되어 있어 로컬 모델 인식 조건은 충족됨. 남은 것은 `test/YuE2-source/requirements-sheetsage2.txt`(torch 2.8.0/transformers 4.45.2 등, 본체 venv와 버전이 달라 별도 venv 필요) 설치와 설정 화면의 `sheetSagePythonPath` 지정뿐 — venv 생성 여부는 아직 확인/실행 안 함. venv 준비 후 `POST /api/cover-transcribe` 종단 테스트 필요.
+- [ ] **SheetSage2 제로샷 커버**: 별도 venv(`test/YuE2-source/.venv-sheetsage2`, Python 3.11 + torch 2.8.0+cu128 + `requirements-sheetsage2.txt`)를 생성하고 설정의 `sheetSagePythonPath`도 지정 완료 — `torch.cuda.is_available()`로 RTX 5070 인식까지 확인함. 아직 안 한 것은 `POST /api/cover-transcribe` 실제 오디오 파일로 종단 테스트뿐(전사 스크립트 자체 실행 여부 미확인).
 - [ ] **"악기만" mute-voice 전환의 실제 오디오 검증**: 코드 수정과 유닛 테스트(가짜 spawn)는 통과했지만, 실제 원본(공식 Python) 엔진으로 생성해 Vocal 화음 기호가 남은 ABC가 실제로 화성이 유지된 무보컬 오디오를 만드는지는 아직 실기 검증 전.
 - [ ] **INT8 ConvRot 모델**: 지금은 명확한 한국어 안내로 생성을 차단만 함. ComfyUI 어댑터를 실제로 붙여 생성 가능하게 만드는 작업은 시작 전.
 - [ ] **ABC "파일에서 가져오기"**: JSON의 `abc` 필드 추출 / 일반 텍스트 폴백 로직은 코드 리뷰로만 검증했고, 실제 파일 업로드로 브라우저에서 종단 테스트는 아직 안 함.
