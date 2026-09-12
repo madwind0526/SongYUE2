@@ -214,3 +214,61 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* ABC Score Preview & Controls Enhancements */
+.abc-preview-scroll {
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 220px;
+  padding: 10px 12px;
+}
+.abc-preview.abc-preview-lg .abc-preview-scroll {
+  max-height: 420px;
+}
+.abc-player-group {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.abc-stop-active {
+  color: #e57373 !important;
+}
+.abc-stop-active:hover {
+  background: rgba(229, 115, 115, 0.2) !important;
+  color: #ff8a80 !important;
+}
+.abc-player-divider {
+  width: 1px;
+  height: 16px;
+  background: #2e3b2c;
+  margin: 0 4px;
+}
+.abc-player-volume-wrap {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.abc-follow-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: #20291e;
+  border: 1px solid #334230;
+  border-radius: 5px;
+  padding: 3px 8px;
+  font-size: 11px;
+  color: #8da48b;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  margin-left: auto;
+}
+.abc-follow-btn:hover {
+  border-color: #4f664a;
+  color: #b5ceb3;
+}
+.abc-follow-btn.active {
+  background: #273822;
+  border-color: #55794d;
+  color: #add7a5;
+  font-weight: 600;
+}

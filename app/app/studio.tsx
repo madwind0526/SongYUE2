@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import * as ABCJS from 'abcjs';
-import { AudioLines, ArrowDownToLine, Disc3, ArrowRight, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Cpu, Dices, Download, FastForward, FileText, Folder, FolderOpen, Guitar, Headphones, Heart, Home, Image as ImageIcon, LayoutGrid, ListMusic, ListPlus, LoaderCircle, Menu, Mic, MoreVertical, Music2, Pause, Pencil, Play, Plus, Power, RefreshCw, Rewind, RotateCcw, Save, Search, Settings2, ShieldCheck, SkipBack, SkipForward, SlidersHorizontal, Sparkles, Square, Trash2, Upload, Volume2, WandSparkles, X } from 'lucide-react';
+import { AudioLines, LocateFixed, ArrowDownToLine, Disc3, ArrowRight, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Cpu, Dices, Download, FastForward, FileText, Folder, FolderOpen, Guitar, Headphones, Heart, Home, Image as ImageIcon, LayoutGrid, ListMusic, ListPlus, LoaderCircle, Menu, Mic, MoreVertical, Music2, Pause, Pencil, Play, Plus, Power, RefreshCw, Rewind, RotateCcw, Save, Search, Settings2, ShieldCheck, SkipBack, SkipForward, SlidersHorizontal, Sparkles, Square, Trash2, Upload, Volume2, WandSparkles, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -19,36 +19,70 @@ function loadRandomizeSeed(): boolean {
 }
 function AbcPreview({ abc, large, controlsSlot }: { abc: string; large?: boolean; controlsSlot?: HTMLElement | null }) {
   const ref = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const synthRef = useRef<ABCJS.SynthController | null>(null);
   const highlightedRef = useRef<Element[]>([]);
   const playStartRef = useRef<number | null>(null);
+  const autoFollowRef = useRef<boolean>(false);
   const [debounced, setDebounced] = useState(abc);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackRate, setPlaybackRate] = useState(1);
   const [volume, setVolume] = useState(1);
   const [audioReady, setAudioReady] = useState(false);
-  useEffect(() => { const timer = setTimeout(() => setDebounced(abc), 250); return () => clearTimeout(timer); }, [abc]);
+  const [autoFollow, setAutoFollow] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(abc), 250);
+    return () => clearTimeout(timer);
+  }, [abc]);
+
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    if (synthRef.current) { synthRef.current.destroy(); synthRef.current = null; }
+    if (synthRef.current) {
+      synthRef.current.destroy();
+      synthRef.current = null;
+    }
     highlightedRef.current = [];
     setIsPlaying(false);
     setAudioReady(false);
     el.innerHTML = '';
     if (!debounced.trim()) return;
+
     let tunes: ABCJS.TuneObject[];
-    try { tunes = ABCJS.renderAbc(el, debounced, { responsive: 'resize', add_classes: true }); }
-    catch { el.innerHTML = '<p class="abc-preview-error">악보를 표시할 수 없습니다. 문법을 확인해 주세요.</p>'; return; }
+    try {
+      tunes = ABCJS.renderAbc(el, debounced, { responsive: 'resize', add_classes: true });
+    } catch {
+      el.innerHTML = '<p class="abc-preview-error">악보를 표시할 수 없습니다. 문법을 확인해 주세요.</p>';
+      return;
+    }
+
     const tune = tunes[0];
     if (!tune || !ABCJS.synth.supportsAudio()) return;
+
     const controller = new ABCJS.synth.SynthController();
     controller.cursorControl = {
       onEvent: event => {
         highlightedRef.current.forEach(node => node.classList.remove('abc-note-current'));
         highlightedRef.current = (event.elements || []).flat();
         highlightedRef.current.forEach(node => node.classList.add('abc-note-current'));
-        highlightedRef.current[0]?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+
+        // Only scroll internal score container if autoFollow is explicitly enabled
+        // NEVER call window.scrollIntoView() which locks/jerks the browser page!
+        if (autoFollowRef.current && scrollContainerRef.current && highlightedRef.current[0]) {
+          const container = scrollContainerRef.current;
+          const noteNode = highlightedRef.current[0] as HTMLElement | SVGElement;
+          const noteRect = noteNode.getBoundingClientRect();
+          const containerRect = container.getBoundingClientRect();
+
+          const isAbove = noteRect.top < containerRect.top + 25;
+          const isBelow = noteRect.bottom > containerRect.bottom - 25;
+          if (isAbove || isBelow) {
+            const diff = noteRect.top - containerRect.top;
+            const target = container.scrollTop + diff - (container.clientHeight / 3);
+            container.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+          }
+        }
       },
       onFinished: () => {
         const expectedMs = (controller.midiBuffer?.duration || 0) * 1000;
@@ -64,14 +98,26 @@ function AbcPreview({ abc, large, controlsSlot }: { abc: string; large?: boolean
         setIsPlaying(false);
       },
     };
-    controller.setTune(tune, false, { soundFontVolumeMultiplier: volume }).then(() => setAudioReady(true)).catch(() => setAudioReady(false));
+
+    controller.setTune(tune, false, { soundFontVolumeMultiplier: volume })
+      .then(() => setAudioReady(true))
+      .catch(() => setAudioReady(false));
     synthRef.current = controller;
-    return () => { controller.destroy(); };
+
+    return () => {
+      controller.destroy();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debounced]);
+
   function togglePlay() {
     const sc = synthRef.current;
     if (!sc) return;
+    if (isPlaying) {
+      sc.pause();
+      setIsPlaying(false);
+      return;
+    }
     const startingFresh = !sc.isStarted && sc.isLoaded && sc.percent === 0;
     void sc.play().then(() => {
       if (startingFresh) sc.seek(0);
@@ -79,20 +125,24 @@ function AbcPreview({ abc, large, controlsSlot }: { abc: string; large?: boolean
       setIsPlaying(sc.isStarted);
     });
   }
+
   function stopPlayback() {
     const sc = synthRef.current;
     if (!sc) return;
     sc.pause();
     sc.restart();
+    sc.seek(0);
     highlightedRef.current.forEach(node => node.classList.remove('abc-note-current'));
     highlightedRef.current = [];
     setIsPlaying(false);
   }
+
   function seekBy(delta: number) {
     const sc = synthRef.current;
     if (!sc) return;
     sc.seek(Math.max(0, Math.min(1, (sc.percent || 0) + delta)));
   }
+
   function cycleSpeed() {
     const sc = synthRef.current;
     if (!sc) return;
@@ -100,6 +150,7 @@ function AbcPreview({ abc, large, controlsSlot }: { abc: string; large?: boolean
     setPlaybackRate(next);
     void sc.setWarp(next * 100);
   }
+
   function applyVolume(next: number) {
     setVolume(next);
     const sc = synthRef.current;
@@ -114,20 +165,126 @@ function AbcPreview({ abc, large, controlsSlot }: { abc: string; large?: boolean
       if (wasPlaying) void sc.play();
     });
   }
+
+  // Keyboard shortcut: Space to toggle play/pause, Escape to stop
+  useEffect(() => {
+    if (!isPlaying) return;
+    function handleKeyDown(e: KeyboardEvent) {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || target?.isContentEditable) {
+        return;
+      }
+      if (e.code === 'Space') {
+        e.preventDefault();
+        togglePlay();
+      } else if (e.code === 'Escape') {
+        e.preventDefault();
+        stopPlayback();
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying]);
+
   const controls = (audioReady || large) && <div className="abc-player-controls">
-    <Button variant="ghost" size="icon" aria-label="10% 뒤로" onClick={() => seekBy(-0.1)} disabled={!audioReady}><Rewind size={15}/></Button>
-    <Button variant="ghost" size="icon" aria-label={isPlaying ? '일시정지' : '재생'} onClick={togglePlay} disabled={!audioReady}>{isPlaying ? <Pause size={15}/> : <Play size={15}/>}</Button>
-    <Button variant="ghost" size="icon" aria-label="정지" onClick={stopPlayback} disabled={!audioReady}><Square size={15}/></Button>
-    <Button variant="ghost" size="icon" aria-label="10% 앞으로" onClick={() => seekBy(0.1)} disabled={!audioReady}><FastForward size={15}/></Button>
-    <button className="speed-btn" aria-label="재생 속도" onClick={cycleSpeed} disabled={!audioReady}>{playbackRate}x</button>
-    <Volume2 size={14}/>
-    <input className="abc-player-volume" type="range" aria-label="볼륨" min={0} max={2} step={0.1} value={volume} onChange={event => applyVolume(Number(event.target.value))} disabled={!audioReady}/>
+    <div className="abc-player-group">
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label="10% 뒤로"
+        onClick={() => seekBy(-0.1)}
+        disabled={!audioReady}
+        title="10% 뒤로"
+      >
+        <Rewind size={15}/>
+      </Button>
+      <Button
+        variant={isPlaying ? 'default' : 'ghost'}
+        size="icon"
+        aria-label={isPlaying ? '일시정지 (Space)' : '재생 (Space)'}
+        onClick={togglePlay}
+        disabled={!audioReady}
+        title={isPlaying ? '일시정지 (Space)' : '재생 (Space)'}
+      >
+        {isPlaying ? <Pause size={15}/> : <Play size={15}/>}
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label="정지 (Esc)"
+        onClick={stopPlayback}
+        disabled={!audioReady}
+        title="재생 정지 (Esc)"
+        className={isPlaying ? 'abc-stop-active' : ''}
+      >
+        <Square size={15}/>
+      </Button>
+      <Button
+        variant="ghost"
+        size="icon"
+        aria-label="10% 앞으로"
+        onClick={() => seekBy(0.1)}
+        disabled={!audioReady}
+        title="10% 앞으로"
+      >
+        <FastForward size={15}/>
+      </Button>
+    </div>
+
+    <div className="abc-player-divider"/>
+
+    <button
+      className="speed-btn"
+      aria-label="재생 속도"
+      onClick={cycleSpeed}
+      disabled={!audioReady}
+      title="재생 속도 전환 (1x / 2x)"
+    >
+      {playbackRate}x
+    </button>
+
+    <div className="abc-player-volume-wrap" title="볼륨 조절">
+      <Volume2 size={14}/>
+      <input
+        className="abc-player-volume"
+        type="range"
+        aria-label="볼륨"
+        min={0}
+        max={2}
+        step={0.1}
+        value={volume}
+        onChange={event => applyVolume(Number(event.target.value))}
+        disabled={!audioReady}
+      />
+    </div>
+
+    <div className="abc-player-divider"/>
+
+    <button
+      type="button"
+      className={`abc-follow-btn ${autoFollow ? 'active' : ''}`}
+      onClick={() => {
+        const next = !autoFollow;
+        setAutoFollow(next);
+        autoFollowRef.current = next;
+      }}
+      title={autoFollow ? '악보 자동 추적 켜짐 (클릭하여 끄기)' : '악보 자동 추적 꺼짐 (클릭하여 켜기)'}
+      aria-pressed={autoFollow}
+    >
+      <LocateFixed size={13}/>
+      <span>악보 추적 {autoFollow ? 'ON' : 'OFF'}</span>
+    </button>
   </div>;
+
   return <>
     <div className={`abc-preview${large ? ' abc-preview-lg' : ''}`}>
-      {!abc.trim() && <p className="field-hint">여기에 오선보 형태로 미리보기가 표시됩니다.</p>}
-      <div ref={ref}/>
       {!controlsSlot && controls}
+      {!abc.trim() && <p className="field-hint">여기에 오선보 형태로 미리보기가 표시됩니다.</p>}
+      <div className="abc-preview-scroll" ref={scrollContainerRef}>
+        <div ref={ref}/>
+      </div>
     </div>
     {controlsSlot && controls ? createPortal(controls, controlsSlot) : null}
   </>;
@@ -853,6 +1010,7 @@ export default function Studio() {
   const [coverCot, setCoverCot] = useState<string>('melody');
   const [coverSeed, setCoverSeed] = useState<number>(() => Math.floor(Math.random() * 2147483648));
   const [coverResult, setCoverResult] = useState<Project | null>(null);
+  const [coverScoreMode, setCoverScoreMode] = useState<'sheet' | 'text'>('sheet');
   const [draftAbcDraftText, setDraftAbcDraftText] = useState('');
   const [abcControlsSlot, setAbcControlsSlot] = useState<HTMLDivElement | null>(null);
   const [abcAiInstruction, setAbcAiInstruction] = useState('');
@@ -1803,12 +1961,28 @@ function coverStudioPage() {
               <div>
                 <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 600, color: '#e2ece0' }}>SheetSage2 채보 멜로디 악보 (ABC Notation)</h3>
                 <p style={{ margin: '2px 0 0', fontSize: '11px', color: '#889885' }}>
-                  {coverAbc ? `${coverAbc.split('\n').filter(l => !l.startsWith('%') && l.trim()).length}개 시퀀스 추출됨 · 편곡의 기준 선율로 사용됩니다` : '원곡을 채보하면 여기에 추출된 멜로디 악보가 표시됩니다'}
+                  {coverAbc ? `${coverAbc.split('\n').filter(l => !l.startsWith('%') && l.trim()).length}개 시퀀스 추출됨 · 오선보 및 재생 지원` : '원곡을 채보하면 여기에 추출된 멜로디 악보가 표시됩니다'}
                 </p>
               </div>
             </div>
             {coverAbc && (
-              <div style={{ display: 'flex', gap: '8px' }}>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', background: '#141813', padding: '2px', borderRadius: '6px', border: '1px solid #2d382b' }}>
+                  <button
+                    type="button"
+                    style={{ padding: '3px 9px', fontSize: '11px', borderRadius: '4px', background: coverScoreMode === 'sheet' ? '#2e3e28' : 'transparent', color: coverScoreMode === 'sheet' ? '#add7a5' : '#889886', border: 'none', cursor: 'pointer' }}
+                    onClick={() => setCoverScoreMode('sheet')}
+                  >
+                    오선보 미리보기
+                  </button>
+                  <button
+                    type="button"
+                    style={{ padding: '3px 9px', fontSize: '11px', borderRadius: '4px', background: coverScoreMode === 'text' ? '#2e3e28' : 'transparent', color: coverScoreMode === 'text' ? '#add7a5' : '#889886', border: 'none', cursor: 'pointer' }}
+                    onClick={() => setCoverScoreMode('text')}
+                  >
+                    코드 텍스트 편집
+                  </button>
+                </div>
                 <Button variant="outline" size="sm" onClick={() => {
                   setCoverAbc(toInstrumentalAbc(coverAbc));
                   setCoverInstrumental(true);
@@ -1827,14 +2001,18 @@ function coverStudioPage() {
           </div>
 
           {coverAbc ? (
-            <textarea
-              className="cover-score-box"
-              value={coverAbc}
-              onChange={event => setCoverAbc(event.target.value)}
-              rows={7}
-              spellCheck={false}
-              style={{ width: '100%', resize: 'vertical' }}
-            />
+            coverScoreMode === 'sheet' ? (
+              <AbcPreview abc={coverAbc} large/>
+            ) : (
+              <textarea
+                className="cover-score-box"
+                value={coverAbc}
+                onChange={event => setCoverAbc(event.target.value)}
+                rows={7}
+                spellCheck={false}
+                style={{ width: '100%', resize: 'vertical' }}
+              />
+            )
           ) : (
             <div style={{ padding: '24px 20px', textAlign: 'center', background: 'rgba(0,0,0,0.2)', borderRadius: '8px', border: '1px dashed #2d382c' }}>
               <Music2 size={28} style={{ margin: '0 auto 8px', color: '#4d5d4b' }}/>
