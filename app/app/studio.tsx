@@ -427,9 +427,16 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
             if (!source) continue;
             const baseRadius = Math.min(width, height) * ring.radiusFactor;
             const nodes: { x: number; y: number }[] = [];
+            // Real music has almost no energy in the top quarter of a 0-Nyquist spectrum and often
+            // saturates the very first bin(s); skip both flat extremes and only map the actively
+            // varying middle range around the circle instead of the full bin array.
+            const binMarginLow = 2;
+            const binMarginHigh = Math.round(source.length * 0.25);
+            const activeBins = Math.max(1, source.length - binMarginLow - binMarginHigh);
             for (let i = 0; i < points; i++) {
               const angle = (i / points) * Math.PI * 2 - Math.PI / 2;
-              const value = source[Math.floor(((i + ring.offset) % points) * source.length / points)] / 255;
+              const bin = binMarginLow + Math.floor(((i + ring.offset) % points) * activeBins / points);
+              const value = source[bin] / 255;
               const radius = baseRadius + value * baseRadius * 1.3;
               nodes.push({ x: cx + Math.cos(angle) * radius, y: cy + Math.sin(angle) * radius });
             }
