@@ -1,0 +1,17 @@
+{
+  "id": "c5793870-b71a-4dad-9146-0f1baffe53c4",
+  "title": "K0062-1 커튼 뒤의 세상-2",
+  "lyrics": "[Intro]\n[Spoken - low, quiet, intimate tone]\n넌\n누구야?\n\n[Verse 1]\n세상은\n비밀로 가득 차 있어\n\n눈이 있는 자는 볼 것이고\n귀가 있는 자는 듣겠지\n\n[Verse 2]\n남이 만든 모조품이 아닌\n내가 만든 눈과 귀라면\n보이는 세상 뒤에 숨은\n모습과 소리를\n보고 듣겠지\n\n[Bridge]\n미치지 않고서는\n그 비밀을\n찾을 수 없어\n\n남이 적어준 스크립트를\n앵무새처럼 되새기며\n내 것인 척 살아갈 뿐이야\n\n[Outro]\n세상은\n비밀로 가득 차 있어\n\n볼 수 있는가\n들을 수 있는가\n\n진짜 너를\n마주할 수 있는가\n\n세상은\n아직도 비밀로 가득 차 있어\n\n[End]",
+  "style": "Style: Korean experimental hip-hop with abstract spoken word, Sparse electronic beats, atmospheric synths, and glitch textures, Vocals are raw, fragmented, with pauses and emphasis on rhythm of speech, Tempo irregular, emphasizing mood shifts and unpredictability, Mood: surreal, intense, like decoding hidden truths in a futuristic soundscape",
+  "modelId": "yue2-q8",
+  "seed": 42,
+  "steps": 16,
+  "cot": "full",
+  "vocalGender": "duet",
+  "mode": "custom",
+  "status": "draft",
+  "favorite": false,
+  "notes": "",
+  "createdAt": "2026-09-11T21:55:26.309Z",
+  "updatedAt": "2026-09-11T23:34:49.785Z"
+}
