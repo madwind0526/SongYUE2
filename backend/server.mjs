@@ -47,6 +47,10 @@ const DEFAULT_STYLE_PRESETS = 'Acoustic\nCity Pop\nBallad\nLo-fi\nJazz';
 const VOCAL_HINTS = { male: ', male vocal', female: ', female vocal', duet: ', duet: male and female vocals' };
 const vocalHint = (gender) => VOCAL_HINTS[gender] || '';
 const styleHint = (project) => project.instrumental ? ', instrumental, no vocals' : vocalHint(project.vocalGender);
+// YuE2 has no dedicated instrumental flag; the model reliably stays instrumental only when it
+// receives no lyrics to sing, so "instrumental" mode withholds lyrics at the engine boundary
+// while still saving the user's full lyrics to disk (in case they switch modes later).
+const generationLyrics = (project) => project.instrumental ? '' : project.lyrics;
 const exists = async (target) => { try { await access(target); return true; } catch { return false; } };
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const text = (value, max = 20000) => typeof value === 'string' ? value.slice(0, max) : '';
@@ -248,7 +252,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     for (const relative of [preset.model, preset.vae, ...AUDIOCPP_SIDECARS]) {
       if (!(await exists(path.join(modelRoot, relative)))) throw fail(400, `모델 파일이 없습니다: ${relative}. 모델 관리 화면에서 다운로드 상태를 확인해 주세요.`);
     }
-    if (!project.lyrics.trim() || !project.style.trim()) throw fail(400, '가사와 음악 스타일이 필요합니다.');
+    if ((!project.instrumental && !project.lyrics.trim()) || !project.style.trim()) throw fail(400, '가사와 음악 스타일이 필요합니다.');
     const projectRuns = path.join(outputDirectory, project.id);
     await mkdir(projectRuns, { recursive: true });
     const audioFile = path.join(projectRuns, 'audio.wav');
@@ -257,7 +261,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const args = [
       '--task', 'gen', '--family', 'yue2', '--model', modelRoot, '--backend', 'cuda', '--threads', String(threads),
       '--session-option', `yue2.model_gguf=${preset.model}`, '--session-option', `yue2.vae_gguf=${preset.vae}`,
-      '--lyrics', project.lyrics, '--request-option', `style=${project.style}${styleHint(project)}`, '--request-option', `cot=${project.cot}`,
+      '--lyrics', generationLyrics(project), '--request-option', `style=${project.style}${styleHint(project)}`, '--request-option', `cot=${project.cot}`,
       '--request-option', `num_inference_steps=${project.steps}`, '--seed', String(project.seed),
       '--out', audioFile, '--log', '--metrics',
     ];
@@ -305,7 +309,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     return { python, script };
   }
   function pythonRequestFields(project) {
-    return { style: `${project.style}${styleHint(project)}`, lyrics: project.lyrics, cot: project.cot, seed: project.seed };
+    return { style: `${project.style}${styleHint(project)}`, lyrics: generationLyrics(project), cot: project.cot, seed: project.seed };
   }
   async function runPythonAction(action, project, extraArgs, expectedMs) {
     const { python, script } = pythonEngineOrFail();
@@ -314,7 +318,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const modelDir = path.join(root, 'models', 'm-a-p', 'YuE2-3B');
     const vaeDir = path.join(root, 'models', 'm-a-p', 'YuE2-Vae');
     if (!(await exists(modelDir)) || !(await exists(vaeDir))) throw fail(400, '원본 모델 파일이 없습니다. 모델 관리 화면에서 다운로드 상태를 확인해 주세요.');
-    if (!project.lyrics.trim() || !project.style.trim()) throw fail(400, '가사와 음악 스타일이 필요합니다.');
+    if ((!project.instrumental && !project.lyrics.trim()) || !project.style.trim()) throw fail(400, '가사와 음악 스타일이 필요합니다.');
     if (project.abc && project.abc.trim() && project.cot === 'off') throw fail(400, '악보를 사용하려면 작곡 계획을 "멜로디 계획" 또는 "멜로디와 코드 계획"으로 설정해 주세요.');
     if (action === 'plan' && project.cot === 'off') throw fail(400, '"계획 없이 생성"에서는 심볼릭 작곡을 만들 수 없습니다. 작곡 계획을 바꿔 주세요.');
     const projectRuns = path.join(outputDirectory, project.id);

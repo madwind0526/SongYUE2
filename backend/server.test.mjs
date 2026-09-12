@@ -472,6 +472,15 @@ test('symbolic planning, ABC score generation option, and the ABC-note library',
       })();
       return emitter;
     }
+    if (!args.includes('--output')) { // ffmpeg calls used for save-format conversion after finalize
+      const outPath = args[args.length - 1];
+      (async () => {
+        await new Promise(resolve => setTimeout(resolve, 0));
+        await writeFile(outPath, Buffer.from('flac-converted-bytes'));
+        emitter.emit('close', 0, null);
+      })();
+      return emitter;
+    }
     const action = args[1];
     const outDir = args[args.indexOf('--output') + 1];
     (async () => {
