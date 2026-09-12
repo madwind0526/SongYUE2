@@ -403,6 +403,15 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
       const analyser = analyserRef.current;
       const ctx2d = canvas?.getContext('2d');
       if (canvas && ctx2d) {
+        // The canvas's CSS box (flex-sized width x fixed 90px height) doesn't match a fixed
+        // internal resolution, which stretches circles into ellipses. Keep the drawing
+        // buffer's pixel size exactly in sync with the rendered box instead.
+        const displayWidth = Math.round(canvas.clientWidth);
+        const displayHeight = Math.round(canvas.clientHeight);
+        if (displayWidth > 0 && displayHeight > 0 && (canvas.width !== displayWidth || canvas.height !== displayHeight)) {
+          canvas.width = displayWidth;
+          canvas.height = displayHeight;
+        }
         const { width, height } = canvas;
         const playing = visualizerEnabled && isPlayingRef.current;
         if (playing && visualizerTrail > 0) {
