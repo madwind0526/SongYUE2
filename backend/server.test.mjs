@@ -108,6 +108,45 @@ test('local API persistence, request boundaries, provider adapters, and setting/
   assert.equal((await call('/api/examples')).data.length, 3);
 });
 
+test('EQ presets and whole post-process settings persist under Setting/, not library/setting', async t => {
+  resetEnv();
+  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-pp-settings-'));
+  const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}) });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const call = async (route, method = 'GET', payload) => fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) });
+  const callJson = async (route, method, payload) => { const response = await call(route, method, payload); return { status: response.status, data: await response.json() }; };
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+
+  assert.deepEqual((await callJson('/api/eq-presets')).data, []);
+  const eq = [46, 33, 21, 8, 0, -4, -8, -8, -4, 0];
+  const saved = await callJson('/api/eq-presets', 'POST', { name: '내 프리셋', eq });
+  assert.equal(saved.status, 200);
+  assert.deepEqual(saved.data, { name: '내 프리셋', eq });
+  assert.equal(await readFile(path.join(root, 'Setting', 'EQ-preset', '내 프리셋.json'), 'utf8').then(text => JSON.parse(text).eq.length), 10);
+  assert.equal((await jsonNames(path.join(root, 'library', 'setting'))).length, 0, 'a saved EQ preset must not land in library/setting, or it would be scanned as a bogus song draft');
+  assert.deepEqual((await callJson('/api/eq-presets')).data, [{ name: '내 프리셋', eq }]);
+  assert.equal((await callJson('/api/eq-presets', 'POST', { name: '', eq })).status, 400);
+  assert.equal((await callJson('/api/eq-presets', 'POST', { name: '이름', eq: [1, 2, 3] })).status, 400);
+  assert.equal((await callJson(`/api/eq-presets?name=${encodeURIComponent('내 프리셋')}`, 'DELETE')).status, 200);
+  assert.deepEqual((await callJson('/api/eq-presets')).data, []);
+  assert.equal((await callJson(`/api/eq-presets?name=${encodeURIComponent('없음')}`, 'DELETE')).status, 404);
+
+  const params = { eq, masterVolume: 120, eqEnabled: true, fxEnabled: true, reverbEchoEnabled: true, clarity: 0, spaciousness: 0, surround: 0, dynamicBoost: 0, bassBoost: 0, reverbAmount: 0, reverbLength: 50, echoAmount: 0, echoDelayMs: 300 };
+  assert.deepEqual((await callJson('/api/postprocess-settings')).data, []);
+  const savedSettings = await callJson('/api/postprocess-settings', 'POST', { name: '내 세팅', params });
+  assert.equal(savedSettings.status, 200);
+  assert.deepEqual(savedSettings.data, { name: '내 세팅', params });
+  assert.equal(await readFile(path.join(root, 'Setting', 'PostProcess', '내 세팅.json'), 'utf8').then(text => JSON.parse(text).name), '내 세팅');
+  assert.equal((await jsonNames(path.join(root, 'library', 'setting'))).length, 0, 'a saved postprocess settings file must not land in library/setting either');
+  assert.deepEqual((await callJson('/api/postprocess-settings')).data, [{ name: '내 세팅', params }]);
+  assert.equal((await callJson('/api/postprocess-settings', 'POST', { name: '', params })).status, 400);
+  assert.equal((await callJson('/api/postprocess-settings', 'POST', { name: '이름' })).status, 400);
+  assert.equal((await callJson(`/api/postprocess-settings?name=${encodeURIComponent('내 세팅')}`, 'DELETE')).status, 200);
+  assert.deepEqual((await callJson('/api/postprocess-settings')).data, []);
+  assert.equal((await callJson(`/api/postprocess-settings?name=${encodeURIComponent('없음')}`, 'DELETE')).status, 404);
+});
+
 test('.env values outside expectations are rejected at use time, not at startup', async t => {
   resetEnv();
   const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-env-'));
@@ -177,6 +216,16 @@ function makeFakePythonSpawn(scriptPath) {
     emitter.stdout = new EventEmitter();
     emitter.stderr = new EventEmitter();
     emitter.kill = () => emitter.emit('close', null, 'SIGTERM');
+    if (path.basename(args[0] || '') === 'abc_tools.py' && args[1] === 'strip-chords') {
+      const [, , sourceFile, outFile] = args;
+      (async () => {
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const content = await readFile(sourceFile, 'utf8').catch(() => 'X:1\nT:\nK:C\nV: Vocal\nz32|\nV: Ins\nz32|\n');
+        await writeFile(outFile, content.replace(/V: Vocal\n[^V]*/, 'V: Vocal\nz32|\n'));
+        emitter.emit('close', 0, null);
+      })();
+      return emitter;
+    }
     if (args[0] !== scriptPath) { // ffmpeg calls used for save-format conversion after finalize
       const outPath = args[args.length - 1];
       (async () => {
@@ -236,6 +285,11 @@ test('audio.cpp generation copies the song into library/music, leaving the sourc
   const original = (await callJson('/api/projects', 'POST', { title: '원본', lyrics: '가사', style: '스타일', modelId: 'yue2-original' })).data;
   assert.equal((await callJson('/api/generate', 'POST', { projectId: original.id })).status, 400);
 
+  const convrot = (await callJson('/api/projects', 'POST', { title: 'ConvRot', lyrics: '가사', style: '스타일', modelId: 'yue2-int8-convrot' })).data;
+  const convrotResult = await callJson('/api/generate', 'POST', { projectId: convrot.id });
+  assert.equal(convrotResult.status, 400);
+  assert.match(convrotResult.data.error, /ComfyUI/);
+
   const q8Project = (await callJson('/api/projects', 'POST', { title: 'Q8 미보유', lyrics: '가사', style: '스타일', modelId: 'yue2-q8' })).data;
   assert.equal((await callJson('/api/generate', 'POST', { projectId: q8Project.id })).status, 400);
   assert.equal(fakeSpawn.calls.length, 0);
@@ -276,6 +330,18 @@ test('audio.cpp generation copies the song into library/music, leaving the sourc
   assert.ok(await readFile(path.join(musicDir, '바꾼 제목.wav'), 'utf8').then(() => true, () => false));
   assert.equal((await call(`/api/projects/${songId}/audio`)).status, 200);
   assert.equal((await callJson(`/api/projects/${project.id}`)).data.title, '테스트 곡');
+
+  // post-processing/EQ save re-encodes the client-rendered WAV, preserving the original file's format and name
+  const fakeWavDataUrl = `data:audio/wav;base64,${Buffer.from('client-rendered-wav-bytes').toString('base64')}`;
+  const postProcessed = await call(`/api/projects/${songId}/post-process`, 'POST', { dataUrl: fakeWavDataUrl });
+  assert.equal(postProcessed.status, 200);
+  assert.equal(postProcessed.headers.get('content-type'), 'audio/wav');
+  assert.equal(postProcessed.headers.get('content-disposition'), `attachment; filename="${encodeURIComponent('바꾼 제목-modified.wav')}"`);
+  assert.equal(await postProcessed.text(), 'fake-transcoded-bytes');
+  assert.ok(fakeSpawn.calls.some(c => c.engine === 'ffmpeg'));
+  assert.equal((await call(`/api/projects/${songId}/post-process`, 'POST', { dataUrl: 'not-a-data-url' })).status, 400);
+  assert.equal((await call(`/api/projects/${project.id}/post-process`, 'POST', { dataUrl: fakeWavDataUrl })).status, 404);
+  assert.equal((await call('/api/projects/nonexistent-id/post-process', 'POST', { dataUrl: fakeWavDataUrl })).status, 404);
 
   // regenerating from the same (still-draft) project produces yet another independent song
   const secondGenerate = await callJson('/api/generate', 'POST', { projectId: project.id });
@@ -398,6 +464,39 @@ test('yue2-original routes to the Python runner, and downloads support on-demand
   assert.equal(sentRequest.seed, 7);
   assert.equal(sentRequest.cot, 'off');
   assert.equal(generated.data.durationMs, 1234);
+
+  // instrumental mode with no existing ABC: auto-plans, strips the Vocal voice, forces cot off->melody
+  const instrumentalDraft = (await callJson('/api/projects', 'POST', { title: '악기만 테스트', lyrics: '가사', style: '스타일', modelId: 'yue2-original', cot: 'off', instrumental: true })).data;
+  const instrumentalGenerated = await callJson('/api/generate', 'POST', { projectId: instrumentalDraft.id });
+  assert.equal(instrumentalGenerated.status, 200);
+  const stripCall = fakePython.calls.find(c => path.basename(c.args[0]) === 'abc_tools.py');
+  assert.ok(stripCall, 'expected abc_tools.py strip-chords to run for instrumental generation');
+  assert.equal(stripCall.args[1], 'strip-chords');
+  assert.equal(stripCall.args[4], '--keep-voice');
+  assert.equal(stripCall.args[5], 'Ins');
+  const instrumentalGenerateCall = fakePython.calls.filter(c => c.args[0] === pythonScriptPath && c.args[1] === 'generate').pop();
+  const instrumentalAbcFile = instrumentalGenerateCall.args[instrumentalGenerateCall.args.indexOf('--abc-file') + 1];
+  assert.ok(instrumentalAbcFile, 'expected --abc-file to be passed for instrumental generation');
+  const instrumentalRequestFile = instrumentalGenerateCall.args[instrumentalGenerateCall.args.indexOf('--request') + 1];
+  const instrumentalRequest = JSON.parse(await readFile(instrumentalRequestFile, 'utf8'));
+  assert.equal(instrumentalRequest.cot, 'melody');
+  assert.equal(instrumentalRequest.style, '스타일, instrumental, no vocals');
+  // the persisted draft keeps the user's original cot/abc; only the generation call was adjusted
+  assert.equal((await callJson(`/api/projects/${instrumentalDraft.id}`)).data.cot, 'off');
+
+  // instrumental mode with a pre-existing ABC that already has real Vocal notes: those notes
+  // must be silenced too, not just passed through (the earlier case only had an empty Vocal voice)
+  fakePython.calls.length = 0;
+  const abcWithVocals = 'X:1\nT:\nM:4/4\nL:1/8\nK:C\nV: Vocal\nCDEF GABc|\nV: Ins\nz8|\n';
+  const instrumentalWithAbc = (await callJson('/api/projects', 'POST', { title: '악보 있는 악기만', lyrics: '가사', style: '스타일', modelId: 'yue2-original', cot: 'full', instrumental: true, abc: abcWithVocals })).data;
+  assert.equal((await callJson('/api/generate', 'POST', { projectId: instrumentalWithAbc.id })).status, 200);
+  const noPlanCall = fakePython.calls.find(c => c.args[0] === pythonScriptPath && c.args[1] === 'plan');
+  assert.equal(noPlanCall, undefined, 'an existing ABC should not trigger an extra auto-plan step');
+  const stripCallWithVocals = fakePython.calls.find(c => path.basename(c.args[0]) === 'abc_tools.py');
+  const strippedSourceContent = await readFile(stripCallWithVocals.args[2], 'utf8');
+  assert.equal(strippedSourceContent, abcWithVocals, 'the real Vocal-note ABC must be handed to strip-chords, not skipped');
+  const strippedOutputContent = await readFile(stripCallWithVocals.args[3], 'utf8');
+  assert.ok(!strippedOutputContent.includes('CDEF GABc'), 'the Vocal melody notes must be silenced before generation');
 
   // download endpoint: same format serves directly, different format transcodes on demand and is cached
   const direct = await call(`/api/projects/${songId}/audio?format=flac&download=1`);
@@ -539,18 +638,19 @@ test('symbolic planning, ABC score generation option, and the ABC-note library',
   const abcFile = genArgs[genArgs.indexOf('--abc-file') + 1];
   assert.equal(await readFile(abcFile, 'utf8'), planned.data.abc);
 
-  // the abc-note library: save, list, edit (rename + content), delete
+  // the abc-note library: save as a plain .abc file by default, list, edit (rename + content), delete
   const savedNote = await callJson('/api/abc-notes', 'POST', { title: '내 악보', abc: planned.data.abc });
   assert.equal(savedNote.status, 201);
   assert.equal(savedNote.data.abc, planned.data.abc);
+  assert.match(savedNote.data.id, /^abcfile-/);
   const list = await callJson('/api/abc-notes');
   assert.equal(list.data.length, 1);
+  // renaming a .abc-format note renames its file, so its id (derived from the filename) changes too
   const edited = await callJson(`/api/abc-notes/${savedNote.data.id}`, 'PATCH', { title: '수정된 악보', abc: 'X:1\nT:\nK:C\nV: Vocal\nz32|\nV: Ins\nz32|\n' });
   assert.equal(edited.status, 200);
   assert.equal(edited.data.title, '수정된 악보');
-  assert.equal(edited.data.id, savedNote.data.id);
   assert.equal((await callJson('/api/abc-notes')).data[0].title, '수정된 악보');
-  assert.equal((await callJson(`/api/abc-notes/${savedNote.data.id}`, 'PATCH', { abc: '' })).status, 400);
-  assert.equal((await callJson(`/api/abc-notes/${savedNote.data.id}`, 'DELETE', {})).status, 200);
+  assert.equal((await callJson(`/api/abc-notes/${edited.data.id}`, 'PATCH', { abc: '' })).status, 400);
+  assert.equal((await callJson(`/api/abc-notes/${edited.data.id}`, 'DELETE', {})).status, 200);
   assert.equal((await callJson('/api/abc-notes')).data.length, 0);
 });

@@ -16,6 +16,12 @@ const AUDIOCPP_MODELS = {
   'yue2-q8': { model: 'yue2-3b-q8_0.gguf', vae: 'yue2-vae-f16.gguf' },
   'yue2-bf16': { model: 'yue2-3b-bf16.gguf', vae: 'yue2-vae-f32.gguf' },
 };
+const PYTHON_MODELS = {
+  'yue2-original': { modelDir: path.join('models', 'm-a-p', 'YuE2-3B'), vaeDir: path.join('models', 'm-a-p', 'YuE2-Vae') },
+};
+const UNSUPPORTED_MODEL_MESSAGES = {
+  'yue2-int8-convrot': 'INT8 ConvRot 파일은 현재 ComfyUI 형식 safetensors입니다. SongYUE2의 직접 생성 엔진에는 아직 연결되지 않았습니다. ComfyUI 어댑터를 추가한 뒤 사용할 수 있어요.',
+};
 const AUDIOCPP_SIDECARS = ['sidecars/yue2-model-config.json', 'sidecars/yue2-generation-config.json', 'sidecars/yue2-qwen.tiktoken', 'sidecars/yue2-vae-config.json'];
 const EXAMPLE_COLORS = ['sage', 'blue', 'sand'];
 const DEFAULT_EXAMPLES = [
@@ -46,11 +52,10 @@ const VOCAL_GENDERS = new Set(['', 'male', 'female', 'duet']);
 const DEFAULT_STYLE_PRESETS = 'Acoustic\nCity Pop\nBallad\nLo-fi\nJazz';
 const VOCAL_HINTS = { male: ', male vocal', female: ', female vocal', duet: ', duet: male and female vocals' };
 const vocalHint = (gender) => VOCAL_HINTS[gender] || '';
+// YuE2 has no dedicated instrumental flag and both the audio.cpp and Python engines require
+// non-empty lyrics (audio.cpp throws "Yue2 requires non-empty lyrics" outright), so "instrumental"
+// mode can only ever be a soft style hint on top of the real lyrics, not a way to omit them.
 const styleHint = (project) => project.instrumental ? ', instrumental, no vocals' : vocalHint(project.vocalGender);
-// YuE2 has no dedicated instrumental flag; the model reliably stays instrumental only when it
-// receives no lyrics to sing, so "instrumental" mode withholds lyrics at the engine boundary
-// while still saving the user's full lyrics to disk (in case they switch modes later).
-const generationLyrics = (project) => project.instrumental ? '' : project.lyrics;
 const exists = async (target) => { try { await access(target); return true; } catch { return false; } };
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const text = (value, max = 20000) => typeof value === 'string' ? value.slice(0, max) : '';
@@ -65,6 +70,33 @@ async function uniqueJsonPath(dir, title, excludeFile) {
   let candidate = path.join(dir, `${base}.json`);
   for (let n = 1; (await exists(candidate)) && candidate !== excludeFile; n += 1) candidate = path.join(dir, `${base} (${n}).json`);
   return candidate;
+}
+async function uniqueAbcPath(dir, title, excludeFile) {
+  const base = safeAbcFilename(title, 'score').replace(/\.abc$/i, '');
+  let candidate = path.join(dir, `${base}.abc`);
+  for (let n = 1; (await exists(candidate)) && candidate !== excludeFile; n += 1) candidate = path.join(dir, `${base} (${n}).abc`);
+  return candidate;
+}
+function abcFileId(name) { return `abcfile-${Buffer.from(name, 'utf8').toString('base64url')}`; }
+function abcFileNameFromId(id) {
+  if (!id?.startsWith('abcfile-')) return null;
+  try {
+    const name = Buffer.from(id.slice(8), 'base64url').toString('utf8');
+    return path.basename(name) === name && name.toLowerCase().endsWith('.abc') ? name : null;
+  } catch { return null; }
+}
+async function readAbcFileNote(dir, name) {
+  const file = path.join(dir, name);
+  const [abc, info] = await Promise.all([readFile(file, 'utf8'), stat(file)]);
+  return { id: abcFileId(name), title: path.basename(name, path.extname(name)), abc, createdAt: info.birthtime.toISOString(), updatedAt: info.mtime.toISOString(), format: 'abc' };
+}
+function safeAbcFilename(value, fallback = 'score') {
+  let name = path.basename(text(value, 240).trim() || fallback);
+  name = name.replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ').replace(/\s+/g, ' ').trim().replace(/[.\s]+$/, '');
+  if (!name) name = 'score';
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(name)) name = `_${name}`;
+  if (!name.toLowerCase().endsWith('.abc')) name += '.abc';
+  return name.slice(0, 180);
 }
 async function readJson(file, fallback) {
   try { return JSON.parse((await readFile(file, 'utf8')).replace(/^\uFEFF/, '')); }
@@ -138,6 +170,10 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   const examplesDir = () => resolveLibraryDir(settings.examplesPath, 'library/examples');
   const coversDir = () => resolveLibraryDir(settings.coversPath, 'library/cover');
   const abcNotesDir = () => resolveLibraryDir(settings.abcNotesPath, 'library/abc-note');
+  // App-level config, not song data - lives under Setting/ (sibling to library/), not inside
+  // library/setting: that folder is scanned as song drafts, and library/ is for song-related content only.
+  const eqPresetsDir = () => path.join(root, 'Setting', 'EQ-preset');
+  const postprocessSettingsDir = () => path.join(root, 'Setting', 'PostProcess');
   const resolveConfigPath = (value, defaultRelative) => path.resolve(root, (value || '').trim() || defaultRelative);
   const resolveOptionalConfigPath = (value) => { const trimmed = (value || '').trim(); return trimmed ? path.resolve(root, trimmed) : ''; };
   const playlistsDirPath = path.join(root, 'library', 'playlists');
@@ -252,7 +288,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     for (const relative of [preset.model, preset.vae, ...AUDIOCPP_SIDECARS]) {
       if (!(await exists(path.join(modelRoot, relative)))) throw fail(400, `모델 파일이 없습니다: ${relative}. 모델 관리 화면에서 다운로드 상태를 확인해 주세요.`);
     }
-    if ((!project.instrumental && !project.lyrics.trim()) || !project.style.trim()) throw fail(400, '가사와 음악 스타일이 필요합니다.');
+    if (!project.lyrics.trim() || !project.style.trim()) throw fail(400, '가사와 음악 스타일이 필요합니다.');
     const projectRuns = path.join(outputDirectory, project.id);
     await mkdir(projectRuns, { recursive: true });
     const audioFile = path.join(projectRuns, 'audio.wav');
@@ -261,7 +297,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const args = [
       '--task', 'gen', '--family', 'yue2', '--model', modelRoot, '--backend', 'cuda', '--threads', String(threads),
       '--session-option', `yue2.model_gguf=${preset.model}`, '--session-option', `yue2.vae_gguf=${preset.vae}`,
-      '--lyrics', generationLyrics(project), '--request-option', `style=${project.style}${styleHint(project)}`, '--request-option', `cot=${project.cot}`,
+      '--lyrics', project.lyrics, '--request-option', `style=${project.style}${styleHint(project)}`, '--request-option', `cot=${project.cot}`,
       '--request-option', `num_inference_steps=${project.steps}`, '--seed', String(project.seed),
       '--out', audioFile, '--log', '--metrics',
     ];
@@ -309,16 +345,20 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     return { python, script };
   }
   function pythonRequestFields(project) {
-    return { style: `${project.style}${styleHint(project)}`, lyrics: generationLyrics(project), cot: project.cot, seed: project.seed };
+    return { style: `${project.style}${styleHint(project)}`, lyrics: project.lyrics, cot: project.cot, seed: project.seed };
+  }
+  function pythonModelFor(project) {
+    return PYTHON_MODELS[project.modelId] || PYTHON_MODELS['yue2-original'];
   }
   async function runPythonAction(action, project, extraArgs, expectedMs) {
     const { python, script } = pythonEngineOrFail();
     if (!(await exists(python))) throw fail(400, '설정에서 Python 실행 파일 경로를 확인해 주세요.');
     if (!(await exists(script))) throw fail(400, '설정에서 Python 스크립트(run_yue2.py) 경로를 확인해 주세요.');
-    const modelDir = path.join(root, 'models', 'm-a-p', 'YuE2-3B');
-    const vaeDir = path.join(root, 'models', 'm-a-p', 'YuE2-Vae');
+    const selected = pythonModelFor(project);
+    const modelDir = path.join(root, selected.modelDir);
+    const vaeDir = path.join(root, selected.vaeDir);
     if (!(await exists(modelDir)) || !(await exists(vaeDir))) throw fail(400, '원본 모델 파일이 없습니다. 모델 관리 화면에서 다운로드 상태를 확인해 주세요.');
-    if ((!project.instrumental && !project.lyrics.trim()) || !project.style.trim()) throw fail(400, '가사와 음악 스타일이 필요합니다.');
+    if (!project.lyrics.trim() || !project.style.trim()) throw fail(400, '가사와 음악 스타일이 필요합니다.');
     if (project.abc && project.abc.trim() && project.cot === 'off') throw fail(400, '악보를 사용하려면 작곡 계획을 "멜로디 계획" 또는 "멜로디와 코드 계획"으로 설정해 주세요.');
     if (action === 'plan' && project.cot === 'off') throw fail(400, '"계획 없이 생성"에서는 심볼릭 작곡을 만들 수 없습니다. 작곡 계획을 바꿔 주세요.');
     const projectRuns = path.join(outputDirectory, project.id);
@@ -350,16 +390,52 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     if (log.signal) throw fail(502, `${action === 'plan' ? '심볼릭 작곡' : '음악 생성'}이 제한 시간을 넘어 중단되었습니다.`);
     return { outDir, log };
   }
+  async function stripVocalVoice(abcText, projectRuns) {
+    const { python, script } = pythonEngineOrFail();
+    const abcToolsScript = path.join(path.dirname(script), 'abc_tools.py');
+    if (!(await exists(abcToolsScript))) throw fail(400, 'abc_tools.py를 찾을 수 없습니다. Python 스크립트 경로를 확인해 주세요.');
+    const sourceFile = path.join(projectRuns, `vocal-source-${randomUUID()}.abc`);
+    const strippedFile = path.join(projectRuns, `instrumental-${randomUUID()}.abc`);
+    await writeFile(sourceFile, abcText, 'utf8');
+    const result = await new Promise((resolve, reject) => {
+      const child = spawnImpl(python, [abcToolsScript, 'strip-chords', sourceFile, strippedFile, '--keep-voice', 'Ins'], { windowsHide: true, cwd: path.dirname(script) });
+      const chunks = [];
+      child.stdout.on('data', (chunk) => chunks.push(chunk));
+      child.stderr.on('data', (chunk) => chunks.push(chunk));
+      child.once('error', reject);
+      child.once('close', (code) => resolve({ text: Buffer.concat(chunks).toString('utf8'), code }));
+    });
+    if (result.code !== 0 || !(await exists(strippedFile))) throw fail(502, `악기만 생성을 위해 보컬 성부를 지우지 못했습니다: ${result.text.trim().slice(0, 500) || '알 수 없는 오류'}`);
+    return readFile(strippedFile, 'utf8');
+  }
   async function runPythonYue2(project, file) {
     const extraArgs = [];
     const projectRuns = path.join(outputDirectory, project.id);
-    if (project.abc && project.abc.trim()) {
+    await mkdir(projectRuns, { recursive: true });
+    let effectiveProject = project;
+    if (project.instrumental) {
+      // audio.cpp/YuE2 always requires non-empty lyrics and has no dedicated instrumental
+      // flag, but a symbolic plan whose Vocal voice is entirely rests gives the model no
+      // melody to sing over, which is far more reliable than the style-text hint alone.
+      let sourceAbc = project.abc && project.abc.trim() ? project.abc : null;
+      if (!sourceAbc) {
+        const planProject = { ...project, cot: project.cot === 'off' ? 'full' : project.cot };
+        const { outDir: planOutDir } = await runPythonAction('plan', planProject, [], 20000);
+        const planAbcFile = path.join(planOutDir, 'score.abc');
+        if (!(await exists(planAbcFile))) throw fail(502, '악기만 생성을 위한 심볼릭 작곡에 실패했습니다.');
+        sourceAbc = await readFile(planAbcFile, 'utf8');
+      }
+      const instrumentalAbc = await stripVocalVoice(sourceAbc, projectRuns);
       const abcFile = path.join(projectRuns, 'input.abc');
-      await mkdir(projectRuns, { recursive: true });
+      await writeFile(abcFile, instrumentalAbc, 'utf8');
+      extraArgs.push('--abc-file', abcFile);
+      effectiveProject = { ...project, cot: project.cot === 'off' ? 'melody' : project.cot, abc: instrumentalAbc };
+    } else if (project.abc && project.abc.trim()) {
+      const abcFile = path.join(projectRuns, 'input.abc');
       await writeFile(abcFile, project.abc, 'utf8');
       extraArgs.push('--abc-file', abcFile);
     }
-    const { outDir, log } = await runPythonAction('generate', project, extraArgs, 90000);
+    const { outDir, log } = await runPythonAction('generate', effectiveProject, extraArgs, 90000);
     const audioFile = path.join(outDir, 'audio.flac');
     const resultFile = path.join(outDir, 'result.json');
     if (!(await exists(audioFile))) {
@@ -387,9 +463,11 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const { python, transcribeScript } = sheetSagePythonOrFail();
     if (!(await exists(python))) throw fail(400, '설정에서 SheetSage2 Python 실행 파일 경로를 확인해 주세요. (별도 venv 설치가 필요합니다)');
     if (!(await exists(transcribeScript))) throw fail(400, 'transcribe.py를 찾을 수 없습니다. SheetSage2 스킬 설치를 확인해 주세요.');
+    const sheetSageDir = path.join(root, 'models', 'm-a-p', 'SheetSage2');
+    const hasLocalSheetSage = await exists(path.join(sheetSageDir, 'config.json')) && await exists(path.join(sheetSageDir, 'model.safetensors'));
     const outDir = path.join(outputDirectory, 'cover-transcribe', randomUUID());
     await mkdir(outDir, { recursive: true });
-    const args = [transcribeScript, audioFile, '--output', outDir, '--task', task];
+    const args = [transcribeScript, audioFile, '--output', outDir, '--task', task, ...(hasLocalSheetSage ? ['--model', sheetSageDir, '--offline'] : [])];
     const log = await new Promise((resolve, reject) => {
       const child = spawnImpl(python, args, { windowsHide: true, cwd: path.dirname(transcribeScript) });
       const chunks = [];
@@ -413,6 +491,26 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const env = providerFromEnv(settings.provider);
     return { provider: settings.provider, endpoint: env.endpoint, llmModel: env.model, enginePath: settings.enginePath, pythonEnginePath: settings.pythonEnginePath, pythonScriptPath: settings.pythonScriptPath, pythonMemoryBudgetGib: settings.pythonMemoryBudgetGib, sheetSagePythonPath: settings.sheetSagePythonPath, settingPath: settings.settingPath, musicPath: settings.musicPath, examplesPath: settings.examplesPath, coversPath: settings.coversPath, abcNotesPath: settings.abcNotesPath, stylePresets: settings.stylePresets, saveFormat: settings.saveFormat, viewMode: settings.viewMode, outputDirectory: path.relative(root, outputDirectory) || '.', hasApiKey: Boolean(env.apiKey), apiKey: env.apiKey ? '***' : null, apiKeyStorage: 'env' };
   };
+  async function localFile(relativePath) {
+    const file = path.join(root, relativePath);
+    const info = await stat(file).catch(() => null);
+    if (!info?.isFile()) return null;
+    return { path: relativePath.replaceAll(path.sep, '/'), size: info.size, state: 'complete', completedBytes: info.size };
+  }
+  async function localModelRepositories() {
+    const specs = [
+      { id: 'comfy-org/YuE2', path: path.join('models', 'comfy-org', 'YuE2'), files: [path.join('models', 'comfy-org', 'YuE2', 'checkpoints', 'yue2_3b_int8_convrot.safetensors')] },
+      { id: 'm-a-p/SheetSage2', path: path.join('models', 'm-a-p', 'SheetSage2'), files: [path.join('models', 'm-a-p', 'SheetSage2', 'model.safetensors'), path.join('models', 'm-a-p', 'SheetSage2', 'config.json')] },
+    ];
+    const repositories = [];
+    for (const spec of specs) {
+      const files = (await Promise.all(spec.files.map(localFile))).filter(Boolean);
+      if (!files.length) continue;
+      const completedBytes = files.reduce((sum, file) => sum + file.completedBytes, 0);
+      repositories.push({ id: spec.id, revision: 'local', path: spec.path.replaceAll(path.sep, '/'), state: files.length === spec.files.length ? 'complete' : 'partial', totalBytes: completedBytes, completedBytes, files });
+    }
+    return repositories;
+  }
   async function upstream(url, options = {}) {
     try {
       const response = await fetchImpl(url, { ...options, redirect: 'error', signal: AbortSignal.timeout(120000) });
@@ -521,7 +619,9 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       }
       if (req.method === 'GET' && pathname === '/api/models') {
         const inventory = await readJson(path.join(root, 'model-download-status.json'), { schemaVersion: 1, updatedAt: null, state: 'not_started', totalBytes: 0, completedBytes: 0, repositories: [] });
-        return send(200, { ...inventory, engineReady: await engineReady() });
+        const localRepositories = await localModelRepositories();
+        const localBytes = localRepositories.reduce((sum, repo) => sum + repo.completedBytes, 0);
+        return send(200, { ...inventory, totalBytes: inventory.totalBytes + localBytes, completedBytes: inventory.completedBytes + localBytes, repositories: [...(inventory.repositories || []), ...localRepositories], engineReady: await engineReady() });
       }
       if (req.method === 'GET' && pathname === '/api/examples') return send(200, await listExamples());
       if (req.method === 'POST' && pathname === '/api/examples') {
@@ -687,9 +787,10 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         if (typeof input.projectId !== 'string') throw fail(400, '프로젝트 아이디가 필요합니다.');
         const entry = await findEntry(input.projectId);
         if (!entry) throw fail(404, '프로젝트를 찾을 수 없습니다.');
+        if (UNSUPPORTED_MODEL_MESSAGES[entry.project.modelId]) throw fail(400, UNSUPPORTED_MODEL_MESSAGES[entry.project.modelId]);
         if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
         generating = true;
-        const isPython = entry.project.modelId === 'yue2-original';
+        const isPython = Boolean(PYTHON_MODELS[entry.project.modelId]);
         const runner = isPython ? runPythonYue2 : runAudioCpp;
         const expectedMs = isPython ? 240000 : Math.round(60000 * (Math.max(1, entry.project.steps) / 8));
         generationStatus = { projectId: entry.project.id, startedAt: Date.now(), expectedMs };
@@ -770,11 +871,70 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           return send(200, { abc: result.abc });
         } finally { generating = false; await unlink(audioFile).catch(() => {}); }
       }
+      if (req.method === 'POST' && pathname === '/api/abc-file') {
+        const input = await body(req, 512 * 1024);
+        const abc = text(input.abc, 200000);
+        if (!abc.trim()) throw fail(400, '\uC800\uC7A5\uD560 \uC545\uBCF4\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4.');
+        const folderInput = text(input.folder, 2048).trim() || settings.abcNotesPath || 'library/abc-note';
+        const dir = path.resolve(root, folderInput);
+        const filename = safeAbcFilename(input.filename, input.title || 'score');
+        const target = path.join(dir, filename);
+        await mkdir(dir, { recursive: true });
+        await writeFile(target, abc.endsWith('\n') ? abc : `${abc}\n`, 'utf8');
+        return send(200, { ok: true, folder: dir, filename, path: target });
+      }
+      if (req.method === 'GET' && pathname === '/api/eq-presets') {
+        const dir = eqPresetsDir();
+        const files = await readdir(dir).catch(() => []);
+        const presets = await Promise.all(files.filter((name) => name.endsWith('.json')).map((name) => readJson(path.join(dir, name), null)));
+        return send(200, presets.filter(Boolean).sort((a, b) => a.name.localeCompare(b.name)));
+      }
+      if (req.method === 'POST' && pathname === '/api/eq-presets') {
+        const input = await body(req, 8 * 1024);
+        const name = text(input.name, 120).trim();
+        if (!name) throw fail(400, '프리셋 이름이 필요합니다.');
+        if (!Array.isArray(input.eq) || input.eq.length !== 10 || !input.eq.every((value) => typeof value === 'number' && Number.isFinite(value))) throw fail(400, 'EQ 값이 올바르지 않습니다.');
+        const preset = { name, eq: input.eq };
+        await saveJson(path.join(eqPresetsDir(), `${safeFilename(name)}.json`), preset);
+        return send(200, preset);
+      }
+      if (req.method === 'DELETE' && pathname === '/api/eq-presets') {
+        const name = text(requestUrl.searchParams.get('name'), 120).trim();
+        if (!name) throw fail(400, '프리셋 이름이 필요합니다.');
+        const target = path.join(eqPresetsDir(), `${safeFilename(name)}.json`);
+        if (!(await exists(target))) throw fail(404, '프리셋을 찾을 수 없습니다.');
+        await unlink(target);
+        return send(200, { ok: true });
+      }
+      if (req.method === 'GET' && pathname === '/api/postprocess-settings') {
+        const dir = postprocessSettingsDir();
+        const files = await readdir(dir).catch(() => []);
+        const presets = await Promise.all(files.filter((name) => name.endsWith('.json')).map((name) => readJson(path.join(dir, name), null)));
+        return send(200, presets.filter(Boolean).sort((a, b) => a.name.localeCompare(b.name)));
+      }
+      if (req.method === 'POST' && pathname === '/api/postprocess-settings') {
+        const input = await body(req, 32 * 1024);
+        const name = text(input.name, 120).trim();
+        if (!name) throw fail(400, '프리셋 이름이 필요합니다.');
+        if (!input.params || typeof input.params !== 'object' || Array.isArray(input.params)) throw fail(400, '설정 내용이 올바르지 않습니다.');
+        const preset = { name, params: input.params };
+        await saveJson(path.join(postprocessSettingsDir(), `${safeFilename(name)}.json`), preset);
+        return send(200, preset);
+      }
+      if (req.method === 'DELETE' && pathname === '/api/postprocess-settings') {
+        const name = text(requestUrl.searchParams.get('name'), 120).trim();
+        if (!name) throw fail(400, '프리셋 이름이 필요합니다.');
+        const target = path.join(postprocessSettingsDir(), `${safeFilename(name)}.json`);
+        if (!(await exists(target))) throw fail(404, '프리셋을 찾을 수 없습니다.');
+        await unlink(target);
+        return send(200, { ok: true });
+      }
       if (req.method === 'GET' && pathname === '/api/abc-notes') {
         const dir = abcNotesDir();
-        const files = (await readdir(dir).catch(() => [])).filter((name) => name.endsWith('.json'));
-        const list = await Promise.all(files.map((name) => readJson(path.join(dir, name), null)));
-        return send(200, list.filter(Boolean).sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
+        const files = await readdir(dir).catch(() => []);
+        const jsonList = await Promise.all(files.filter((name) => name.endsWith('.json')).map((name) => readJson(path.join(dir, name), null)));
+        const abcList = await Promise.all(files.filter((name) => name.toLowerCase().endsWith('.abc')).map((name) => readAbcFileNote(dir, name).catch(() => null)));
+        return send(200, [...jsonList, ...abcList].filter(Boolean).sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
       }
       if (req.method === 'POST' && pathname === '/api/abc-notes') {
         const input = await body(req, 512 * 1024);
@@ -784,19 +944,24 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         return send(201, await serial(async () => {
           const dir = abcNotesDir();
           await mkdir(dir, { recursive: true });
-          const createdAt = new Date().toISOString();
-          const note = { id: randomUUID(), title, abc, createdAt };
-          await saveJson(await uniqueJsonPath(dir, title), note);
-          return note;
+          const target = await uniqueAbcPath(dir, title);
+          await writeFile(target, abc.endsWith('\n') ? abc : `${abc}\n`, 'utf8');
+          return readAbcFileNote(dir, path.basename(target));
         }));
       }
       async function findAbcNote(id) {
         const dir = abcNotesDir();
+        const abcName = abcFileNameFromId(id);
+        if (abcName) {
+          const file = path.join(dir, abcName);
+          if (await exists(file)) return { note: await readAbcFileNote(dir, abcName), file, format: 'abc' };
+          return null;
+        }
         const files = (await readdir(dir).catch(() => [])).filter((name) => name.endsWith('.json'));
         for (const name of files) {
           const filePath = path.join(dir, name);
           const note = await readJson(filePath, null);
-          if (note?.id === id) return { note, file: filePath };
+          if (note?.id === id) return { note, file: filePath, format: 'json' };
         }
         return null;
       }
@@ -809,19 +974,21 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           const note = found.note;
           let file = found.file;
           if (typeof input.title === 'string') {
-            const nextTitle = text(input.title, 200).trim() || '제목 없는 악보';
+            const nextTitle = text(input.title, 200).trim() || '\uC81C\uBAA9 \uC5C6\uB294 \uC545\uBCF4';
             if (nextTitle !== note.title) {
-              const target = await uniqueJsonPath(abcNotesDir(), nextTitle, file);
+              const target = found.format === 'abc' ? await uniqueAbcPath(abcNotesDir(), nextTitle, file) : await uniqueJsonPath(abcNotesDir(), nextTitle, file);
               if (target !== file) { await rename(file, target); file = target; }
               note.title = nextTitle;
+              if (found.format === 'abc') note.id = abcFileId(path.basename(file));
             }
           }
           if (typeof input.abc === 'string') {
-            if (!input.abc.trim()) throw fail(400, '악보 내용을 비울 수 없습니다.');
+            if (!input.abc.trim()) throw fail(400, '\uC545\uBCF4 \uB0B4\uC6A9\uC740 \uBE44\uC6B8 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.');
             note.abc = text(input.abc, 200000);
           }
           note.updatedAt = new Date().toISOString();
-          await saveJson(file, note);
+          if (found.format === 'abc') await writeFile(file, note.abc.endsWith('\n') ? note.abc : `${note.abc}\n`, 'utf8');
+          else await saveJson(file, note);
           return note;
         }));
       }
@@ -954,6 +1121,43 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         const disposition = requestUrl.searchParams.get('download') ? `attachment; filename="${encodeURIComponent(path.basename(audioFile))}"` : 'inline';
         res.writeHead(200, { 'Content-Type': AUDIO_MIME_TYPES[path.extname(audioFile)] || 'application/octet-stream', 'Content-Length': String(data.length), 'Content-Disposition': disposition, 'Cache-Control': 'no-store' });
         return res.end(data);
+      }
+      const postProcessMatch = pathname.match(/^\/api\/projects\/([^/]+)\/post-process$/);
+      if (postProcessMatch && req.method === 'POST') {
+        const input = await body(req, 150 * 1024 * 1024);
+        const match = typeof input.dataUrl === 'string' && input.dataUrl.match(/^data:audio\/wav;base64,(.+)$/);
+        if (!match) throw fail(400, '처리된 오디오(WAV) 데이터가 필요합니다.');
+        const entry = await findEntry(postProcessMatch[1]);
+        if (!entry || entry.project.status !== 'completed' || !entry.project.audioPath) throw fail(404, '완성된 음원을 찾을 수 없습니다.');
+        const dir = path.dirname(entry.file);
+        const originalFile = path.join(dir, entry.project.audioPath);
+        if (!(await exists(originalFile))) throw fail(404, '원본 음원 파일을 찾을 수 없습니다.');
+        const ext = path.extname(entry.project.audioPath).slice(1).toLowerCase();
+        if (!SAVE_FORMATS.has(ext)) throw fail(400, '지원하지 않는 원본 파일 형식입니다.');
+        const buffer = Buffer.from(match[1], 'base64');
+        const tempWav = path.join(outputDirectory, `post-process-${randomUUID()}.wav`);
+        const outFile = path.join(outputDirectory, `post-process-${randomUUID()}.${ext}`);
+        try {
+          await writeFile(tempWav, buffer);
+          const args = ext === 'mp4'
+            ? ['-y', '-i', originalFile, '-i', tempWav, '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'copy', '-c:a', 'aac', '-b:a', '256k', '-shortest', outFile]
+            : FFMPEG_ARGS[ext](tempWav, outFile);
+          await new Promise((resolve, reject) => {
+            const child = spawnImpl('ffmpeg', args, { windowsHide: true });
+            child.once('error', reject);
+            child.once('close', (code) => code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`)));
+          });
+          const outStat = await stat(outFile).catch(() => null);
+          if (!outStat?.size) throw fail(502, '후처리 결과 파일을 만들지 못했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.');
+          const data = await readFile(outFile);
+          const base = path.basename(entry.project.audioPath, path.extname(entry.project.audioPath));
+          const suggestedName = `${base}-modified.${ext}`;
+          res.writeHead(200, { 'Content-Type': AUDIO_MIME_TYPES[`.${ext}`] || 'application/octet-stream', 'Content-Length': String(data.length), 'Content-Disposition': `attachment; filename="${encodeURIComponent(suggestedName)}"`, 'Cache-Control': 'no-store' });
+          return res.end(data);
+        } finally {
+          await unlink(tempWav).catch(() => {});
+          await unlink(outFile).catch(() => {});
+        }
       }
       throw fail(404, '요청한 기능을 찾을 수 없습니다.');
     } catch (error) {

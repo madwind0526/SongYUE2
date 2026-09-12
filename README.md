@@ -6,7 +6,10 @@
 
 ## 주요 기능
 
-- 가사 + 스타일 프롬프트 → 실제 음악 생성 (audio.cpp GGUF 또는 원본 Python 모델)
+- 가사 + 스타일 프롬프트 → 실제 음악 생성 (audio.cpp GGUF 3종 또는 원본 Python 모델)
+- **진짜 "악기만" 생성**: 원본 Python 모델에서는 ABC 악보의 보컬 성부를 구조적으로 쉼표 처리(`abc_tools.py strip-chords`)해 확실하게 무보컬로 생성. GGUF 모델은 스타일 힌트로만 지원(구조적 보장 없음)
+- **심볼릭 작곡(ABC 악보)**: 멜로디/코드 계획 생성·검사·AI 지시 편집·오디오 재생(현재 음표 하이라이트), 오디오에서 멜로디 추출(SheetSage2), `.abc` 파일 기반 라이브러리(가져오기/저장/삭제)
+- **후처리 / EQ 스튜디오**: 완성곡을 브라우저에서 실시간으로 미리 들으며 10밴드 EQ(프리셋 포함)·FxSound 노브(선명도/공간감/서라운드/다이내믹부스트/베이스부스트)·리버브·에코를 조절하고, 원본 파일은 그대로 둔 채 처리된 사본을 원래 파일 형식으로 저장. 재생 중인 트랙을 실시간 원형 비주얼라이저로 표시
 - 라이브러리(완성곡) / 프로젝트(초안·설정) 완전 분리 — 하나를 지워도 다른 하나는 그대로 유지
 - 재생목록 생성 및 PC에서 연속 재생, 앨범 커버 등록
 - wav / flac / mp3 / mp4 다중 포맷 다운로드
@@ -72,6 +75,8 @@ npm run build   # 프론트엔드 빌드
 - [docs/local-api.md](docs/local-api.md) — 로컬 API 엔드포인트 목록
 - [docs/audiocpp-setup.md](docs/audiocpp-setup.md) — audio.cpp 빌드 및 연결 방법
 - [docs/models.md](docs/models.md) — 지원 모델 안내
+- [progress.md](progress.md) — 아직 남은 일 / 실제 환경 검증이 필요한 항목
+- [revision.md](revision.md) — 커밋 단위 변경 이력
 
 ## 라이선스 안내
 

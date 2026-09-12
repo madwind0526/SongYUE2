@@ -31,10 +31,11 @@ export const saveFormats: { id: SaveFormat; label: string }[] = [
   { id: 'mp4', label: 'MP4-video (커버 이미지 + 오디오)' },
 ];
 export const models = [
-  { id: 'yue2-q4', name: 'YuE2 · Q4', detail: '가벼운 시작', size: '2.67 GB', engine: 'audio.cpp', file: 'yue2-3b-q4_0.gguf', badge: '이 PC 추천' },
-  { id: 'yue2-q8', name: 'YuE2 · Q8', detail: '정밀도 우선', size: '4.26 GB', engine: 'audio.cpp', file: 'yue2-3b-q8_0.gguf', badge: '실험적' },
-  { id: 'yue2-bf16', name: 'YuE2 · BF16', detail: '양자화하지 않은 GGUF', size: '7.26 GB', engine: 'audio.cpp', file: 'yue2-3b-bf16.gguf', badge: '고용량 GPU' },
-  { id: 'yue2-original', name: 'YuE2 · 원본', detail: '공식 Python 모델', size: '7.26 GB', engine: 'Python', file: 'model.safetensors', badge: '24 GB 환경 권장' },
+  { id: 'yue2-q4', name: 'YuE2 - Q4 GGUF', detail: '가벼운 시작', size: '2.67 GB', engine: 'audio.cpp', file: 'yue2-3b-q4_0.gguf', badge: '이 PC 추천' },
+  { id: 'yue2-q8', name: 'YuE2 - Q8 GGUF', detail: '정밀도 우선', size: '4.26 GB', engine: 'audio.cpp', file: 'yue2-3b-q8_0.gguf', badge: '실험적' },
+  { id: 'yue2-bf16', name: 'YuE2 - BF16 GGUF', detail: '원본 본체를 GGUF로 변환한 BF16', size: '7.26 GB', engine: 'audio.cpp', file: 'yue2-3b-bf16.gguf', badge: '고용량 GPU' },
+  { id: 'yue2-int8-convrot', name: 'YuE2 - INT8 ConvRot', detail: 'ComfyUI 어댑터 필요', size: '3.96 GB', engine: 'ComfyUI', file: 'yue2_3b_int8_convrot.safetensors', repo: 'comfy-org/YuE2', badge: '연결 대기', selectable: false },
+  { id: 'yue2-original', name: 'YuE2 - 원본', detail: '공식 Python safetensors 본체', size: '7.26 GB', engine: 'Python', file: 'model.safetensors', badge: '24 GB 환경 권장' },
 ];
 export const providers: { id: Provider; label: string; mark: string; description: string }[] = [
   { id: 'none', label: '사용 안 함', mark: '—', description: '직접 가사 작성' },

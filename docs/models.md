@@ -21,6 +21,12 @@ Python 표준 라이브러리만 사용합니다. 중단 후 같은 명령을 �
 
 GGUF 폴더에는 BF16, Q8_0, Q4_0 본체와 F16/F32 VAE 및 `sidecars/`가 있습니다. RTX 5070 12 GB에서는 Q4_0 + F16 VAE를 우선 검증합니다. 공식 PyTorch 경로는 상위 사양 PC 및 추후 배포를 위해 함께 보관하며, 다운로드 완료가 추론 검증 완료를 의미하지는 않습니다. wheel과 모델 Python 코드는 다운로드만 하며 자동 설치·실행하지 않습니다.
 
+## 직접 추가한 safetensors 파일
+
+사용자가 직접 받은 `yue2_3b_int8_convrot.safetensors`는 `models/comfy-org/YuE2/checkpoints/yue2_3b_int8_convrot.safetensors` 위치에 두었습니다. 이 파일은 헤더 기준 `convrot_int8` 양자화와 `model.diffusion_model.*` 텐서 구조를 가진 ComfyUI 계열 형식입니다. 현재 SongYUE2의 직접 생성 경로(audio.cpp GGUF, 공식 Python YuE2)는 이 형식을 바로 실행하지 않으므로, 앱의 모델 선택 메뉴에는 표시하되 생성에는 ComfyUI 어댑터가 추가로 필요합니다.
+
+사용자가 직접 받은 `sheetsage2_bf16.safetensors`는 `models/m-a-p/SheetSage2/model.safetensors` 위치에 두었습니다. SheetSage2는 `model.safetensors` 하나만으로는 실행되지 않습니다. Hugging Face `m-a-p/SheetSage2` 스냅샷의 `config.json`, `modeling_sheetsage2.py`, `pipeline_sheetsage2.py`, `notation_sheetsage2.py`, `requirements.txt` 등 코드와 설정 파일이 같은 폴더에 함께 있어야 `AutoModel.from_pretrained(..., trust_remote_code=True)`로 로드됩니다. `config.json`까지 갖춰지면 앱의 멜로디 추출 경로가 이 로컬 폴더를 오프라인 모델로 사용합니다.
+
 공식 가중치 라이선스는 **CC BY-NC 4.0**입니다. 각 원본 저장소의 `LICENSE`, `THIRD_PARTY_NOTICES.md`, `licenses/`를 보존했습니다. GGUF 저장소는 README에 라이선스를 표시하지만 별도 LICENSE 파일은 제공하지 않습니다. 배포 시 모델 용량 및 라이선스를 고려해 앱 설치 파일과 모델 다운로드를 분리할 수 있습니다.
 
 상태 JSON은 전체 및 저장소별 총 바이트·완료 바이트와 파일별 경로·크기·해시·상태를 포함합니다. 프론트엔드는 실제 파일 상태와 존재 여부를 바탕으로 다운로드 완료를 표시해야 합니다.

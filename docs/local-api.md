@@ -14,7 +14,7 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 | `OPENAI_API_KEY` / `OPENAI_MODEL` | OpenAI API 키와 모델 이름 |
 | `GEMINI_API_KEY` / `GEMINI_MODEL` | Google AI API 키와 모델 이름 |
 | `ENGINE_PATH` | 음악 생성 엔진(audio.cpp) 실행 파일 경로 (선택, 설정 화면에서도 지정 가능) |
-| `PYTHON_ENGINE_PATH` | 공식 Python YuE2("원본" 모델) 실행 파일 경로 — 설정 필드만 있고 아직 `/api/generate`에 연결되지 않음(24GB급 VRAM 요구, 400으로 계속 거부됨) |
+| `PYTHON_ENGINE_PATH` | 공식 Python YuE2("원본" 모델) 실행 파일 경로. 원본 모델 생성, ABC 계획, 악보 검사에 사용 |
 | `SETTING_PATH` / `MUSIC_PATH` / `EXAMPLES_PATH` | 라이브러리 폴더(SongYUE2 루트 기준 **상대 경로**). 비우면 각각 `library/setting`/`library/music`/`library/examples` 사용. 설정 화면에도 placeholder로 기본값이 보임 |
 | `SAVE_FORMAT` | 완성곡을 `MUSIC_PATH`에 저장할 파일 형식: wav/flac/mp3/mp4 (기본 wav) |
 
@@ -34,7 +34,7 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 
 - 설정: `data/settings.json`에는 `provider`/`enginePath`/`pythonEnginePath`/`settingPath`/`musicPath`/`examplesPath`/`saveFormat`만 저장합니다. API 키/연결 주소/모델 이름은 저장하지 않고 매 요청마다 `.env`(`process.env`)에서 읽습니다.
 - 로그 폴더: `runs/<projectId>/generate.log`(엔진 stdout/stderr, 최대 512KB)는 라이브러리 폴더와 별개로 항상 프로젝트 루트의 `runs/`에 고정됩니다. 생성 중 임시로 쓰이는 wav도 여기서 만들어졌다가 성공 시 `library/music/`으로 옮겨집니다.
-- 모델 다운로드 상태: 루트 `model-download-status.json`을 읽어 반환합니다. 실제 설치 여부와 실행 엔진 연결 여부는 별개입니다.
+- 모델 다운로드 상태: 루트 `model-download-status.json`을 읽고, 사용자가 직접 둔 로컬 safetensors(`comfy-org/YuE2`, `m-a-p/SheetSage2`)도 함께 표시합니다. 실제 설치 여부와 실행 엔진 연결 여부는 별개입니다.
 - 오류: `{ "error": "한국어 안내" }`, HTTP 400/403/404/409/413/415/500/502.
 - API 키는 응답에 평문으로 포함되지 않습니다. `GET`/`PUT /api/settings`는 키가 설정되어 있으면 `apiKey: "***"`, 없으면 `null`을 반환합니다(`hasApiKey`로도 확인 가능). 실제 키 값은 파일, 브라우저 응답, 로그 어디에도 저장·노출되지 않습니다. `apiKeyStorage: "env"`로 안내합니다.
 - 클라우드 제공업체 주소는 공식 API로 고정합니다. Ollama 주소는 localhost만 허용합니다. LLM 요청은 사용자가 연결 확인이나 가사/스타일 보조 버튼을 누른 경우에만 실행합니다. 연결 확인도 실제 짧은 API 요청입니다.
@@ -57,7 +57,7 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 | GET `/api/llm/models` | Ollama 설치 모델 `{models:[{name,size}]}` |
 | POST `/api/llm/test` | `{}` → `{ok:true,text,provider,model}` |
 | POST `/api/llm/assist` | `{task:'lyrics'|'style',prompt,lyrics,style}` → `{text,provider,model}` |
-| POST `/api/generate` | `{projectId}` → 실제 audio.cpp(yue2) 엔진을 실행해 음악을 생성하고, 성공하면 `library/setting`→`library/music`으로 파일을 옮깁니다. 200과 갱신된 프로젝트(`status:'completed'`, `audioPath`, `durationMs`, `rtf`, `saveError?`) 반환. 모델·가사·스타일·시드·스텝·cot은 저장된 프로젝트 값을 그대로 사용합니다. 400: 엔진 경로 미설정/모델 미지원(원본 Python 모델 등)/모델 파일 누락/가사·스타일 없음. 409: 이미 다른 곡을 생성 중. 502: 엔진 실행 실패, 제한 시간(10분) 초과, 종료 코드 비정상 — `runs/<id>/generate.log`에서 로그 확인 가능 |
+| POST `/api/generate` | `{projectId}` → 선택 모델에 따라 audio.cpp GGUF 또는 공식 Python YuE2 엔진을 실행해 음악을 생성하고, 성공하면 `library/music`에 새 완성곡으로 저장합니다. 200과 갱신된 프로젝트(`status:'completed'`, `audioPath`, `durationMs`, `rtf`, `saveError?`) 반환. 모델·가사·스타일·시드·스텝·cot은 저장된 프로젝트 값을 그대로 사용합니다. 400: 엔진 경로 미설정/모델 미지원/모델 파일 누락/가사·스타일 없음. 409: 이미 다른 곡을 생성 중. 502: 엔진 실행 실패, 제한 시간(10분) 초과, 종료 코드 비정상 — `runs/<id>/generate.log`에서 로그 확인 가능 |
 | GET `/api/projects/:id/audio` | 완성된 오디오를 실제 확장자에 맞는 Content-Type(wav/flac/mp3/mp4)으로 스트리밍. 아직 생성되지 않았거나 파일이 없으면 404 |
 
 ## 음악 생성 엔진 (audio.cpp)
@@ -69,9 +69,14 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 | `yue2-q4` | `yue2-3b-q4_0.gguf` | `yue2-vae-f16.gguf` |
 | `yue2-q8` | `yue2-3b-q8_0.gguf` | `yue2-vae-f16.gguf` |
 | `yue2-bf16` | `yue2-3b-bf16.gguf` | `yue2-vae-f32.gguf` |
-| `yue2-original` | 지원하지 않음(공식 Python 파이프라인, audio.cpp 아님) — `/api/generate`가 400으로 거부 |
+| `yue2-original` | audio.cpp 미사용. 공식 Python 파이프라인으로 실행 |
+| `yue2-int8-convrot` | ComfyUI 형식 safetensors. 현재 직접 생성 미지원, ComfyUI 어댑터 필요 |
 
 audio.cpp 자체의 설치/빌드 방법은 [audiocpp-setup.md](audiocpp-setup.md)를 참고하세요. 한 번에 한 곡만 생성합니다(서버 내부 플래그로 동시 실행 차단, GPU 하나를 공유하기 때문). `wav`가 아닌 형식을 선택했는데 `ffmpeg`가 PATH에 없으면 변환이 실패해도 생성 자체는 성공 처리하고 `wav`로 대신 저장하며, `saveError`에 이유를 남깁니다.
+
+## SheetSage2
+
+`POST /api/cover-transcribe`는 설정의 `sheetSagePythonPath`로 별도 Python 환경을 실행합니다. `models/m-a-p/SheetSage2/config.json`과 `models/m-a-p/SheetSage2/model.safetensors`가 있으면 `--model models/m-a-p/SheetSage2 --offline`으로 로컬 모델을 사용합니다. 가중치 파일만 있으면 준비가 끝난 것이 아니며, Hugging Face 스냅샷의 Python 코드와 설정 파일이 같은 폴더에 있어야 합니다.
 
 ## 검증
 

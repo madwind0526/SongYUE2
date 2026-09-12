@@ -95,3 +95,18 @@ const args = [
 다이얼로그 레이아웃이 `.studio-dialog{display:flex;flex-direction:column}` + `.dialog-scroll{flex:1;overflow-y:auto}` 구조일 때, 내용이 길어지면 `.dialog-scroll` 내부 맨 아래에 있는 자식(재생 버튼 등)은 스크롤해야만 보인다. `position:sticky`로 억지로 고정하려 하면 스크롤 컨테이너/오버플로 조상 관계가 꼬이기 쉽다.
 
 더 간단한 해결책: 해당 UI를 소유한 컴포넌트(`AbcPreview`)가 자기 상태/로직은 그대로 유지한 채, 렌더링 위치만 `ReactDOM.createPortal(controlsJsx, slotElement)`로 부모가 지정한 DOM 노드로 옮기게 한다. 부모는 `.dialog-scroll` **바깥**(형제 위치)에 `<div ref={setSlotState}/>`를 두고 그 state를 컴포넌트에 `controlsSlot` prop으로 넘기면 된다. 컴포넌트는 `controlsSlot`이 없으면 기존처럼 내부에 인라인 렌더링(다른 사용처와 호환 유지), 있으면 포탈로 이동 — 하나의 컴포넌트가 "인라인 컨텍스트"와 "다이얼로그 상단 고정 컨텍스트" 둘 다를 지원할 수 있다. `app/app/studio.tsx`의 `AbcPreview`(`controlsSlot` prop) 참고.
+
+## Web Audio 이펙트 체인을 실시간 미리듣기와 최종 저장 렌더링 둘 다에 재사용하기
+
+**사용 시점:** EQ/리버브/에코 등 브라우저 내 오디오 후처리를 "재생하면서 바로 들리게"(라이브) + "저장 시 전체 길이를 오프라인으로 렌더링"(비라이브) 둘 다 지원해야 할 때, DSP 그래프 구성 코드를 두 번 짜지 않으려면.
+
+```ts
+function buildProcessingGraph(ctx: BaseAudioContext, source: AudioNode, params: PostProcessParams): AudioNode {
+  // BiquadFilterNode(EQ×N, peaking/lowshelf/highshelf), DynamicsCompressorNode,
+  // ChannelSplitter/Delay/ChannelMerger(스테레오 폭 넓히기), ConvolverNode(리버브), Delay+피드백 Gain(에코) 등을
+  // ctx(AudioContext 또는 OfflineAudioContext 둘 다 받는 BaseAudioContext 타입)로 구성해 최종 출력 노드 반환
+}
+// 라이브 미리듣기: buildProcessingGraph(audioContext, sourceNode, params).connect(audioContext.destination)
+// 저장용 전체 렌더링: const offline = new OfflineAudioContext(...); buildProcessingGraph(offline, offlineSource, params).connect(offline.destination); await offline.startRendering();
+```
+핵심은 함수 시그니처를 구체 타입(`AudioContext`)이 아니라 공통 상위 타입(`BaseAudioContext`)으로 받는 것 — `AudioContext`와 `OfflineAudioContext`는 노드 생성 API(`createBiquadFilter` 등)가 동일하므로 그래프 구성 로직이 완전히 재사용된다. 파라미터가 바뀔 때마다(디바운스 후) `OfflineAudioContext`로 전체를 다시 렌더링해 파형/저장용 버퍼를 갱신하고, 재생 버튼은 같은 함수로 만든 라이브 그래프를 쓰면 "화면에 보이는 처리 결과 파형"과 "실제로 저장되는 파일"이 항상 일치한다. 출처: `app/app/studio.tsx`의 `PostProcessDialog`/`buildProcessingGraph`, 실측 검증(EQ 밴드+FxSound 노브 드래그 → 처리 파형 디바운스 갱신 → 저장 → ffmpeg 재인코딩된 실제 파일 생성까지 chrome-devtools로 end-to-end 확인, 2026-09-12).
