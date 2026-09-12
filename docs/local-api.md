@@ -145,6 +145,8 @@ YuE2는 범용 악보 리더가 아니라, `V: Vocal`/`V: Ins` 두 성부를 각
 
 **SheetSage2 전용 Python 가상환경 준비**: `test/YuE2-source/requirements-sheetsage2.txt`에 고정된 버전(`torch==2.8.0`+cu128, `transformers==4.45.2` 등)이 필요한데, YuE2 본체 실행에 쓰는 기존 `.venv`는 더 최신 버전(`torch 2.10`, `transformers 4.57`)이 설치돼 있어 같은 venv를 공유하면 버전 충돌이 날 수 있습니다. 별도 venv(`.venv-sheetsage2`)를 만들어 `pip install -r requirements-sheetsage2.txt`로 설치한 뒤, 설정 화면에서 `sheetSagePythonPath`를 그 venv의 `python.exe`로 지정해야 합니다. `transcribe.py`(전사 스크립트)는 `pythonScriptPath`와 같은 폴더(`test/YuE2-source/skills/yue2-music/scripts/`)에 있습니다.
 
+**완성곡 메뉴의 "커버" (2026-09-13)**: 프론트엔드가 이 엔드포인트를 두 번째 방식으로도 부릅니다 — 파일 업로드가 아니라 `GET /api/projects/:id/audio`로 완성곡 자신의 오디오를 받아 `Blob`→`FileReader`로 data URL로 바꾼 뒤 그대로 `POST /api/cover-transcribe`에 넘깁니다(새 백엔드 엔드포인트 없이 기존 것을 재사용). 이 UI는 결과 ABC를 소비할 모델이 원본(Python)인지만 확인하고, 그 곡을 원래 어떤 엔진으로 만들었는지는 확인하지 않습니다 — 전사 자체는 오디오 출처와 무관하기 때문입니다.
+
 ## 검증
 
 `node --test backend/server.test.mjs`

@@ -2,6 +2,24 @@
 
 `git log`를 기준으로 정리한 커밋 단위 변경 이력입니다. 최신 항목이 위에 옵니다.
 
+## `87c4348` — Add a "커버" (cover) action to each completed song's menu (2026-09-13)
+
+완성곡 메뉴의 "리믹스" 바로 아래 "커버" 항목 신설 — 그 곡의 오디오를 SheetSage2로 전사해 멜로디/코드 ABC를 뽑아 작곡 화면에 채워 넣는다. 활성화 조건은 그 곡을 만든 모델이 아니라 **현재 작곡 화면에 선택된 모델**이 원본인지 여부(사용자 지적으로 초안의 "그 곡의 모델" 기준 구현을 수정) — SheetSage2 전사는 오디오 출처 엔진과 무관하지만, 결과 ABC를 실제로 쓰는 건 지금 선택된 모델이기 때문. 작곡 화면에 이미 가사/스타일이 있으면 유지할지 그 곡 설정으로 바꿀지 확인 대화상자를 띄우며, 어느 쪽이든 modelId는 건드리지 않는다. Suno류와 달리 실제 보컬 음색/톤은 가져오지 않음(YuE2 파이프라인에 참조 오디오 화자 임베딩 입력 자체가 없음) — `progress.md`에 한계로 기록.
+
+## `a1d2439` — Add a linear waveform visualizer to the main player bar (2026-09-13)
+
+후처리 다이얼로그의 원형 비주얼라이저를 하단 전역 재생바(왼쪽 트랜스포트~오른쪽 볼륨 사이)에 일직선으로 펼쳐서 추가 — 같은 설정값과 같은 점별 계산식을 쓰고, 0~360도 원형 좌표를 x=0..width 직선 좌표로 바꾸는 매핑만 다르다. 전역 `<audio>` 엘리먼트에는 원래 Web Audio 그래프가 없어 `AnalyserNode`를 새로 하나 붙였고, `createMediaElementSource`가 엘리먼트당 평생 한 번만 가능하다는 제약 때문에 첫 재생 시 한 번만 생성해 세션 내내 재사용.
+
+## `c778253` — Extend the now-playing card highlight to the playlist detail view (2026-09-13)
+
+## `7ca7006` — Highlight the card of the song currently playing in 내 작업/라이브러리 (2026-09-13)
+
+재생 중인 곡의 카드에 초록 테두리+글로우 강조 추가(후처리 다이얼로그의 재생 중 파형 강조와 같은 스타일). `내 작업`/`홈`/`프로젝트`/`내 라이브러리`/`좋아요`는 공용 `projectList()`를 통해 한 번에 해결되었고, 별도 렌더링 코드를 쓰는 재생목록 상세 화면만 뒤이어 따로 추가.
+
+## `f5332f6` — Document the GGUF+ABC restriction and backfill revision.md history (2026-09-13)
+
+`docs/local-api.md`/`README.md`에 ABC 기반 생성(심볼릭 작곡/커버)이 원본 모델 전용이라는 제약을 문서화. 실제로는 여러 커밋이 있었지만 갱신되지 않았던 `revision.md`의 이력을 `841641d` 이후 전부 다시 채움.
+
 ## `4fed156` — Disable ABC-driven generation (symbolic plan/cover) on GGUF models (2026-09-13)
 
 `runAudioCpp()`는 애초에 `--abc-file` 인자를 지원한 적이 없어, GGUF 모델을 선택한 채 ABC 악보(심볼릭 작곡이든 SheetSage2 "오디오에서 추출" 커버 결과든)를 채우고 생성하면 조용히 무시되고 가사/스타일만으로 생성되는 함정이 있었음. "심볼릭 작곡"/"오디오에서 추출" 버튼을 GGUF 선택 시 비활성화하고 안내 문구를 추가, `/api/generate`에도 GGUF+비어있지 않은 ABC 조합을 명확한 오류로 거부하는 보루를 추가.

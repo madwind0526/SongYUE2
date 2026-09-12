@@ -2,10 +2,10 @@
 
 ## Current Wave
 
-- **Wave:** 13
+- **Wave:** 14
 - **Status:** Done
 - **Cache Status:** CLEAN
-- **Last Checkpoint:** 2026-09-12 SheetSage2 제로샷 커버를 실제 오디오로 종단 검증 완료 — 별도 venv(Python 3.11+torch 2.8.0+cu128) 구축 후 `POST /api/cover-transcribe` 실기 테스트에서 버그 2개 발견/수정: (1) `config.json`의 `weights_format`이 `adapter`로 잘못 설정(실제 파일은 merged 체크포인트) → `merged`로 수정, (2) `backend/server.mjs`가 출력 폴더를 미리 만들어 `transcribe.py`의 `fresh_directory()` 안전장치와 충돌 → 부모 폴더만 미리 생성하도록 수정. 결과 ABC가 구조 검증 통과(128 음표, 37마디). 또한 원형 비주얼라이저를 색조/라인개수/굵기/변동폭(비대칭 양방향)/잔상/나선/모드(회전·시간축)까지 전부 설정화, 캔버스 왜곡·스파이럴·wrap-around 라인 등 여러 시각 버그 수정, 후처리 다이얼로그에 재생 위치 슬라이더 추가. GGUF 모델에서 "악기만" 토글을 3개 경로(직접 토글/프로젝트 로드/localStorage 복원) 모두에서 완전히 비활성화. 문서(`docs/local-api.md`, `docs/models.md`, `progress.md`) 및 memory-bank 갱신.
+- **Last Checkpoint:** 2026-09-13 완성곡 "..." 메뉴에 "커버" 신설(리믹스 아래) — SheetSage2로 그 곡 자신의 오디오를 전사해 ABC를 작곡 화면에 채움. 활성화 조건을 처음엔 "그 곡을 만든 모델"로 잘못 구현했다가 사용자 지적으로 "현재 선택된 모델"이 원본인지로 정정(전사는 오디오 출처와 무관, ABC를 실제로 쓰는 건 지금 선택된 모델이므로). 가사/스타일이 이미 있으면 유지/교체 확인 대화상자, 실제 보컬 음색은 못 가져오는 한계를 문서화. 그 외: ABC 기반 생성을 GGUF에서 전면 차단(프론트+백엔드 가드), 재생 중인 곡 카드에 초록 테두리 강조(내 작업/재생목록 등 전체), 전역 재생바에 원형 비주얼라이저를 설정 그대로 재사용한 선형 파형 추가. 문서(`README.md`, `docs/local-api.md`, `progress.md`, `revision.md`) 및 memory-bank 갱신.
 
 ## Wave History
 
@@ -24,6 +24,7 @@
 | 11 | 후처리/EQ UI 반복 개선(EQ·전체 설정 프리셋을 이름 붙여 `Setting/` 폴더에 저장하는 백엔드 엔드포인트 3개 추가, 토글+초기화 버튼 병합, 재생 중 박스 강조, AnalyserNode 원형 라이브 비주얼라이저), progress.md/revision.md 신규 + README.md 갱신 | Done |
 | 12 | "악기만" 무보컬 메커니즘 재검증(화음 기호를 지우지 않는 `abc_tools.py mute-voice` 신설, `strip-chords` 오용 수정), `docs/local-api.md` 전면 재작성 + `Setting/` 폴더 문서화, `docs/models.md` SheetSage2 상태 갱신 | Done |
 | 13 | SheetSage2 제로샷 커버 종단 검증 성공(venv 구축, config.json weights_format 버그 + 백엔드 디렉터리 충돌 버그 수정), 원형 비주얼라이저 설정 전면 확장, 후처리 재생 위치 슬라이더, GGUF "악기만" 완전 비활성화(3개 경로) | Done |
+| 14 | ABC 기반 생성(심볼릭 작곡/커버) GGUF 전면 차단, 재생 중 곡 카드 강조(전체 화면)+전역 재생바 선형 파형 비주얼라이저, 완성곡 메뉴에 "커버" 신설(활성화 조건을 대상곡 모델→현재 선택 모델로 사용자 지적 후 정정) | Done |
 
 ## Session Notes
 
