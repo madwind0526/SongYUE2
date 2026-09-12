@@ -687,6 +687,17 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
     setPositionSeconds(next);
     setActiveTrack(track);
   }
+  function seekTo(nextSeconds: number) {
+    const track = activeTrack || 'original';
+    const buffer = bufferFor(track);
+    if (!buffer) return;
+    const next = Math.max(0, Math.min(nextSeconds, Math.max(0, buffer.duration - 0.02)));
+    if (isPlaying) { playTrack(track, next); return; }
+    playOffsetRef.current = next;
+    setPositionSeconds(next);
+    setActiveTrack(track);
+  }
+  function formatSeekTime(seconds: number) { if (!Number.isFinite(seconds) || seconds < 0) return '0:00'; const mins = Math.floor(seconds / 60); const secs = Math.floor(seconds % 60); return `${mins}:${String(secs).padStart(2, '0')}`; }
   function cycleSpeed() {
     const next = playbackRate >= 2 ? 1 : 2;
     const pos = currentPosition();
@@ -841,6 +852,11 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
           <button type="button" className="pp-waveform-label" title="처리" aria-label={activeTrack === 'processed' && isPlaying ? '처리 결과 일시정지' : '처리 결과 선택 후 재생'} disabled={!processedPeaks.length || rendering} onClick={() => handleTrackButtonClick('processed')}>{rendering ? <LoaderCircle className="spin" size={13}/> : (activeTrack === 'processed' && isPlaying ? <Pause size={15}/> : <SlidersHorizontal size={15}/>)}</button>
           <Waveform peaks={processedPeaks} playedFraction={activeTrack === 'processed' ? playedFraction : undefined} variant="processed"/>
         </div>
+        <div className="pp-seek-row">
+          <span className="pp-seek-time">{formatSeekTime(positionSeconds)}</span>
+          <input className="pp-seek-bar" type="range" aria-label="재생 위치" min={0} max={activeBuffer?.duration || 0} step={0.01} value={Math.min(positionSeconds, activeBuffer?.duration || 0)} onChange={event => seekTo(Number(event.target.value))} disabled={!activeBuffer}/>
+          <span className="pp-seek-time">{formatSeekTime(activeBuffer?.duration || 0)}</span>
+        </div>
         {errorText && <p className="field-hint warning">{errorText}</p>}
       </>}
       <div className="dialog-actions pp-dialog-actions">
@@ -849,7 +865,7 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
           <Button variant="ghost" size="icon" aria-label={isPlaying ? '일시정지' : '재생'} onClick={() => isPlaying ? pausePlayback() : playTrack(activeTrack || 'original')} disabled={loading}>{isPlaying ? <Pause size={15}/> : <Play size={15}/>}</Button>
           <Button variant="ghost" size="icon" aria-label="5초 앞으로" onClick={() => seekBy(5)} disabled={loading}><FastForward size={15}/></Button>
           <button type="button" className="speed-btn" aria-label="재생 속도" onClick={cycleSpeed} disabled={loading}>{playbackRate}x</button>
-          <Volume2 size={14}/>
+          <Volume2 size={14} className="pp-volume-icon"/>
           <input className="abc-player-volume" type="range" aria-label="미리듣기 볼륨" min={0} max={2} step={0.1} value={previewVolume} onChange={event => applyPreviewVolume(Number(event.target.value))} disabled={loading}/>
         </div>
         <div className="pp-dialog-actions-right">
