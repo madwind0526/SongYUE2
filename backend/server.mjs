@@ -8,6 +8,9 @@ import os from 'node:os';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const providers = new Set(['none', 'ollama', 'claude', 'chatgpt', 'gemini']);
+const DEFAULT_CLAUDE_ENDPOINT = 'https://api.anthropic.com/v1/messages';
+const DEFAULT_OPENAI_ENDPOINT = 'https://api.openai.com/v1/responses';
+const DEFAULT_GEMINI_ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta';
 const AUDIOCPP_MODELS = {
   'yue2-q4': { model: 'yue2-3b-q4_0.gguf', vae: 'yue2-vae-f16.gguf' },
   'yue2-q8': { model: 'yue2-3b-q8_0.gguf', vae: 'yue2-vae-f16.gguf' },
@@ -22,19 +25,28 @@ const DEFAULT_EXAMPLES = [
 ];
 const GENERATE_TIMEOUT_MS = 10 * 60 * 1000;
 const SAVE_FORMATS = new Set(['wav', 'flac', 'mp3', 'mp4']);
-const AUDIO_MIME_TYPES = { '.wav': 'audio/wav', '.flac': 'audio/flac', '.mp3': 'audio/mpeg', '.mp4': 'audio/mp4' };
+const AUDIO_MIME_TYPES = { '.wav': 'audio/wav', '.flac': 'audio/flac', '.mp3': 'audio/mpeg', '.mp4': 'video/mp4' };
 const COVER_MIME = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
+const AUDIO_MIME = { 'audio/mpeg': 'mp3', 'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/wave': 'wav', 'audio/flac': 'flac', 'audio/x-flac': 'flac', 'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/ogg': 'ogg' };
 const FFMPEG_ARGS = {
   wav: (input, output) => ['-y', '-i', input, '-c:a', 'pcm_s16le', output],
   flac: (input, output) => ['-y', '-i', input, '-c:a', 'flac', output],
   mp3: (input, output) => ['-y', '-i', input, '-c:a', 'libmp3lame', '-b:a', '320k', output],
-  mp4: (input, output) => ['-y', '-i', input, '-c:a', 'aac', '-b:a', '256k', output],
+  mp4: (input, output, coverFile) => [
+    '-y',
+    ...(coverFile ? ['-loop', '1', '-i', coverFile] : ['-f', 'lavfi', '-i', 'color=c=1b2a1d:s=1280x720:r=1']),
+    '-i', input,
+    '-c:v', 'libx264', '-tune', 'stillimage', '-pix_fmt', 'yuv420p', '-vf', 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=0x1b2a1d',
+    '-c:a', 'aac', '-b:a', '256k', '-shortest', output,
+  ],
 };
 const VIEW_MODES = new Set(['list', 'card']);
 const DEFAULT_ENGINE_PATH = path.join('engine', 'audio.cpp', 'build', 'windows-cuda-release', 'bin', 'audiocpp_cli.exe');
 const VOCAL_GENDERS = new Set(['', 'male', 'female', 'duet']);
+const DEFAULT_STYLE_PRESETS = 'Acoustic\nCity Pop\nBallad\nLo-fi\nJazz';
 const VOCAL_HINTS = { male: ', male vocal', female: ', female vocal', duet: ', duet: male and female vocals' };
 const vocalHint = (gender) => VOCAL_HINTS[gender] || '';
+const styleHint = (project) => project.instrumental ? ', instrumental, no vocals' : vocalHint(project.vocalGender);
 const exists = async (target) => { try { await access(target); return true; } catch { return false; } };
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const text = (value, max = 20000) => typeof value === 'string' ? value.slice(0, max) : '';
@@ -44,7 +56,6 @@ function safeFilename(title) {
   if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(cleaned)) cleaned = `_${cleaned}`;
   return cleaned.slice(0, 120);
 }
-const coverSuffix = (coverPath) => `.cover.${coverPath.split('.').pop()}`;
 async function uniqueJsonPath(dir, title, excludeFile) {
   const base = safeFilename(title);
   let candidate = path.join(dir, `${base}.json`);
@@ -86,9 +97,9 @@ function ollamaEndpoint(value) {
 }
 function providerFromEnv(id) {
   if (id === 'ollama') return { endpoint: ollamaEndpoint(process.env.OLLAMA_ENDPOINT), model: (process.env.OLLAMA_MODEL || '').trim(), apiKey: '' };
-  if (id === 'claude') return { endpoint: '', model: (process.env.CLAUDE_MODEL || '').trim(), apiKey: (process.env.CLAUDE_API_KEY || '').trim() };
-  if (id === 'chatgpt') return { endpoint: '', model: (process.env.OPENAI_MODEL || '').trim(), apiKey: (process.env.OPENAI_API_KEY || '').trim() };
-  if (id === 'gemini') return { endpoint: '', model: (process.env.GEMINI_MODEL || '').trim(), apiKey: (process.env.GEMINI_API_KEY || '').trim() };
+  if (id === 'claude') return { endpoint: (process.env.CLAUDE_ENDPOINT || '').trim() || DEFAULT_CLAUDE_ENDPOINT, model: (process.env.CLAUDE_MODEL || '').trim(), apiKey: (process.env.CLAUDE_API_KEY || '').trim() };
+  if (id === 'chatgpt') return { endpoint: (process.env.OPENAI_ENDPOINT || '').trim() || DEFAULT_OPENAI_ENDPOINT, model: (process.env.OPENAI_MODEL || '').trim(), apiKey: (process.env.OPENAI_API_KEY || '').trim() };
+  if (id === 'gemini') return { endpoint: (process.env.GEMINI_ENDPOINT || '').trim() || DEFAULT_GEMINI_ENDPOINT, model: (process.env.GEMINI_MODEL || '').trim(), apiKey: (process.env.GEMINI_API_KEY || '').trim() };
   return { endpoint: '', model: '', apiKey: '' };
 }
 
@@ -105,9 +116,14 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     enginePath: text(stored.enginePath, 2048) || text(process.env.ENGINE_PATH, 2048),
     pythonEnginePath: text(stored.pythonEnginePath, 2048) || text(process.env.PYTHON_ENGINE_PATH, 2048),
     pythonScriptPath: text(stored.pythonScriptPath, 2048) || text(process.env.PYTHON_SCRIPT_PATH, 2048),
+    sheetSagePythonPath: text(stored.sheetSagePythonPath, 2048) || text(process.env.SHEETSAGE_PYTHON_PATH, 2048),
     settingPath: text(stored.settingPath, 2048) || text(process.env.SETTING_PATH, 2048),
     musicPath: text(stored.musicPath, 2048) || text(process.env.MUSIC_PATH, 2048),
     examplesPath: text(stored.examplesPath, 2048) || text(process.env.EXAMPLES_PATH, 2048),
+    coversPath: text(stored.coversPath, 2048) || text(process.env.COVERS_PATH, 2048),
+    abcNotesPath: text(stored.abcNotesPath, 2048) || text(process.env.ABC_NOTES_PATH, 2048),
+    stylePresets: typeof stored.stylePresets === 'string' ? text(stored.stylePresets, 4000) : DEFAULT_STYLE_PRESETS,
+    pythonMemoryBudgetGib: Number.isFinite(stored.pythonMemoryBudgetGib) ? stored.pythonMemoryBudgetGib : (Number(process.env.PYTHON_MEMORY_BUDGET_GIB) || 11),
     saveFormat: SAVE_FORMATS.has(stored.saveFormat) ? stored.saveFormat : (SAVE_FORMATS.has(process.env.SAVE_FORMAT) ? process.env.SAVE_FORMAT : 'wav'),
     viewMode: VIEW_MODES.has(stored.viewMode) ? stored.viewMode : 'list',
     outputDirectory,
@@ -116,12 +132,16 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   const settingDir = () => resolveLibraryDir(settings.settingPath, 'library/setting');
   const musicDir = () => resolveLibraryDir(settings.musicPath, 'library/music');
   const examplesDir = () => resolveLibraryDir(settings.examplesPath, 'library/examples');
+  const coversDir = () => resolveLibraryDir(settings.coversPath, 'library/cover');
+  const abcNotesDir = () => resolveLibraryDir(settings.abcNotesPath, 'library/abc-note');
   const resolveConfigPath = (value, defaultRelative) => path.resolve(root, (value || '').trim() || defaultRelative);
   const resolveOptionalConfigPath = (value) => { const trimmed = (value || '').trim(); return trimmed ? path.resolve(root, trimmed) : ''; };
   const playlistsDirPath = path.join(root, 'library', 'playlists');
   await mkdir(settingDir(), { recursive: true });
   await mkdir(musicDir(), { recursive: true });
   await mkdir(examplesDir(), { recursive: true });
+  await mkdir(coversDir(), { recursive: true });
+  await mkdir(abcNotesDir(), { recursive: true });
   await mkdir(playlistsDirPath, { recursive: true });
   async function listPlaylists() {
     const files = (await readdir(playlistsDirPath).catch(() => [])).filter((name) => name.endsWith('.json'));
@@ -163,6 +183,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     return next;
   };
   let generating = false;
+  let generationStatus = null;
   const engineReady = async () => exists(resolveConfigPath(settings.enginePath, DEFAULT_ENGINE_PATH));
   async function finalizeToMusic(project, file, audioFile, extraFields = {}) {
     return serial(async () => {
@@ -177,11 +198,14 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         await rename(audioFile, musicAudio);
       } else {
         try {
+          const sourceCover = project.coverPath ? path.join(coversDir(), project.coverPath) : null;
+          const coverFile = sourceCover && await exists(sourceCover) ? sourceCover : null;
           await new Promise((resolve, reject) => {
-            const child = spawnImpl('ffmpeg', FFMPEG_ARGS[format](audioFile, musicAudio), { windowsHide: true });
+            const child = spawnImpl('ffmpeg', FFMPEG_ARGS[format](audioFile, musicAudio, coverFile), { windowsHide: true });
             child.once('error', reject);
             child.once('close', (code) => code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`)));
           });
+          if (!(await stat(musicAudio).catch(() => null))?.size) { await unlink(musicAudio).catch(() => {}); throw new Error('empty output'); }
           await unlink(audioFile).catch(() => {});
         } catch {
           saveError = `${format.toUpperCase()} 변환에 실패했습니다. ffmpeg가 설치되어 있고 PATH에 등록되어 있는지 확인해 주세요. 원본(${sourceExt.toUpperCase()}) 형식으로 대신 저장했습니다.`;
@@ -189,19 +213,20 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           await rename(audioFile, musicAudio);
         }
       }
-      let coverPath = project.coverPath || null;
-      if (coverPath) {
-        const oldCover = path.join(path.dirname(file), coverPath);
-        const newCover = musicJson.replace(/\.json$/, coverSuffix(coverPath));
-        if (await exists(oldCover)) { await copyFile(oldCover, newCover); coverPath = path.basename(newCover); }
-      }
       // A generated song is a new, independent entity: the source project/setting is left untouched
       // (not deleted or moved) so it can be reused to generate more songs. Deleting either one later
       // must not affect the other, so they get separate ids.
+      const newId = randomUUID();
+      let coverPath = project.coverPath || null;
+      if (coverPath) {
+        const oldCover = path.join(coversDir(), coverPath);
+        const newCover = path.join(coversDir(), `${newId}${path.extname(coverPath)}`);
+        if (await exists(oldCover)) { await copyFile(oldCover, newCover); coverPath = path.basename(newCover); } else coverPath = null;
+      }
       const current = {
         ...project,
         ...extraFields,
-        id: randomUUID(),
+        id: newId,
         sourceProjectId: project.id,
         status: 'completed',
         audioPath: path.basename(musicAudio),
@@ -232,7 +257,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const args = [
       '--task', 'gen', '--family', 'yue2', '--model', modelRoot, '--backend', 'cuda', '--threads', String(threads),
       '--session-option', `yue2.model_gguf=${preset.model}`, '--session-option', `yue2.vae_gguf=${preset.vae}`,
-      '--lyrics', project.lyrics, '--request-option', `style=${project.style}${vocalHint(project.vocalGender)}`, '--request-option', `cot=${project.cot}`,
+      '--lyrics', project.lyrics, '--request-option', `style=${project.style}${styleHint(project)}`, '--request-option', `cot=${project.cot}`,
       '--request-option', `num_inference_steps=${project.steps}`, '--seed', String(project.seed),
       '--out', audioFile, '--log', '--metrics',
     ];
@@ -272,25 +297,40 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     });
     return gpuInfoCache;
   }
-  async function runPythonYue2(project, file) {
+  function pythonEngineOrFail() {
     const python = resolveOptionalConfigPath(settings.pythonEnginePath);
     const script = resolveOptionalConfigPath(settings.pythonScriptPath);
-    if (!python || !(await exists(python))) throw fail(400, '설정에서 Python 실행 파일 경로를 확인해 주세요.');
-    if (!script || !(await exists(script))) throw fail(400, '설정에서 Python 스크립트(generate.py) 경로를 확인해 주세요.');
+    if (!python) throw fail(400, '설정에서 Python 실행 파일 경로를 확인해 주세요.');
+    if (!script) throw fail(400, '설정에서 Python 스크립트(run_yue2.py) 경로를 확인해 주세요.');
+    return { python, script };
+  }
+  function pythonRequestFields(project) {
+    return { style: `${project.style}${styleHint(project)}`, lyrics: project.lyrics, cot: project.cot, seed: project.seed };
+  }
+  async function runPythonAction(action, project, extraArgs, expectedMs) {
+    const { python, script } = pythonEngineOrFail();
+    if (!(await exists(python))) throw fail(400, '설정에서 Python 실행 파일 경로를 확인해 주세요.');
+    if (!(await exists(script))) throw fail(400, '설정에서 Python 스크립트(run_yue2.py) 경로를 확인해 주세요.');
     const modelDir = path.join(root, 'models', 'm-a-p', 'YuE2-3B');
     const vaeDir = path.join(root, 'models', 'm-a-p', 'YuE2-Vae');
     if (!(await exists(modelDir)) || !(await exists(vaeDir))) throw fail(400, '원본 모델 파일이 없습니다. 모델 관리 화면에서 다운로드 상태를 확인해 주세요.');
     if (!project.lyrics.trim() || !project.style.trim()) throw fail(400, '가사와 음악 스타일이 필요합니다.');
+    if (project.abc && project.abc.trim() && project.cot === 'off') throw fail(400, '악보를 사용하려면 작곡 계획을 "멜로디 계획" 또는 "멜로디와 코드 계획"으로 설정해 주세요.');
+    if (action === 'plan' && project.cot === 'off') throw fail(400, '"계획 없이 생성"에서는 심볼릭 작곡을 만들 수 없습니다. 작곡 계획을 바꿔 주세요.');
     const projectRuns = path.join(outputDirectory, project.id);
     await mkdir(projectRuns, { recursive: true });
-    const requestFile = path.join(projectRuns, 'py-request.json');
-    const outDir = path.join(projectRuns, 'py-out');
+    const requestFile = path.join(projectRuns, `py-request-${action}.json`);
+    const outDir = path.join(projectRuns, `py-${action}`);
     await rm(outDir, { recursive: true, force: true });
-    const logFile = path.join(projectRuns, 'generate.log');
-    const slug = safeFilename(project.title).toLowerCase().replace(/\s+/g, '_').slice(0, 60) || 'song';
-    const request = { id: slug, style: `${project.style}${vocalHint(project.vocalGender)}`, lyrics: project.lyrics, cot: project.cot, seed: project.seed };
+    const logFile = path.join(projectRuns, `${action}.log`);
+    // yue2's SongRequest.id must match [A-Za-z0-9][A-Za-z0-9_.-]{0,179} (ASCII only), so a
+    // Korean or otherwise non-ASCII title cannot be used directly; fall back to the project id.
+    const asciiSlug = project.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+    const slug = asciiSlug ? `${asciiSlug}-${project.id.slice(0, 8)}` : `song-${project.id.slice(0, 8)}`;
+    const request = { id: slug, ...pythonRequestFields(project) };
     await writeFile(requestFile, JSON.stringify(request), 'utf8');
-    const args = [script, '--request', requestFile, '--output', outDir, '--model', modelDir, '--vae', vaeDir];
+    const args = [script, action, '--request', requestFile, '--output', outDir, '--model', modelDir, '--vae', vaeDir, '--offline', '--memory-budget-gib', String(settings.pythonMemoryBudgetGib || 11), ...extraArgs];
+    generationStatus = { projectId: project.id, startedAt: Date.now(), expectedMs };
     const log = await new Promise((resolve, reject) => {
       const child = spawnImpl(python, args, { windowsHide: true, cwd: path.dirname(script) });
       const chunks = [];
@@ -303,17 +343,71 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       child.once('close', (code, signal) => { clearTimeout(timer); resolve({ text: Buffer.concat(chunks).toString('utf8'), code, signal }); });
     }).catch(() => { throw fail(502, 'Python 엔진을 실행할 수 없습니다. 설정의 Python/스크립트 경로를 확인해 주세요.'); });
     await writeFile(logFile, log.text);
-    if (log.signal) throw fail(502, '음악 생성이 제한 시간을 넘어 중단되었습니다.');
+    if (log.signal) throw fail(502, `${action === 'plan' ? '심볼릭 작곡' : '음악 생성'}이 제한 시간을 넘어 중단되었습니다.`);
+    return { outDir, log };
+  }
+  async function runPythonYue2(project, file) {
+    const extraArgs = [];
+    const projectRuns = path.join(outputDirectory, project.id);
+    if (project.abc && project.abc.trim()) {
+      const abcFile = path.join(projectRuns, 'input.abc');
+      await mkdir(projectRuns, { recursive: true });
+      await writeFile(abcFile, project.abc, 'utf8');
+      extraArgs.push('--abc-file', abcFile);
+    }
+    const { outDir, log } = await runPythonAction('generate', project, extraArgs, 90000);
     const audioFile = path.join(outDir, 'audio.flac');
-    if (!(await exists(audioFile))) throw fail(502, `음악 생성에 실패했습니다 (종료 코드 ${log.code}). 이 모델은 24GB급 VRAM을 요구해 VRAM 부족일 가능성이 높습니다. runs/${project.id}/generate.log에서 로그를 확인해 주세요.`);
+    const resultFile = path.join(outDir, 'result.json');
+    if (!(await exists(audioFile))) {
+      if (log.text.includes('melody input still contains chords')) throw fail(400, '이 악보에는 코드 기호가 있어 "멜로디 계획"에 쓸 수 없습니다. 작곡 계획을 "멜로디와 코드 계획"으로 바꾸거나, 코드 기호가 없는 악보를 사용해 주세요.');
+      if (log.text.includes('off cannot accept ABC')) throw fail(400, '"계획 없이 생성"에서는 악보를 사용할 수 없습니다. 작곡 계획을 바꿔 주세요.');
+      throw fail(502, `음악 생성에 실패했습니다 (종료 코드 ${log.code}). VRAM 부족이거나 요청이 너무 무거울 수 있습니다. runs/${project.id}/generate.log에서 로그를 확인해 주세요.`);
+    }
     let truncated = false;
-    const resultLine = [...log.text.split('\n')].reverse().find((line) => line.trim().startsWith('{'));
-    if (resultLine) { try { const parsed = JSON.parse(resultLine); truncated = Boolean(parsed.truncated && Object.values(parsed.truncated).some(Boolean)); } catch { /* ignore parse errors, keep truncated=false */ } }
-    return finalizeToMusic(project, file, audioFile, { truncated });
+    let durationMs = null;
+    const result = await readJson(resultFile, null);
+    if (result) {
+      truncated = Boolean(result.truncated && Object.values(result.truncated).some(Boolean));
+      if (Number.isFinite(result.audio_seconds)) durationMs = Math.round(result.audio_seconds * 1000);
+    }
+    return finalizeToMusic(project, file, audioFile, { truncated, durationMs });
+  }
+  function sheetSagePythonOrFail() {
+    const python = resolveOptionalConfigPath(settings.sheetSagePythonPath);
+    const script = resolveOptionalConfigPath(settings.pythonScriptPath);
+    if (!python) throw fail(400, '설정에서 SheetSage2 Python 실행 파일 경로를 확인해 주세요.');
+    if (!script) throw fail(400, '설정에서 Python 스크립트(run_yue2.py) 경로를 확인해 주세요.');
+    return { python, transcribeScript: path.join(path.dirname(script), 'transcribe.py') };
+  }
+  async function runTranscribe(audioFile, task) {
+    const { python, transcribeScript } = sheetSagePythonOrFail();
+    if (!(await exists(python))) throw fail(400, '설정에서 SheetSage2 Python 실행 파일 경로를 확인해 주세요. (별도 venv 설치가 필요합니다)');
+    if (!(await exists(transcribeScript))) throw fail(400, 'transcribe.py를 찾을 수 없습니다. SheetSage2 스킬 설치를 확인해 주세요.');
+    const outDir = path.join(outputDirectory, 'cover-transcribe', randomUUID());
+    await mkdir(outDir, { recursive: true });
+    const args = [transcribeScript, audioFile, '--output', outDir, '--task', task];
+    const log = await new Promise((resolve, reject) => {
+      const child = spawnImpl(python, args, { windowsHide: true, cwd: path.dirname(transcribeScript) });
+      const chunks = [];
+      let size = 0;
+      const collect = (data) => { size += data.length; if (size < 512 * 1024) chunks.push(data); };
+      child.stdout.on('data', collect);
+      child.stderr.on('data', collect);
+      const timer = setTimeout(() => child.kill(), GENERATE_TIMEOUT_MS);
+      child.once('error', (error) => { clearTimeout(timer); reject(error); });
+      child.once('close', (code, signal) => { clearTimeout(timer); resolve({ text: Buffer.concat(chunks).toString('utf8'), code, signal }); });
+    }).catch(() => { throw fail(502, 'SheetSage2 전사 스크립트를 실행할 수 없습니다. 설정의 Python 경로를 확인해 주세요.'); });
+    await writeFile(path.join(outDir, 'run.log'), log.text);
+    const abcFile = path.join(outDir, 'score.abc');
+    if (!(await exists(abcFile))) {
+      const failure = await readJson(path.join(outDir, 'failure.json'), null);
+      throw fail(502, failure ? `멜로디 추출에 실패했습니다: ${failure.error}` : `멜로디 추출에 실패했습니다 (종료 코드 ${log.code}). 로그: ${outDir}/run.log`);
+    }
+    return { abc: await readFile(abcFile, 'utf8'), outDir };
   }
   const publicSettings = () => {
     const env = providerFromEnv(settings.provider);
-    return { provider: settings.provider, endpoint: env.endpoint, llmModel: env.model, enginePath: settings.enginePath, pythonEnginePath: settings.pythonEnginePath, pythonScriptPath: settings.pythonScriptPath, settingPath: settings.settingPath, musicPath: settings.musicPath, examplesPath: settings.examplesPath, saveFormat: settings.saveFormat, viewMode: settings.viewMode, outputDirectory: path.relative(root, outputDirectory) || '.', hasApiKey: Boolean(env.apiKey), apiKey: env.apiKey ? '***' : null, apiKeyStorage: 'env' };
+    return { provider: settings.provider, endpoint: env.endpoint, llmModel: env.model, enginePath: settings.enginePath, pythonEnginePath: settings.pythonEnginePath, pythonScriptPath: settings.pythonScriptPath, pythonMemoryBudgetGib: settings.pythonMemoryBudgetGib, sheetSagePythonPath: settings.sheetSagePythonPath, settingPath: settings.settingPath, musicPath: settings.musicPath, examplesPath: settings.examplesPath, coversPath: settings.coversPath, abcNotesPath: settings.abcNotesPath, stylePresets: settings.stylePresets, saveFormat: settings.saveFormat, viewMode: settings.viewMode, outputDirectory: path.relative(root, outputDirectory) || '.', hasApiKey: Boolean(env.apiKey), apiKey: env.apiKey ? '***' : null, apiKeyStorage: 'env' };
   };
   async function upstream(url, options = {}) {
     try {
@@ -343,18 +437,18 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       payload = { model, stream: false, messages: [{ role: 'user', content: prompt }] };
       extract = result => result.message?.content;
     } else if (provider === 'claude') {
-      url = 'https://api.anthropic.com/v1/messages';
+      url = env.endpoint;
       headers['x-api-key'] = key;
       headers['anthropic-version'] = '2023-06-01';
       payload = { model, max_tokens: test ? 64 : 2048, messages: [{ role: 'user', content: prompt }] };
       extract = result => result.content?.filter(part => part.type === 'text').map(part => part.text).join('\n');
     } else if (provider === 'chatgpt') {
-      url = 'https://api.openai.com/v1/responses';
+      url = env.endpoint;
       headers.Authorization = `Bearer ${key}`;
       payload = { model, input: prompt, store: false, max_output_tokens: test ? 1024 : 4096 };
       extract = result => result.output?.flatMap(item => item.content || []).filter(part => part.type === 'output_text').map(part => part.text).join('\n');
     } else {
-      url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model.replace(/^models\//, ''))}:generateContent`;
+      url = `${env.endpoint.replace(/\/$/, '')}/models/${encodeURIComponent(model.replace(/^models\//, ''))}:generateContent`;
       headers['x-goog-api-key'] = key;
       payload = { contents: [{ role: 'user', parts: [{ text: prompt }] }] };
       extract = result => result.candidates?.[0]?.content?.parts?.filter(part => !part.thought).map(part => part.text || '').join('\n');
@@ -401,16 +495,23 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           if (input.enginePath !== undefined) next.enginePath = text(input.enginePath, 2048);
           if (input.pythonEnginePath !== undefined) next.pythonEnginePath = text(input.pythonEnginePath, 2048);
           if (input.pythonScriptPath !== undefined) next.pythonScriptPath = text(input.pythonScriptPath, 2048);
+          if (input.pythonMemoryBudgetGib !== undefined) next.pythonMemoryBudgetGib = Math.max(1, Math.min(64, Number(input.pythonMemoryBudgetGib) || 11));
+          if (input.sheetSagePythonPath !== undefined) next.sheetSagePythonPath = text(input.sheetSagePythonPath, 2048);
           if (input.settingPath !== undefined) next.settingPath = text(input.settingPath, 2048);
           if (input.musicPath !== undefined) next.musicPath = text(input.musicPath, 2048);
           if (input.examplesPath !== undefined) next.examplesPath = text(input.examplesPath, 2048);
+          if (input.coversPath !== undefined) next.coversPath = text(input.coversPath, 2048);
+          if (input.abcNotesPath !== undefined) next.abcNotesPath = text(input.abcNotesPath, 2048);
+          if (input.stylePresets !== undefined) next.stylePresets = text(input.stylePresets, 4000);
           if (input.saveFormat !== undefined) next.saveFormat = input.saveFormat;
           if (input.viewMode !== undefined) next.viewMode = input.viewMode;
-          await saveJson(settingsFile, { provider: next.provider, enginePath: next.enginePath, pythonEnginePath: next.pythonEnginePath, pythonScriptPath: next.pythonScriptPath, settingPath: next.settingPath, musicPath: next.musicPath, examplesPath: next.examplesPath, saveFormat: next.saveFormat, viewMode: next.viewMode });
+          await saveJson(settingsFile, { provider: next.provider, enginePath: next.enginePath, pythonEnginePath: next.pythonEnginePath, pythonScriptPath: next.pythonScriptPath, pythonMemoryBudgetGib: next.pythonMemoryBudgetGib, sheetSagePythonPath: next.sheetSagePythonPath, settingPath: next.settingPath, musicPath: next.musicPath, examplesPath: next.examplesPath, coversPath: next.coversPath, abcNotesPath: next.abcNotesPath, stylePresets: next.stylePresets, saveFormat: next.saveFormat, viewMode: next.viewMode });
           settings = next;
           if (input.settingPath !== undefined) await mkdir(settingDir(), { recursive: true });
           if (input.musicPath !== undefined) await mkdir(musicDir(), { recursive: true });
           if (input.examplesPath !== undefined) await mkdir(examplesDir(), { recursive: true });
+          if (input.coversPath !== undefined) await mkdir(coversDir(), { recursive: true });
+          if (input.abcNotesPath !== undefined) await mkdir(abcNotesDir(), { recursive: true });
           return publicSettings();
         }));
       }
@@ -501,7 +602,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       if (req.method === 'POST' && pathname === '/api/projects') {
         const input = await body(req);
         const createdAt = new Date().toISOString();
-        const project = { id: randomUUID(), title: text(input.title, 200).trim() || '제목 없는 곡', lyrics: text(input.lyrics), style: text(input.style, 4000), modelId: text(input.modelId, 200), seed: Number.isSafeInteger(Number(input.seed)) ? Number(input.seed) : -1, steps: Math.max(1, Math.min(1000, Number(input.steps) || 32)), cot: ['full', 'melody', 'off'].includes(input.cot) ? input.cot : 'full', vocalGender: VOCAL_GENDERS.has(input.vocalGender) ? input.vocalGender : '', mode: input.mode === 'simple' ? 'simple' : 'custom', status: 'draft', favorite: false, notes: '', createdAt, updatedAt: createdAt };
+        const project = { id: randomUUID(), title: text(input.title, 200).trim() || '제목 없는 곡', lyrics: text(input.lyrics), style: text(input.style, 4000), modelId: text(input.modelId, 200), seed: Number.isSafeInteger(Number(input.seed)) ? Number(input.seed) : -1, steps: Math.max(1, Math.min(1000, Number(input.steps) || 32)), cot: ['full', 'melody', 'off'].includes(input.cot) ? input.cot : 'full', vocalGender: VOCAL_GENDERS.has(input.vocalGender) ? input.vocalGender : '', instrumental: input.instrumental === true, abc: text(input.abc, 200000), mode: input.mode === 'simple' ? 'simple' : 'custom', status: 'draft', favorite: false, notes: '', createdAt, updatedAt: createdAt };
         const dir = settingDir();
         await mkdir(dir, { recursive: true });
         const file = await uniqueJsonPath(dir, project.title);
@@ -521,7 +622,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           if (!entry) throw fail(404, '프로젝트를 찾을 수 없습니다.');
           await unlink(entry.file);
           if (entry.project.status === 'completed' && entry.project.audioPath) await unlink(path.join(path.dirname(entry.file), entry.project.audioPath)).catch(() => {});
-          if (entry.project.coverPath) await unlink(path.join(path.dirname(entry.file), entry.project.coverPath)).catch(() => {});
+          if (entry.project.coverPath) await unlink(path.join(coversDir(), entry.project.coverPath)).catch(() => {});
           await rm(path.join(outputDirectory, entry.project.id), { recursive: true, force: true });
           return { ok: true, id: entry.project.id };
         }));
@@ -544,11 +645,6 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
                   const oldAudio = path.join(path.dirname(file), project.audioPath);
                   const newAudio = target.replace(/\.json$/, ext);
                   if (await exists(oldAudio)) { await rename(oldAudio, newAudio); project.audioPath = path.basename(newAudio); }
-                }
-                if (project.coverPath) {
-                  const oldCover = path.join(path.dirname(file), project.coverPath);
-                  const newCover = target.replace(/\.json$/, coverSuffix(project.coverPath));
-                  if (await exists(oldCover)) { await rename(oldCover, newCover); project.coverPath = path.basename(newCover); }
                 }
                 file = target;
               }
@@ -573,6 +669,15 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         const instruction = input.task === 'lyrics' ? '한국어 노래 가사를 작성해 주세요. [Verse], [Chorus], [Bridge] 구간 표기를 사용하세요. 설명 없이 가사만 반환하세요.' : '음악 생성에 쓸 스타일 프롬프트를 다듬어 주세요. 장르, 악기, 보컬, 분위기를 간결하게 적고 설명 없이 스타일 프롬프트만 반환하세요.';
         return send(200, await ask(`${instruction}\n요청: ${text(input.prompt, 4000)}\n현재 가사: ${text(input.lyrics)}\n현재 스타일: ${text(input.style, 4000)}`));
       }
+      if (req.method === 'POST' && pathname === '/api/llm/abc-edit') {
+        const input = await body(req);
+        if (!text(input.instruction, 2000).trim()) throw fail(400, 'AI에게 전달할 지시사항을 입력해 주세요.');
+        const instruction = 'ABC notation 악보를 수정하는 도우미입니다. 아래 "현재 악보"를 "지시사항"에 따라 수정한 뒤, 다른 설명이나 코드 펜스 없이 수정된 ABC notation 전체만 그대로 반환하세요. X:, T:, M:, L:, K: 같은 헤더 줄은 지시사항에서 명시적으로 바꾸라고 하지 않는 한 그대로 유지하세요.';
+        const result = await ask(`${instruction}\n지시사항: ${text(input.instruction, 2000)}\n현재 악보:\n${text(input.abc, 200000)}`);
+        const abc = result.text.trim().replace(/^```[a-zA-Z]*\n?/, '').replace(/```$/, '').trim();
+        if (!abc) throw fail(502, 'AI가 악보를 반환하지 않았습니다. 다른 지시사항으로 다시 시도해 주세요.');
+        return send(200, { abc, provider: result.provider, model: result.model });
+      }
       if (req.method === 'POST' && pathname === '/api/generate') {
         const input = await body(req);
         if (typeof input.projectId !== 'string') throw fail(400, '프로젝트 아이디가 필요합니다.');
@@ -580,24 +685,210 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         if (!entry) throw fail(404, '프로젝트를 찾을 수 없습니다.');
         if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
         generating = true;
-        const runner = entry.project.modelId === 'yue2-original' ? runPythonYue2 : runAudioCpp;
+        const isPython = entry.project.modelId === 'yue2-original';
+        const runner = isPython ? runPythonYue2 : runAudioCpp;
+        const expectedMs = isPython ? 240000 : Math.round(60000 * (Math.max(1, entry.project.steps) / 8));
+        generationStatus = { projectId: entry.project.id, startedAt: Date.now(), expectedMs };
         try { return send(200, await runner(entry.project, entry.file)); }
-        finally { generating = false; }
+        finally { generating = false; generationStatus = null; }
       }
-      const coverMatch = pathname.match(/^\/api\/projects\/([^/]+)\/cover$/);
-      if (coverMatch && req.method === 'POST') {
-        const input = await body(req, 8 * 1024 * 1024);
+      if (req.method === 'GET' && pathname === '/api/generate/status') {
+        if (!generating || !generationStatus) return send(200, { active: false, elapsedMs: 0, expectedMs: 0 });
+        return send(200, { active: true, projectId: generationStatus.projectId, elapsedMs: Date.now() - generationStatus.startedAt, expectedMs: generationStatus.expectedMs });
+      }
+      if (req.method === 'POST' && pathname === '/api/plan') {
+        // Stateless preview: planning must not create/persist a project just to produce
+        // an ABC score. The draft's fields are enough; nothing is saved unless the user
+        // explicitly saves the draft or the resulting score.
+        const input = await body(req);
+        if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
+        generating = true;
+        const pseudoProject = {
+          id: randomUUID(),
+          title: text(input.title, 200).trim() || '제목 없는 노래',
+          lyrics: text(input.lyrics),
+          style: text(input.style, 4000),
+          cot: ['full', 'melody', 'off'].includes(input.cot) ? input.cot : 'full',
+          seed: Number.isSafeInteger(Number(input.seed)) ? Number(input.seed) : 42,
+          vocalGender: VOCAL_GENDERS.has(input.vocalGender) ? input.vocalGender : '',
+          instrumental: input.instrumental === true,
+        };
+        try {
+          const { outDir } = await runPythonAction('plan', pseudoProject, [], 20000);
+          const abcFile = path.join(outDir, 'score.abc');
+          if (!(await exists(abcFile))) throw fail(502, '심볼릭 작곡에 실패했습니다. 로그를 확인해 주세요.');
+          return send(200, { abc: await readFile(abcFile, 'utf8') });
+        } finally {
+          generating = false; generationStatus = null;
+          await rm(path.join(outputDirectory, pseudoProject.id), { recursive: true, force: true }).catch(() => {});
+        }
+      }
+      if (req.method === 'POST' && pathname === '/api/abc-check') {
+        const input = await body(req, 512 * 1024);
+        const abc = text(input.abc, 200000);
+        if (!abc.trim()) throw fail(400, '검사할 악보 내용이 없습니다.');
+        const { python, script } = pythonEngineOrFail();
+        if (!(await exists(python))) throw fail(400, '설정에서 Python 실행 파일 경로를 확인해 주세요.');
+        const abcToolsScript = path.join(path.dirname(script), 'abc_tools.py');
+        if (!(await exists(abcToolsScript))) throw fail(400, 'abc_tools.py를 찾을 수 없습니다. Python 스크립트 경로를 확인해 주세요.');
+        const tempFile = path.join(outputDirectory, `abc-check-${randomUUID()}.abc`);
+        await writeFile(tempFile, abc, 'utf8');
+        try {
+          const result = await new Promise((resolve, reject) => {
+            const child = spawnImpl(python, [abcToolsScript, 'inspect', tempFile], { windowsHide: true, cwd: path.dirname(script) });
+            const chunks = [];
+            child.stdout.on('data', (chunk) => chunks.push(chunk));
+            child.stderr.on('data', (chunk) => chunks.push(chunk));
+            child.once('error', reject);
+            child.once('close', (code) => resolve({ text: Buffer.concat(chunks).toString('utf8'), code }));
+          });
+          let parsed = null;
+          try { parsed = JSON.parse(result.text); } catch { /* fall through to raw text below */ }
+          if (result.code === 0 && parsed) return send(200, { valid: true, report: parsed });
+          return send(200, { valid: false, error: parsed?.error || result.text.trim().slice(0, 2000) || '악보를 해석할 수 없습니다.' });
+        } finally { await unlink(tempFile).catch(() => {}); }
+      }
+      if (req.method === 'POST' && pathname === '/api/cover-transcribe') {
+        const input = await body(req, 60 * 1024 * 1024);
+        const match = typeof input.dataUrl === 'string' && input.dataUrl.match(/^data:(audio\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+        if (!match) throw fail(400, '오디오 파일(MP3/WAV/FLAC/M4A/OGG)을 선택해 주세요.');
+        const ext = AUDIO_MIME[match[1]];
+        if (!ext) throw fail(400, '지원하지 않는 오디오 형식입니다. MP3/WAV/FLAC/M4A/OGG 파일을 사용해 주세요.');
+        const buffer = Buffer.from(match[2], 'base64');
+        if (buffer.length > 50 * 1024 * 1024) throw fail(413, '오디오 파일이 너무 큽니다. 50MB 이하로 줄여 주세요.');
+        const task = ['full', 'melody-full', 'melody-vocal'].includes(input.task) ? input.task : 'melody-full';
+        if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
+        generating = true;
+        const audioFile = path.join(outputDirectory, `cover-source-${randomUUID()}.${ext}`);
+        try {
+          await writeFile(audioFile, buffer);
+          const result = await runTranscribe(audioFile, task);
+          return send(200, { abc: result.abc });
+        } finally { generating = false; await unlink(audioFile).catch(() => {}); }
+      }
+      if (req.method === 'GET' && pathname === '/api/abc-notes') {
+        const dir = abcNotesDir();
+        const files = (await readdir(dir).catch(() => [])).filter((name) => name.endsWith('.json'));
+        const list = await Promise.all(files.map((name) => readJson(path.join(dir, name), null)));
+        return send(200, list.filter(Boolean).sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
+      }
+      if (req.method === 'POST' && pathname === '/api/abc-notes') {
+        const input = await body(req, 512 * 1024);
+        const title = text(input.title, 200).trim() || '제목 없는 악보';
+        const abc = text(input.abc, 200000);
+        if (!abc.trim()) throw fail(400, '저장할 악보 내용이 없습니다.');
+        return send(201, await serial(async () => {
+          const dir = abcNotesDir();
+          await mkdir(dir, { recursive: true });
+          const createdAt = new Date().toISOString();
+          const note = { id: randomUUID(), title, abc, createdAt };
+          await saveJson(await uniqueJsonPath(dir, title), note);
+          return note;
+        }));
+      }
+      async function findAbcNote(id) {
+        const dir = abcNotesDir();
+        const files = (await readdir(dir).catch(() => [])).filter((name) => name.endsWith('.json'));
+        for (const name of files) {
+          const filePath = path.join(dir, name);
+          const note = await readJson(filePath, null);
+          if (note?.id === id) return { note, file: filePath };
+        }
+        return null;
+      }
+      const abcNoteMatch = pathname.match(/^\/api\/abc-notes\/([^/]+)$/);
+      if (abcNoteMatch && req.method === 'PATCH') {
+        const input = await body(req, 512 * 1024);
+        return send(200, await serial(async () => {
+          const found = await findAbcNote(abcNoteMatch[1]);
+          if (!found) throw fail(404, '악보를 찾을 수 없습니다.');
+          const note = found.note;
+          let file = found.file;
+          if (typeof input.title === 'string') {
+            const nextTitle = text(input.title, 200).trim() || '제목 없는 악보';
+            if (nextTitle !== note.title) {
+              const target = await uniqueJsonPath(abcNotesDir(), nextTitle, file);
+              if (target !== file) { await rename(file, target); file = target; }
+              note.title = nextTitle;
+            }
+          }
+          if (typeof input.abc === 'string') {
+            if (!input.abc.trim()) throw fail(400, '악보 내용을 비울 수 없습니다.');
+            note.abc = text(input.abc, 200000);
+          }
+          note.updatedAt = new Date().toISOString();
+          await saveJson(file, note);
+          return note;
+        }));
+      }
+      if (abcNoteMatch && req.method === 'DELETE') {
+        await body(req);
+        return send(200, await serial(async () => {
+          const found = await findAbcNote(abcNoteMatch[1]);
+          if (!found) throw fail(404, '악보를 찾을 수 없습니다.');
+          if (found.note.coverPath) await unlink(path.join(coversDir(), found.note.coverPath)).catch(() => {});
+          await unlink(found.file);
+          return { ok: true, id: found.note.id };
+        }));
+      }
+      const abcNoteCoverMatch = pathname.match(/^\/api\/abc-notes\/([^/]+)\/cover$/);
+      if (abcNoteCoverMatch && req.method === 'POST') {
+        const input = await body(req, 28 * 1024 * 1024);
         const match = typeof input.dataUrl === 'string' && input.dataUrl.match(/^data:(image\/(?:png|jpeg|webp));base64,(.+)$/);
         if (!match) throw fail(400, '지원하는 이미지 형식(PNG/JPEG/WEBP)의 파일을 선택해 주세요.');
         const buffer = Buffer.from(match[2], 'base64');
-        if (buffer.length > 6 * 1024 * 1024) throw fail(413, '이미지가 너무 큽니다. 6MB 이하로 줄여 주세요.');
+        if (buffer.length > 20 * 1024 * 1024) throw fail(413, '이미지가 너무 큽니다. 20MB 이하로 줄여 주세요.');
+        return send(200, await serial(async () => {
+          const found = await findAbcNote(abcNoteCoverMatch[1]);
+          if (!found) throw fail(404, '악보를 찾을 수 없습니다.');
+          const dir = coversDir();
+          await mkdir(dir, { recursive: true });
+          if (found.note.coverPath) await unlink(path.join(dir, found.note.coverPath)).catch(() => {});
+          const coverName = `abcnote-${found.note.id}.${COVER_MIME[match[1]]}`;
+          await writeFile(path.join(dir, coverName), buffer);
+          const updated = { ...found.note, coverPath: coverName, updatedAt: new Date().toISOString() };
+          await saveJson(found.file, updated);
+          return updated;
+        }));
+      }
+      if (abcNoteCoverMatch && req.method === 'DELETE') {
+        await body(req);
+        return send(200, await serial(async () => {
+          const found = await findAbcNote(abcNoteCoverMatch[1]);
+          if (!found) throw fail(404, '악보를 찾을 수 없습니다.');
+          if (!found.note.coverPath) return { ok: true };
+          await unlink(path.join(coversDir(), found.note.coverPath)).catch(() => {});
+          const updated = { ...found.note, coverPath: null, updatedAt: new Date().toISOString() };
+          await saveJson(found.file, updated);
+          return { ok: true };
+        }));
+      }
+      if (abcNoteCoverMatch && req.method === 'GET') {
+        const found = await findAbcNote(abcNoteCoverMatch[1]);
+        if (!found?.note.coverPath) throw fail(404, '커버 이미지가 없습니다.');
+        const coverFile = path.join(coversDir(), found.note.coverPath);
+        if (!(await exists(coverFile))) throw fail(404, '커버 이미지 파일을 찾을 수 없습니다.');
+        const data = await readFile(coverFile);
+        const mimeEntry = Object.entries(COVER_MIME).find(([, ext]) => coverFile.endsWith(`.${ext}`));
+        res.writeHead(200, { 'Content-Type': mimeEntry ? mimeEntry[0] : 'application/octet-stream', 'Content-Length': String(data.length), 'Cache-Control': 'no-store' });
+        return res.end(data);
+      }
+      const coverMatch = pathname.match(/^\/api\/projects\/([^/]+)\/cover$/);
+      if (coverMatch && req.method === 'POST') {
+        const input = await body(req, 28 * 1024 * 1024);
+        const match = typeof input.dataUrl === 'string' && input.dataUrl.match(/^data:(image\/(?:png|jpeg|webp));base64,(.+)$/);
+        if (!match) throw fail(400, '지원하는 이미지 형식(PNG/JPEG/WEBP)의 파일을 선택해 주세요.');
+        const buffer = Buffer.from(match[2], 'base64');
+        if (buffer.length > 20 * 1024 * 1024) throw fail(413, '이미지가 너무 큽니다. 20MB 이하로 줄여 주세요.');
         return send(200, await serial(async () => {
           const entry = await findEntry(coverMatch[1]);
           if (!entry) throw fail(404, '프로젝트를 찾을 수 없습니다.');
-          if (entry.project.coverPath) await unlink(path.join(path.dirname(entry.file), entry.project.coverPath)).catch(() => {});
-          const coverFile = entry.file.replace(/\.json$/, `.cover.${COVER_MIME[match[1]]}`);
-          await writeFile(coverFile, buffer);
-          const updated = { ...entry.project, coverPath: path.basename(coverFile), updatedAt: new Date().toISOString() };
+          const dir = coversDir();
+          await mkdir(dir, { recursive: true });
+          if (entry.project.coverPath) await unlink(path.join(dir, entry.project.coverPath)).catch(() => {});
+          const coverName = `${entry.project.id}.${COVER_MIME[match[1]]}`;
+          await writeFile(path.join(dir, coverName), buffer);
+          const updated = { ...entry.project, coverPath: coverName, updatedAt: new Date().toISOString() };
           await saveJson(entry.file, updated);
           return updated;
         }));
@@ -608,7 +899,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           const entry = await findEntry(coverMatch[1]);
           if (!entry) throw fail(404, '프로젝트를 찾을 수 없습니다.');
           if (!entry.project.coverPath) return { ok: true };
-          await unlink(path.join(path.dirname(entry.file), entry.project.coverPath)).catch(() => {});
+          await unlink(path.join(coversDir(), entry.project.coverPath)).catch(() => {});
           const updated = { ...entry.project, coverPath: null, updatedAt: new Date().toISOString() };
           await saveJson(entry.file, updated);
           return { ok: true };
@@ -617,7 +908,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       if (coverMatch && req.method === 'GET') {
         const entry = await findEntry(coverMatch[1]);
         if (!entry?.project.coverPath) throw fail(404, '커버 이미지가 없습니다.');
-        const coverFile = path.join(path.dirname(entry.file), entry.project.coverPath);
+        const coverFile = path.join(coversDir(), entry.project.coverPath);
         if (!(await exists(coverFile))) throw fail(404, '커버 이미지 파일을 찾을 수 없습니다.');
         const data = await readFile(coverFile);
         const mimeEntry = Object.entries(COVER_MIME).find(([, ext]) => coverFile.endsWith(`.${ext}`));
@@ -636,15 +927,21 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         if (requestedFormat && SAVE_FORMATS.has(requestedFormat) && requestedFormat !== path.extname(canonical).slice(1)) {
           const base = path.basename(entry.project.audioPath, path.extname(entry.project.audioPath));
           const cached = path.join(dir, `${base}.${requestedFormat}`);
-          const [sourceStat, cacheStat] = await Promise.all([
+          const sourceCover = entry.project.coverPath ? path.join(coversDir(), entry.project.coverPath) : null;
+          const coverFile = sourceCover && await exists(sourceCover) ? sourceCover : null;
+          const [sourceStat, coverStat, cacheStat] = await Promise.all([
             stat(canonical),
+            coverFile ? stat(coverFile) : null,
             stat(cached).catch(() => null),
           ]);
-          if (!cacheStat || cacheStat.mtimeMs < sourceStat.mtimeMs) {
+          const newestSourceMtime = Math.max(sourceStat.mtimeMs, coverStat?.mtimeMs || 0);
+          if (!cacheStat || cacheStat.mtimeMs < newestSourceMtime) {
             await new Promise((resolve, reject) => {
-              const child = spawnImpl('ffmpeg', FFMPEG_ARGS[requestedFormat](canonical, cached), { windowsHide: true });
+              const child = spawnImpl('ffmpeg', FFMPEG_ARGS[requestedFormat](canonical, cached, coverFile), { windowsHide: true });
               child.once('error', reject);
               child.once('close', (code) => code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`)));
+            }).then(async () => {
+              if (!(await stat(cached).catch(() => null))?.size) { await unlink(cached).catch(() => {}); throw new Error('empty output'); }
             }).catch(() => { throw fail(502, `${requestedFormat.toUpperCase()} 변환에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.`); });
           }
           audioFile = cached;

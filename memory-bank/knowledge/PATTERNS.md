@@ -89,3 +89,9 @@ const args = [
 ];
 ```
 `--model`은 GGUF 저장소 폴더(sidecars 포함)를 가리키는 절대경로, `yue2.model_gguf`/`yue2.vae_gguf`는 그 폴더 기준 **상대** 파일명(절대경로 거부됨). stdout에 `metrics.audio_duration_ms=`, `metrics.rtf=` 라인이 찍힘(`--metrics` 필요). 출처: `backend/server.mjs`, 실측 검증 2026-09-12.
+
+## 스크롤되는 다이얼로그 안에서 특정 UI(재생 컨트롤 등)만 항상 보이게 고정하기
+
+다이얼로그 레이아웃이 `.studio-dialog{display:flex;flex-direction:column}` + `.dialog-scroll{flex:1;overflow-y:auto}` 구조일 때, 내용이 길어지면 `.dialog-scroll` 내부 맨 아래에 있는 자식(재생 버튼 등)은 스크롤해야만 보인다. `position:sticky`로 억지로 고정하려 하면 스크롤 컨테이너/오버플로 조상 관계가 꼬이기 쉽다.
+
+더 간단한 해결책: 해당 UI를 소유한 컴포넌트(`AbcPreview`)가 자기 상태/로직은 그대로 유지한 채, 렌더링 위치만 `ReactDOM.createPortal(controlsJsx, slotElement)`로 부모가 지정한 DOM 노드로 옮기게 한다. 부모는 `.dialog-scroll` **바깥**(형제 위치)에 `<div ref={setSlotState}/>`를 두고 그 state를 컴포넌트에 `controlsSlot` prop으로 넘기면 된다. 컴포넌트는 `controlsSlot`이 없으면 기존처럼 내부에 인라인 렌더링(다른 사용처와 호환 유지), 있으면 포탈로 이동 — 하나의 컴포넌트가 "인라인 컨텍스트"와 "다이얼로그 상단 고정 컨텍스트" 둘 다를 지원할 수 있다. `app/app/studio.tsx`의 `AbcPreview`(`controlsSlot` prop) 참고.

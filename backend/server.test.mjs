@@ -186,14 +186,19 @@ function makeFakePythonSpawn(scriptPath) {
       })();
       return emitter;
     }
+    const action = args[1];
     const outDir = args[args.indexOf('--output') + 1];
     (async () => {
       await new Promise(resolve => setTimeout(resolve, 0));
       if (behavior.writeOutput) {
         await mkdir(outDir, { recursive: true });
-        await writeFile(path.join(outDir, 'audio.flac'), Buffer.from('fLaC-fake-bytes'));
+        if (action === 'plan') {
+          await writeFile(path.join(outDir, 'score.abc'), 'X:1\nT:\nM:4/4\nL:1/32\nK:C\nV: Vocal\nz32|\nV: Ins\nz32|\n');
+        } else {
+          await writeFile(path.join(outDir, 'audio.flac'), Buffer.from('fLaC-fake-bytes'));
+          await writeFile(path.join(outDir, 'result.json'), JSON.stringify({ status: 'complete', truncated: { abc: behavior.truncated, semantic: false }, audio_seconds: 1.234, sample_rate: 48000 }));
+        }
       }
-      emitter.stdout.emit('data', Buffer.from(JSON.stringify({ audio: path.join(outDir, 'audio.flac'), truncated: { abc: behavior.truncated } }) + '\n'));
       emitter.emit('close', behavior.exitCode, null);
     })();
     return emitter;
@@ -356,9 +361,10 @@ test('yue2-original routes to the Python runner, and downloads support on-demand
   await mkdir(path.join(root, 'models', 'm-a-p', 'YuE2-3B'), { recursive: true });
   await mkdir(path.join(root, 'models', 'm-a-p', 'YuE2-Vae'), { recursive: true });
   const pythonEnginePath = path.join(root, 'fake-python.exe');
-  const pythonScriptPath = path.join(root, 'generate.py');
+  const pythonScriptPath = path.join(root, 'run_yue2.py');
   await writeFile(pythonEnginePath, 'stub');
   await writeFile(pythonScriptPath, 'stub');
+  await writeFile(path.join(root, 'abc_tools.py'), 'stub');
   const fakePython = makeFakePythonSpawn(pythonScriptPath);
   const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}), spawnImpl: fakePython.spawnImpl });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -382,12 +388,16 @@ test('yue2-original routes to the Python runner, and downloads support on-demand
   const songId = generated.data.id;
   const pyArgs = fakePython.calls[0].args;
   assert.equal(pyArgs[0], pythonScriptPath);
+  assert.equal(pyArgs[1], 'generate');
+  assert.ok(pyArgs.includes('--memory-budget-gib'));
+  assert.ok(pyArgs.includes('--offline'));
   const requestFile = pyArgs[pyArgs.indexOf('--request') + 1];
   assert.equal(pyArgs[pyArgs.indexOf('--model') + 1], path.join(root, 'models', 'm-a-p', 'YuE2-3B'));
   const sentRequest = JSON.parse(await readFile(requestFile, 'utf8'));
   assert.equal(sentRequest.lyrics, '가사');
   assert.equal(sentRequest.seed, 7);
   assert.equal(sentRequest.cot, 'off');
+  assert.equal(generated.data.durationMs, 1234);
 
   // download endpoint: same format serves directly, different format transcodes on demand and is cached
   const direct = await call(`/api/projects/${songId}/audio?format=flac&download=1`);
@@ -400,16 +410,17 @@ test('yue2-original routes to the Python runner, and downloads support on-demand
   const musicDirPath = path.join(root, 'library', 'music');
   assert.ok(await readdir(musicDirPath).then(names => names.some(name => name.endsWith('.wav'))));
 
-  // cover upload/serve/delete, and it follows a rename
+  // cover upload/serve/delete: stored in the shared library/cover folder, keyed by id (independent of title)
   const tinyPngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
   const coverUpload = await callJson(`/api/projects/${songId}/cover`, 'POST', { dataUrl: `data:image/png;base64,${tinyPngBase64}` });
   assert.equal(coverUpload.status, 200);
-  assert.ok(coverUpload.data.coverPath.endsWith('.cover.png'));
+  assert.equal(coverUpload.data.coverPath, `${songId}.png`);
+  assert.ok(await readdir(path.join(root, 'library', 'cover')).then(names => names.includes(`${songId}.png`)));
   const coverGet = await call(`/api/projects/${songId}/cover`);
   assert.equal(coverGet.status, 200);
   assert.equal(coverGet.headers.get('content-type'), 'image/png');
   const renamed = await callJson(`/api/projects/${songId}`, 'PATCH', { title: '원본 모델 테스트 (개명)' });
-  assert.ok(renamed.data.coverPath.endsWith('.cover.png'));
+  assert.equal(renamed.data.coverPath, `${songId}.png`);
   assert.equal((await call(`/api/projects/${songId}/cover`)).status, 200);
   const coverDelete = await callJson(`/api/projects/${songId}/cover`, 'DELETE', {});
   assert.equal(coverDelete.status, 200);
@@ -425,4 +436,112 @@ test('yue2-original routes to the Python runner, and downloads support on-demand
   assert.equal((await callJson('/api/playlists')).data.length, 1);
   assert.equal((await callJson(`/api/playlists/${playlist.id}`, 'DELETE', {})).status, 200);
   assert.equal((await callJson('/api/playlists')).data.length, 0);
+});
+
+test('symbolic planning, ABC score generation option, and the ABC-note library', async t => {
+  resetEnv();
+  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-abc-'));
+  await mkdir(path.join(root, 'models', 'm-a-p', 'YuE2-3B'), { recursive: true });
+  await mkdir(path.join(root, 'models', 'm-a-p', 'YuE2-Vae'), { recursive: true });
+  const pythonEnginePath = path.join(root, 'fake-python.exe');
+  const pythonScriptPath = path.join(root, 'run_yue2.py');
+  const abcToolsPath = path.join(root, 'abc_tools.py');
+  await writeFile(pythonEnginePath, 'stub');
+  await writeFile(pythonScriptPath, 'stub');
+  await writeFile(abcToolsPath, 'stub');
+  const calls = [];
+  const spawnImpl = (engine, args) => {
+    calls.push({ engine, args });
+    const emitter = new EventEmitter();
+    emitter.stdout = new EventEmitter();
+    emitter.stderr = new EventEmitter();
+    emitter.kill = () => emitter.emit('close', null, 'SIGTERM');
+    const script = args[0];
+    if (path.basename(script) === 'abc_tools.py') {
+      const scoreFile = args[2];
+      (async () => {
+        await new Promise(resolve => setTimeout(resolve, 0));
+        const contents = await readFile(scoreFile, 'utf8');
+        if (contents.includes('BROKEN')) {
+          emitter.stderr.emit('data', Buffer.from('not valid abc'));
+          emitter.emit('close', 1, null);
+        } else {
+          emitter.stdout.emit('data', Buffer.from(JSON.stringify({ voices: { Vocal: {}, Ins: {} } })));
+          emitter.emit('close', 0, null);
+        }
+      })();
+      return emitter;
+    }
+    const action = args[1];
+    const outDir = args[args.indexOf('--output') + 1];
+    (async () => {
+      await new Promise(resolve => setTimeout(resolve, 0));
+      await mkdir(outDir, { recursive: true });
+      if (action === 'plan') await writeFile(path.join(outDir, 'score.abc'), 'X:1\nT:\nK:C\nV: Vocal\nz32|\nV: Ins\nz32|\n');
+      else {
+        await writeFile(path.join(outDir, 'audio.flac'), Buffer.from('fLaC-fake-bytes'));
+        await writeFile(path.join(outDir, 'result.json'), JSON.stringify({ status: 'complete', truncated: { abc: false, semantic: false }, audio_seconds: 2.0, sample_rate: 48000 }));
+      }
+      emitter.emit('close', 0, null);
+    })();
+    return emitter;
+  };
+  const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}), spawnImpl });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const call = async (route, method = 'GET', payload) => fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) });
+  const callJson = async (route, method, payload) => { const response = await call(route, method, payload); return { status: response.status, data: await response.json() }; };
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+
+  await call('/api/settings', 'PUT', { pythonEnginePath, pythonScriptPath, pythonMemoryBudgetGib: 11 });
+  assert.equal((await callJson('/api/settings')).data.pythonMemoryBudgetGib, 11);
+
+  // plan() is stateless: it takes draft fields directly and never creates a project
+  const projectCountBefore = (await callJson('/api/projects')).data.length;
+  assert.equal((await callJson('/api/plan', 'POST', { title: '계획 없음', lyrics: '가사', style: '스타일', cot: 'off' })).status, 400);
+
+  // plan() succeeds for a symbolic mode and returns real ABC text, still without persisting anything
+  const planned = await callJson('/api/plan', 'POST', { title: '악보 테스트', lyrics: '가사', style: '스타일', cot: 'full', seed: 7 });
+  assert.equal(planned.status, 200);
+  assert.match(planned.data.abc, /^X:1/);
+  assert.equal((await callJson('/api/projects')).data.length, projectCountBefore);
+  const planArgs = calls.find(c => c.args[1] === 'plan').args;
+  assert.ok(planArgs.includes('--memory-budget-gib'));
+  assert.ok(planArgs.includes('11'));
+
+  // abc-check validates ABC text via abc_tools.py inspect
+  const validCheck = await callJson('/api/abc-check', 'POST', { abc: planned.data.abc });
+  assert.equal(validCheck.status, 200);
+  assert.equal(validCheck.data.valid, true);
+  const invalidCheck = await callJson('/api/abc-check', 'POST', { abc: 'BROKEN garbage' });
+  assert.equal(invalidCheck.status, 200);
+  assert.equal(invalidCheck.data.valid, false);
+
+  // saving a draft with abc + cot=off is rejected at generation time
+  const badCombo = (await callJson('/api/projects', 'POST', { title: '잘못된 조합', lyrics: '가사', style: '스타일', modelId: 'yue2-original', cot: 'off', abc: planned.data.abc })).data;
+  assert.equal((await callJson('/api/generate', 'POST', { projectId: badCombo.id })).status, 400);
+
+  // generating with an abc score passes --abc-file and reports duration from result.json
+  const withAbc = (await callJson('/api/projects', 'POST', { title: '악보로 생성', lyrics: '가사', style: '스타일', modelId: 'yue2-original', cot: 'melody', abc: planned.data.abc })).data;
+  const generated = await callJson('/api/generate', 'POST', { projectId: withAbc.id });
+  assert.equal(generated.status, 200);
+  assert.equal(generated.data.durationMs, 2000);
+  const genArgs = calls.find(c => c.args[1] === 'generate' && c.args.includes('--abc-file')).args;
+  const abcFile = genArgs[genArgs.indexOf('--abc-file') + 1];
+  assert.equal(await readFile(abcFile, 'utf8'), planned.data.abc);
+
+  // the abc-note library: save, list, edit (rename + content), delete
+  const savedNote = await callJson('/api/abc-notes', 'POST', { title: '내 악보', abc: planned.data.abc });
+  assert.equal(savedNote.status, 201);
+  assert.equal(savedNote.data.abc, planned.data.abc);
+  const list = await callJson('/api/abc-notes');
+  assert.equal(list.data.length, 1);
+  const edited = await callJson(`/api/abc-notes/${savedNote.data.id}`, 'PATCH', { title: '수정된 악보', abc: 'X:1\nT:\nK:C\nV: Vocal\nz32|\nV: Ins\nz32|\n' });
+  assert.equal(edited.status, 200);
+  assert.equal(edited.data.title, '수정된 악보');
+  assert.equal(edited.data.id, savedNote.data.id);
+  assert.equal((await callJson('/api/abc-notes')).data[0].title, '수정된 악보');
+  assert.equal((await callJson(`/api/abc-notes/${savedNote.data.id}`, 'PATCH', { abc: '' })).status, 400);
+  assert.equal((await callJson(`/api/abc-notes/${savedNote.data.id}`, 'DELETE', {})).status, 200);
+  assert.equal((await callJson('/api/abc-notes')).data.length, 0);
 });
