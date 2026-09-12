@@ -25,7 +25,9 @@ GGUF 폴더에는 BF16, Q8_0, Q4_0 본체와 F16/F32 VAE 및 `sidecars/`가 있�
 
 사용자가 직접 받은 `yue2_3b_int8_convrot.safetensors`는 `models/comfy-org/YuE2/checkpoints/yue2_3b_int8_convrot.safetensors` 위치에 두었습니다. 이 파일은 헤더 기준 `convrot_int8` 양자화와 `model.diffusion_model.*` 텐서 구조를 가진 ComfyUI 계열 형식입니다. 현재 SongYUE2의 직접 생성 경로(audio.cpp GGUF, 공식 Python YuE2)는 이 형식을 바로 실행하지 않으므로, 앱의 모델 선택 메뉴에는 표시하되 생성에는 ComfyUI 어댑터가 추가로 필요합니다.
 
-사용자가 직접 받은 `sheetsage2_bf16.safetensors`는 `models/m-a-p/SheetSage2/model.safetensors` 위치에 두었습니다. SheetSage2는 `model.safetensors` 하나만으로는 실행되지 않습니다. Hugging Face `m-a-p/SheetSage2` 스냅샷의 `config.json`, `modeling_sheetsage2.py`, `pipeline_sheetsage2.py`, `notation_sheetsage2.py`, `requirements.txt` 등 코드와 설정 파일이 같은 폴더에 함께 있어야 `AutoModel.from_pretrained(..., trust_remote_code=True)`로 로드됩니다. `config.json`까지 갖춰지면 앱의 멜로디 추출 경로가 이 로컬 폴더를 오프라인 모델로 사용합니다.
+사용자가 직접 받은 `sheetsage2_bf16.safetensors`는 `models/m-a-p/SheetSage2/model.safetensors` 위치에 두었고, 이후 Hugging Face `m-a-p/SheetSage2` 스냅샷의 `config.json`과 나머지 코드·자산 파일(`modeling_sheetsage2.py`, `pipeline_sheetsage2.py`, `notation_sheetsage2.py`, `requirements.txt` 등 전체)도 같은 폴더에 받아 두어, `AutoModel.from_pretrained(..., trust_remote_code=True)`로 로드 가능한 상태입니다. 앱의 `GET /api/models`/`POST /api/cover-transcribe`는 `config.json`+`model.safetensors` 존재 여부로 로컬 모델 사용 가능 여부를 판단하므로, 이 조건은 이미 충족됩니다.
+
+다만 이 폴더의 코드가 요구하는 Python 패키지 버전(`torch==2.8.0`, `transformers==4.45.2` 등, `requirements-sheetsage2.txt`)은 YuE2 본체용 venv에 이미 설치된 더 최신 버전(`torch 2.10`, `transformers 4.57`)과 다릅니다. 같은 venv에 같이 설치하면 버전 충돌 위험이 있으므로, SheetSage2 실행을 위해서는 **별도 Python 가상환경**을 만들어 `requirements-sheetsage2.txt`를 설치하고, 설정 화면의 `sheetSagePythonPath`를 그 venv의 `python.exe`로 지정해야 합니다. 이 venv 준비만 남은 상태이며, 코드(`transcribe.py`)와 모델 파일은 모두 준비되어 있습니다.
 
 공식 가중치 라이선스는 **CC BY-NC 4.0**입니다. 각 원본 저장소의 `LICENSE`, `THIRD_PARTY_NOTICES.md`, `licenses/`를 보존했습니다. GGUF 저장소는 README에 라이선스를 표시하지만 별도 LICENSE 파일은 제공하지 않습니다. 배포 시 모델 용량 및 라이선스를 고려해 앱 설치 파일과 모델 다운로드를 분리할 수 있습니다.
 

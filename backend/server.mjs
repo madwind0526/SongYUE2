@@ -398,7 +398,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const strippedFile = path.join(projectRuns, `instrumental-${randomUUID()}.abc`);
     await writeFile(sourceFile, abcText, 'utf8');
     const result = await new Promise((resolve, reject) => {
-      const child = spawnImpl(python, [abcToolsScript, 'strip-chords', sourceFile, strippedFile, '--keep-voice', 'Ins'], { windowsHide: true, cwd: path.dirname(script) });
+      const child = spawnImpl(python, [abcToolsScript, 'mute-voice', sourceFile, strippedFile, '--keep-voice', 'Ins'], { windowsHide: true, cwd: path.dirname(script) });
       const chunks = [];
       child.stdout.on('data', (chunk) => chunks.push(chunk));
       child.stderr.on('data', (chunk) => chunks.push(chunk));

@@ -216,7 +216,7 @@ function makeFakePythonSpawn(scriptPath) {
     emitter.stdout = new EventEmitter();
     emitter.stderr = new EventEmitter();
     emitter.kill = () => emitter.emit('close', null, 'SIGTERM');
-    if (path.basename(args[0] || '') === 'abc_tools.py' && args[1] === 'strip-chords') {
+    if (path.basename(args[0] || '') === 'abc_tools.py' && args[1] === 'mute-voice') {
       const [, , sourceFile, outFile] = args;
       (async () => {
         await new Promise(resolve => setTimeout(resolve, 0));
@@ -470,8 +470,8 @@ test('yue2-original routes to the Python runner, and downloads support on-demand
   const instrumentalGenerated = await callJson('/api/generate', 'POST', { projectId: instrumentalDraft.id });
   assert.equal(instrumentalGenerated.status, 200);
   const stripCall = fakePython.calls.find(c => path.basename(c.args[0]) === 'abc_tools.py');
-  assert.ok(stripCall, 'expected abc_tools.py strip-chords to run for instrumental generation');
-  assert.equal(stripCall.args[1], 'strip-chords');
+  assert.ok(stripCall, 'expected abc_tools.py mute-voice to run for instrumental generation');
+  assert.equal(stripCall.args[1], 'mute-voice');
   assert.equal(stripCall.args[4], '--keep-voice');
   assert.equal(stripCall.args[5], 'Ins');
   const instrumentalGenerateCall = fakePython.calls.filter(c => c.args[0] === pythonScriptPath && c.args[1] === 'generate').pop();
@@ -494,7 +494,7 @@ test('yue2-original routes to the Python runner, and downloads support on-demand
   assert.equal(noPlanCall, undefined, 'an existing ABC should not trigger an extra auto-plan step');
   const stripCallWithVocals = fakePython.calls.find(c => path.basename(c.args[0]) === 'abc_tools.py');
   const strippedSourceContent = await readFile(stripCallWithVocals.args[2], 'utf8');
-  assert.equal(strippedSourceContent, abcWithVocals, 'the real Vocal-note ABC must be handed to strip-chords, not skipped');
+  assert.equal(strippedSourceContent, abcWithVocals, 'the real Vocal-note ABC must be handed to mute-voice, not skipped');
   const strippedOutputContent = await readFile(stripCallWithVocals.args[3], 'utf8');
   assert.ok(!strippedOutputContent.includes('CDEF GABc'), 'the Vocal melody notes must be silenced before generation');
 

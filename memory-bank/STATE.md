@@ -2,10 +2,10 @@
 
 ## Current Wave
 
-- **Wave:** 11
+- **Wave:** 12
 - **Status:** Done
 - **Cache Status:** CLEAN
-- **Last Checkpoint:** 2026-09-12 후처리/EQ 팝업을 사용자 요청대로 정교화(EQ 프리셋+전체 설정 프리셋을 localStorage/파일 다운로드 대신 이름 붙여 저장하는 서버 파일로 전환, 저장 위치는 `library/`가 아닌 별도 `Setting/EQ-preset`·`Setting/PostProcess`), 토글 버튼에 초기화 아이콘 병합, 재생 중인 트랙 박스 강조, AnalyserNode 기반 원형 라이브 비주얼라이저(Baloo 2 워드마크 idle 상태) 추가. progress.md/README.md/revision.md 신규 작성, 이번 웨이브 커밋+푸시.
+- **Last Checkpoint:** 2026-09-12 사용자가 YuE2의 Vocal/Ins 2성부 설계를 상세히 설명하며 "악기만" 무보컬 메커니즘 재검토를 요청 — 기존 `abc_tools.py strip-chords --keep-voice Ins`가 Vocal을 쉼표로 바꾸며 화음 기호까지 지워버려(native 방언에서 화성은 오직 Vocal에만, 쉬는 동안에도 존재해야 함) 설계와 어긋난 것을 발견. 화음은 유지하고 음표만 쉼표로 바꾸는 `mute-voice` 명령을 `abc_tools.py`에 신설, `backend/server.mjs`/테스트/`abc-editing.md` 전환(테스트 8/8 통과, 실제 오디오 검증은 아직). `docs/local-api.md` 엔드포인트 표를 실제 코드 기준으로 전면 재작성(예상보다 훨씬 많은 엔드포인트가 미문서화 상태였음), `Setting/` 폴더 문서화, `docs/models.md`의 SheetSage2 절을 최신 파일 상태(config.json+코드 설치 완료, venv만 남음)로 갱신, progress.md/memory-bank 갱신.
 
 ## Wave History
 
@@ -22,10 +22,11 @@
 | 9 | Wave 8 프론트엔드 마무리(ABC 버튼 재배치+파일 가져오기+저장 대화상자+모델 비활성화), 라이브러리 기본 저장 형식 .abc로 전환, Python 경로 상대경로 정정, memory-bank 인코딩 복구 | Done |
 | 10 | "악기만" 옵션이 실제로 보컬을 빼지 못하던 버그 수정(가사 비우기 시도 → 되돌림 → abc_tools.py strip-chords로 구조적 해결), 완성곡 후처리/EQ 팝업 신규(10밴드 EQ+FxSound 노브+리버브/에코, Web Audio 실시간 미리듣기+디바운스 렌더링, 원본 포맷 유지 저장) | Done |
 | 11 | 후처리/EQ UI 반복 개선(EQ·전체 설정 프리셋을 이름 붙여 `Setting/` 폴더에 저장하는 백엔드 엔드포인트 3개 추가, 토글+초기화 버튼 병합, 재생 중 박스 강조, AnalyserNode 원형 라이브 비주얼라이저), progress.md/revision.md 신규 + README.md 갱신 | Done |
+| 12 | "악기만" 무보컬 메커니즘 재검증(화음 기호를 지우지 않는 `abc_tools.py mute-voice` 신설, `strip-chords` 오용 수정), `docs/local-api.md` 전면 재작성 + `Setting/` 폴더 문서화, `docs/models.md` SheetSage2 상태 갱신 | Done |
 
 ## Session Notes
 
-- `models/sheetsage2_bf16.safetensors`는 `models/m-a-p/SheetSage2/model.safetensors`로 옮겨져 있음. Hugging Face `m-a-p/SheetSage2`의 config/code/assets 파일이 `models/m-a-p/SheetSage2/`에 함께 있어야 오프라인 로딩이 됨(가중치 파일만으로는 부족).
+- `models/m-a-p/SheetSage2/`에 `model.safetensors`+`config.json`+전체 코드 파일이 모두 설치 완료(2026-09-12 확인). 남은 준비물은 별도 Python venv뿐 — `test/YuE2-source/requirements-sheetsage2.txt`(torch==2.8.0/transformers==4.45.2 등)가 요구하는 버전이 YuE2 본체용 `.venv`에 이미 설치된 버전(torch 2.10/transformers 4.57)과 달라 같은 venv를 공유하면 충돌 위험 — 새 venv 만들어 설정의 `sheetSagePythonPath`에 지정해야 함.
 - `models/yue2_3b_int8_convrot.safetensors`는 `models/comfy-org/YuE2/checkpoints/yue2_3b_int8_convrot.safetensors`로 옮겨져 있음. YuE2 INT8 ConvRot은 ComfyUI 형식이라 SongYUE2의 직접 생성 경로(audio.cpp/공식 Python)로 바로 실행되지 않음 — 백엔드가 명확한 한국어 오류로 차단, 프론트도 선택 자체를 막음.
 - `.abc` 형식 라이브러리 노트는 파일명 기반 id(`abcfile-<base64(파일명)>`)를 쓰므로, 제목을 바꾸면(rename) id도 바뀐다 — JSON 형식 노트(안정적 UUID id)와 다른 특성이니 새 UI를 짤 때 유의할 것.
 - `data/settings.json`은 백엔드가 메모리에 캐싱하므로, 프로세스가 떠 있는 동안 파일을 직접 고쳐도 다음 저장 시 덮어써진다 — 반드시 파일 수정 후 프로세스 재시작.

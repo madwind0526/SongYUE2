@@ -4,6 +4,28 @@
 
 ## Unreleased — 이 커밋에 포함될 변경사항 (2026-09-12)
 
+**"악기만" 무보컬 메커니즘 재검증 및 수정**
+
+- 사용자가 YuE2의 Vocal/Ins 2성부 설계를 상세히 설명하며 재검토를 요청: `V: Vocal` 성부는 지우면 안 되고, 화음 기호가 붙은 쉼표(예 `"D"z16`)로 채워야 화성이 오케스트라에 전달됨.
+- 로컬에 설치된(레포 밖, `test/` — `.gitignore`) `abc_tools.py`를 확인해 보니 기존 `strip-chords --keep-voice Ins`는 Vocal을 쉼표로 바꾸는 것과 별개로 **전체 성부의 화음 기호까지 지워버려** 이 설계와 어긋났음 — 파서 자체의 불변식(`"Native chord symbols belong in Vocal, not Ins"`)과 `references/abc-editing.md`("harmony is represented by quoted symbols in Vocal, including when resting")가 이를 뒷받침.
+- `abc_tools.py`에 화음 기호는 건드리지 않고 선택하지 않은 성부의 음표만 쉼표로 바꾸는 `mute-voice` 명령을 신설, `backend/server.mjs`의 `stripVocalVoice()`를 이 명령을 쓰도록 전환. `backend/server.test.mjs`의 관련 검증도 함께 갱신, 8개 스위트 전체 통과.
+
+**문서화**
+
+- `docs/local-api.md`의 엔드포인트 표를 실제 코드 기준으로 전면 재작성. 이전에는 3개 엔드포인트만 누락된 것으로 파악했으나, 실제로는 재생목록·프로젝트 커버·심볼릭 작곡(ABC) 관련 엔드포인트 대부분(`plan`/`abc-check`/`cover-transcribe`/`abc-file`/`abc-notes`+하위 경로/`llm/abc-edit`/`generate/status`)이 문서화되어 있지 않았음.
+- `Setting/` 폴더(앱 레벨 설정 저장소, `library/`와 별개)의 존재와 용도를 `docs/local-api.md`에 문서화.
+- `docs/models.md`의 SheetSage2 절이 "config.json 미설치" 기준으로 정체되어 있던 것을, 실제로 설치가 끝난 현재 상태(config.json+코드 완비, 별도 Python venv만 남음)로 갱신.
+
+## `369caf3` — Enlarge and simplify the sidebar by-line (2026-09-12)
+
+사이드바 태그라인을 "(by madwind)"에서 괄호를 뺀 "by madwind"로 단순화하고, 로고 텍스트와 비슷한 크기로 폰트 크기를 키움.
+
+## `c799927` — Replace sidebar tagline with a by-line (2026-09-12)
+
+사이드바 로고 아래의 "나만의 음악 작업실" 태그라인을 저작자 표시 "(by madwind)"로 교체.
+
+## `e56c304` — Add post-processing/EQ studio and structural instrumental generation (2026-09-12)
+
 **"악기만" 실제 구현으로 재작업**
 
 - 직전 커밋(`89c5406`)에서 시도한 "가사 비우기" 방식을 되돌림 — audio.cpp/공식 Python 엔진 둘 다 빈 가사를 하드 거부(`Yue2 requires non-empty lyrics`)한다는 것을 소스에서 확인.

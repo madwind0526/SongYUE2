@@ -30,6 +30,17 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 
 초안을 생성하면(`POST /api/generate` 성공) 해당 JSON과 오디오가 `library/setting/`에서 `library/music/`으로 **이동**합니다(복사 후 보관하는 방식이 아님). 제목을 바꾸면(PATCH) 파일명과 오디오 파일명도 함께 바뀝니다. 삭제하면 JSON과 오디오가 함께 지워집니다.
 
+### `Setting/` 폴더 (앱 레벨 설정, `library/`와 별개)
+
+`library/setting/`은 `listEntries()`가 그 안의 모든 `*.json`을 프로젝트 초안으로 스캔하는 폴더라서, EQ 프리셋이나 전체 후처리 설정처럼 곡과 무관한 JSON을 함께 두면 프로젝트 목록이 오염됩니다. 그래서 이 둘은 `library/`가 아닌 프로젝트 루트의 별도 `Setting/` 폴더에 저장됩니다(사용자가 위치를 바꿀 수 없는 고정 경로):
+
+| 폴더 | 내용 | 저장 형식 |
+|---|---|---|
+| `Setting/EQ-preset/` | 사용자가 저장한 10밴드 EQ 프리셋 | `<프리셋 이름>.json` = `{name, eq:[10개 숫자]}` |
+| `Setting/PostProcess/` | 사용자가 저장한 전체 후처리 설정(EQ+FxSound+리버브/에코) | `<프리셋 이름>.json` = `{name, params:{...}}` |
+
+두 폴더 모두 다른 PC로 옮기려면 폴더째 복사해야 하며, 동기화 기능은 없습니다.
+
 ## 데이터 및 응답
 
 - 설정: `data/settings.json`에는 `provider`/`enginePath`/`pythonEnginePath`/`settingPath`/`musicPath`/`examplesPath`/`saveFormat`만 저장합니다. API 키/연결 주소/모델 이름은 저장하지 않고 매 요청마다 `.env`(`process.env`)에서 읽습니다.
@@ -48,17 +59,56 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 | GET `/api/examples` | 예시 배열(`id,title,genre?,caption?,color?,style,lyrics,createdAt`) |
 | POST `/api/examples` | `{title,style,lyrics,genre?,caption?}` → 201 저장된 예시 |
 | DELETE `/api/examples/:id` | 예시 삭제 → `{ok:true,id}` |
+| GET `/api/playlists` | 재생목록 배열(`id,name,songIds[],createdAt,updatedAt`), 생성순 정렬 |
+| POST `/api/playlists` | `{name}` → 201 저장된 빈 재생목록(`songIds:[]`) |
+| PATCH `/api/playlists/:id` | `{name?,songIds?}` → 수정된 재생목록. `songIds`는 문자열 배열만 허용(최대 500개), 이름을 바꾸면 파일명도 함께 바뀜 |
+| DELETE `/api/playlists/:id` | 재생목록 삭제 → `{ok:true,id}` |
 | GET `/api/projects` | `library/setting`+`library/music`를 합쳐 최신 생성순으로 반환 |
-| POST `/api/projects` | `{title,lyrics,style,modelId,seed,steps,cot,mode}` → 201 저장된 draft(`library/setting/{제목}.json`) |
+| POST `/api/projects` | `{title,lyrics,style,modelId,seed,steps,cot,vocalGender?,instrumental?,abc?,mode}` → 201 저장된 draft(`library/setting/{제목}.json`) |
 | GET `/api/projects/:id` | 저장된 프로젝트 |
 | PATCH `/api/projects/:id` | `{title?,notes?,favorite?}` → 수정된 프로젝트. 제목이 바뀌면 파일명(및 완성곡이면 오디오 파일명)도 함께 바뀜 |
 | DELETE `/api/projects/:id` | 프로젝트 JSON과(완성곡이면) 오디오, `runs/<id>/`를 삭제 → `{ok:true,id}`. 없는 프로젝트는 404 |
 | GET `/api/projects/:id/export` | 프로젝트 JSON 다운로드 |
+| POST `/api/projects/:id/cover` | `{dataUrl}`(PNG/JPEG/WEBP, base64, 최대 20MB) → 저장된 프로젝트(커버 경로 포함). 기존 커버는 교체 전 삭제 |
+| DELETE `/api/projects/:id/cover` | 커버 이미지 삭제 → `{ok:true}` |
+| GET `/api/projects/:id/cover` | 커버 이미지 바이트 스트리밍. 없으면 404 |
 | GET `/api/llm/models` | Ollama 설치 모델 `{models:[{name,size}]}` |
 | POST `/api/llm/test` | `{}` → `{ok:true,text,provider,model}` |
 | POST `/api/llm/assist` | `{task:'lyrics'|'style',prompt,lyrics,style}` → `{text,provider,model}` |
-| POST `/api/generate` | `{projectId}` → 선택 모델에 따라 audio.cpp GGUF 또는 공식 Python YuE2 엔진을 실행해 음악을 생성하고, 성공하면 `library/music`에 새 완성곡으로 저장합니다. 200과 갱신된 프로젝트(`status:'completed'`, `audioPath`, `durationMs`, `rtf`, `saveError?`) 반환. 모델·가사·스타일·시드·스텝·cot은 저장된 프로젝트 값을 그대로 사용합니다. 400: 엔진 경로 미설정/모델 미지원/모델 파일 누락/가사·스타일 없음. 409: 이미 다른 곡을 생성 중. 502: 엔진 실행 실패, 제한 시간(10분) 초과, 종료 코드 비정상 — `runs/<id>/generate.log`에서 로그 확인 가능 |
+| POST `/api/llm/abc-edit` | `{instruction,abc}` → `{abc,provider,model}`. LLM에게 ABC notation을 지시사항대로 수정하게 하고, 코드펜스를 벗겨낸 결과 전체를 반환(설명 텍스트 없음). 지시사항이 비어있으면 400 |
+| POST `/api/generate` | `{projectId}` → 선택 모델에 따라 audio.cpp GGUF 또는 공식 Python YuE2 엔진을 실행해 음악을 생성하고, 성공하면 `library/music`에 새 완성곡으로 저장합니다. 200과 갱신된 프로젝트(`status:'completed'`, `audioPath`, `durationMs`, `rtf`, `saveError?`) 반환. 모델·가사·스타일·시드·스텝·cot·instrumental·abc는 저장된 프로젝트 값을 그대로 사용합니다. 400: 엔진 경로 미설정/모델 미지원/모델 파일 누락/가사·스타일 없음. 409: 이미 다른 곡을 생성 중. 502: 엔진 실행 실패, 제한 시간(10분) 초과, 종료 코드 비정상 — `runs/<id>/generate.log`에서 로그 확인 가능 |
+| GET `/api/generate/status` | 생성 진행 상황 폴링용. `{active:false,elapsedMs:0,expectedMs:0}` 또는 `{active:true,projectId,elapsedMs,expectedMs}` |
 | GET `/api/projects/:id/audio` | 완성된 오디오를 실제 확장자에 맞는 Content-Type(wav/flac/mp3/mp4)으로 스트리밍. 아직 생성되지 않았거나 파일이 없으면 404 |
+| POST `/api/projects/:id/post-process` | `{dataUrl}`(`audio/wav`, base64, 최대 150MB) → 브라우저에서 Web Audio로 EQ/FX/리버브·에코 처리된 오디오를 원본과 같은 파일 형식(mp4는 원본 비디오+새 오디오 트랙 합성)으로 재인코딩해 바이너리로 응답(다운로드). 원본 프로젝트 파일 자체는 바뀌지 않음. `ffmpeg`가 없거나 실패하면 502 |
+
+### 심볼릭 작곡 (ABC notation)
+
+| 메서드 / 주소 | 요청 / 응답 |
+|---|---|
+| POST `/api/plan` | `{title?,lyrics,style,cot,seed?,vocalGender?,instrumental?}` → `{abc}`. 프로젝트를 저장하지 않는 상태 없는(stateless) 미리보기 — 공식 Python 엔진으로 심볼릭 작곡만 실행. 409: 이미 다른 곡 생성/작곡 중 |
+| POST `/api/abc-check` | `{abc}` → `{valid:true,report}` 또는 `{valid:false,error}`. `abc_tools.py inspect`로 두 성부(Vocal/Ins) 구조·박자·화음을 검사 |
+| POST `/api/cover-transcribe` | `{dataUrl}`(오디오, base64, 최대 50MB), `{task?:'full'|'melody-full'|'melody-vocal'}` → `{abc}`. SheetSage2로 오디오에서 멜로디/화음을 전사해 native ABC로 반환. `sheetSagePythonPath` 미설정 시 400, 실행 실패 시 502 |
+| POST `/api/abc-file` | `{abc,filename?,title?,folder?}` → `{ok:true,folder,filename,path}`. ABC 텍스트를 `.abc` 파일로 저장(`folder` 생략 시 `abcNotesPath` 또는 기본 `library/abc-note`) |
+| GET `/api/abc-notes` | ABC 라이브러리 배열(JSON 노트 + `.abc` 파일 노트를 합쳐 `createdAt` 순). `.abc` 파일 노트의 `id`는 파일명 기반(`abcfile-<base64(파일명)>`)이라 제목을 바꾸면 id도 바뀜 |
+| POST `/api/abc-notes` | `{title,abc}` → 201 저장된 `.abc` 파일 노트(기본 저장 형식) |
+| PATCH `/api/abc-notes/:id` | `{title?,abc?}` → 수정된 노트. 제목이 바뀌면 파일명(및 `.abc` 노트면 id)도 함께 바뀜 |
+| DELETE `/api/abc-notes/:id` | 노트와(있으면) 커버 이미지를 삭제 → `{ok:true,id}` |
+| POST `/api/abc-notes/:id/cover` | `{dataUrl}`(PNG/JPEG/WEBP, base64, 최대 20MB) → 수정된 노트(커버 경로 포함) |
+| DELETE `/api/abc-notes/:id/cover` | 커버 이미지 삭제 → `{ok:true}` |
+| GET `/api/abc-notes/:id/cover` | 커버 이미지 바이트 스트리밍. 없으면 404 |
+
+### EQ 프리셋 / 전체 후처리 설정 프리셋
+
+`Setting/EQ-preset/`, `Setting/PostProcess/`에 이름 붙여 저장하는 사용자 프리셋. 두 그룹 모두 같은 GET(목록)/POST(저장·덮어쓰기)/DELETE(`?name=`, URL 인코딩 필요) 패턴입니다.
+
+| 메서드 / 주소 | 요청 / 응답 |
+|---|---|
+| GET `/api/eq-presets` | 저장된 EQ 프리셋 배열(`{name,eq:[10개 숫자]}`), 이름순 정렬 |
+| POST `/api/eq-presets` | `{name,eq:[10개 숫자]}` → 저장된 프리셋(같은 이름이면 덮어씀). `eq`가 10개 유한수 배열이 아니면 400 |
+| DELETE `/api/eq-presets?name=` | 프리셋 삭제 → `{ok:true}`. 없으면 404 |
+| GET `/api/postprocess-settings` | 저장된 전체 설정 프리셋 배열(`{name,params:{...}}`), 이름순 정렬 |
+| POST `/api/postprocess-settings` | `{name,params:{...}}` → 저장된 프리셋(같은 이름이면 덮어씀). `params`가 객체가 아니면 400 |
+| DELETE `/api/postprocess-settings?name=` | 프리셋 삭제 → `{ok:true}`. 없으면 404 |
 
 ## 음악 생성 엔진 (audio.cpp)
 
@@ -74,9 +124,17 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 
 audio.cpp 자체의 설치/빌드 방법은 [audiocpp-setup.md](audiocpp-setup.md)를 참고하세요. 한 번에 한 곡만 생성합니다(서버 내부 플래그로 동시 실행 차단, GPU 하나를 공유하기 때문). `wav`가 아닌 형식을 선택했는데 `ffmpeg`가 PATH에 없으면 변환이 실패해도 생성 자체는 성공 처리하고 `wav`로 대신 저장하며, `saveError`에 이유를 남깁니다.
 
+### "악기만"(구조적 무보컬)이 실제로 동작하는 방식 — 원본(공식 Python) 모델 한정
+
+YuE2는 범용 악보 리더가 아니라, `V: Vocal`/`V: Ins` 두 성부를 각각 사람 목소리/악기 연주로 렌더링하도록 학습된 2채널 전용 모델입니다. `V: Vocal` 성부를 통째로 지우면 `AbcError: Incomplete native two-voice ABC`로 즉시 실패하고, 지우지 않더라도 그 자리를 실제 멜로디로 채우면 YuE2가 다시 사람 목소리로 합성해 버립니다. 화성(코드) 심볼은 이 native 방언에서 오직 `Vocal` 성부에만 존재할 수 있고(`Ins`에 있으면 파싱 단계에서 거부됩니다), Vocal이 쉬는 구간에도 화성 전달을 위해 그대로 남아 있어야 합니다.
+
+그래서 `instrumental:true`로 생성할 때 서버는 `abc_tools.py mute-voice <원본.abc> <output.abc> --keep-voice Ins`를 실행합니다 — `Vocal`의 소리 나는 음표만 같은 박자 그리드 위의 쉼표(`z`)로 바꾸고, `"Am7"` 같은 화음 기호는 코드가 아니라 텍스트 위치만 유지되므로 그대로 남아 `"Am7"z16` 형태가 됩니다. `Ins` 성부는 그대로(코드 없이 실제 반주 멜로디)이며, 이렇게 만든 ABC를 `--abc-file`로 넘겨 생성합니다. 기존에 있던 `strip-chords --keep-voice`(모든 화음 기호를 지우는 명령, `cot="melody"` 재작곡용)로는 Vocal의 화성 정보까지 사라져 이 용도에 맞지 않아 별도 명령으로 분리했습니다. GGUF 모델(Q4/Q8/BF16)은 이 구조적 방식을 쓰지 않으며 `instrumental, no vocals` 스타일 힌트로만 지원합니다(보장 없음).
+
 ## SheetSage2
 
 `POST /api/cover-transcribe`는 설정의 `sheetSagePythonPath`로 별도 Python 환경을 실행합니다. `models/m-a-p/SheetSage2/config.json`과 `models/m-a-p/SheetSage2/model.safetensors`가 있으면 `--model models/m-a-p/SheetSage2 --offline`으로 로컬 모델을 사용합니다. 가중치 파일만 있으면 준비가 끝난 것이 아니며, Hugging Face 스냅샷의 Python 코드와 설정 파일이 같은 폴더에 있어야 합니다.
+
+**현재 상태(2026-09-12)**: `models/m-a-p/SheetSage2/`에 `config.json`과 나머지 Python 코드 파일(`modeling_sheetsage2.py`, `pipeline_sheetsage2.py`, `notation_sheetsage2.py` 등)까지 모두 설치되어 있어, 앱은 이 폴더를 오프라인 모델로 인식하는 조건(`config.json`+`model.safetensors` 존재)을 이미 만족합니다. 남은 준비물은 **SheetSage2 전용 Python 가상환경**입니다: 이 모델은 `test/YuE2-source/requirements-sheetsage2.txt`에 고정된 버전(`torch==2.8.0`, `transformers==4.45.2` 등)이 필요한데, YuE2 본체 실행에 쓰는 기존 `.venv`는 이미 더 최신 버전(`torch 2.10`, `transformers 4.57`)이 설치돼 있어 같은 venv를 공유하면 버전 충돌이 날 수 있습니다. 별도 venv를 만들어 `pip install -r requirements-sheetsage2.txt`로 설치한 뒤, 설정 화면에서 `sheetSagePythonPath`를 그 venv의 `python.exe`로 지정해야 `POST /api/cover-transcribe`가 실제로 동작합니다. `transcribe.py`(전사 스크립트)는 `pythonScriptPath`와 같은 폴더(`test/YuE2-source/skills/yue2-music/scripts/`)에 이미 있습니다.
 
 ## 검증
 
