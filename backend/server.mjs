@@ -53,6 +53,7 @@ const DEFAULT_STYLE_PRESETS = 'Acoustic\nCity Pop\nBallad\nLo-fi\nJazz';
 const DEFAULT_VISUALIZER_ENABLED = true;
 const DEFAULT_VISUALIZER_RING_COUNT = 18;
 const DEFAULT_VISUALIZER_HUE = 190;
+const DEFAULT_VISUALIZER_LINE_WIDTH = 1;
 const VOCAL_HINTS = { male: ', male vocal', female: ', female vocal', duet: ', duet: male and female vocals' };
 const vocalHint = (gender) => VOCAL_HINTS[gender] || '';
 // YuE2 has no dedicated instrumental flag and both the audio.cpp and Python engines require
@@ -165,6 +166,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     visualizerEnabled: typeof stored.visualizerEnabled === 'boolean' ? stored.visualizerEnabled : DEFAULT_VISUALIZER_ENABLED,
     visualizerRingCount: Number.isInteger(stored.visualizerRingCount) ? Math.max(1, Math.min(40, stored.visualizerRingCount)) : DEFAULT_VISUALIZER_RING_COUNT,
     visualizerHue: Number.isFinite(stored.visualizerHue) ? ((stored.visualizerHue % 360) + 360) % 360 : DEFAULT_VISUALIZER_HUE,
+    visualizerLineWidth: Number.isFinite(stored.visualizerLineWidth) ? Math.max(0.5, Math.min(8, stored.visualizerLineWidth)) : DEFAULT_VISUALIZER_LINE_WIDTH,
     pythonMemoryBudgetGib: Number.isFinite(stored.pythonMemoryBudgetGib) ? stored.pythonMemoryBudgetGib : (Number(process.env.PYTHON_MEMORY_BUDGET_GIB) || 11),
     saveFormat: SAVE_FORMATS.has(stored.saveFormat) ? stored.saveFormat : (SAVE_FORMATS.has(process.env.SAVE_FORMAT) ? process.env.SAVE_FORMAT : 'wav'),
     viewMode: VIEW_MODES.has(stored.viewMode) ? stored.viewMode : 'list',
@@ -495,7 +497,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   }
   const publicSettings = () => {
     const env = providerFromEnv(settings.provider);
-    return { provider: settings.provider, endpoint: env.endpoint, llmModel: env.model, enginePath: settings.enginePath, pythonEnginePath: settings.pythonEnginePath, pythonScriptPath: settings.pythonScriptPath, pythonMemoryBudgetGib: settings.pythonMemoryBudgetGib, sheetSagePythonPath: settings.sheetSagePythonPath, settingPath: settings.settingPath, musicPath: settings.musicPath, examplesPath: settings.examplesPath, coversPath: settings.coversPath, abcNotesPath: settings.abcNotesPath, stylePresets: settings.stylePresets, visualizerEnabled: settings.visualizerEnabled, visualizerRingCount: settings.visualizerRingCount, visualizerHue: settings.visualizerHue, saveFormat: settings.saveFormat, viewMode: settings.viewMode, outputDirectory: path.relative(root, outputDirectory) || '.', hasApiKey: Boolean(env.apiKey), apiKey: env.apiKey ? '***' : null, apiKeyStorage: 'env' };
+    return { provider: settings.provider, endpoint: env.endpoint, llmModel: env.model, enginePath: settings.enginePath, pythonEnginePath: settings.pythonEnginePath, pythonScriptPath: settings.pythonScriptPath, pythonMemoryBudgetGib: settings.pythonMemoryBudgetGib, sheetSagePythonPath: settings.sheetSagePythonPath, settingPath: settings.settingPath, musicPath: settings.musicPath, examplesPath: settings.examplesPath, coversPath: settings.coversPath, abcNotesPath: settings.abcNotesPath, stylePresets: settings.stylePresets, visualizerEnabled: settings.visualizerEnabled, visualizerRingCount: settings.visualizerRingCount, visualizerHue: settings.visualizerHue, visualizerLineWidth: settings.visualizerLineWidth, saveFormat: settings.saveFormat, viewMode: settings.viewMode, outputDirectory: path.relative(root, outputDirectory) || '.', hasApiKey: Boolean(env.apiKey), apiKey: env.apiKey ? '***' : null, apiKeyStorage: 'env' };
   };
   async function localFile(relativePath) {
     const file = path.join(root, relativePath);
@@ -614,9 +616,10 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           if (input.visualizerEnabled !== undefined) next.visualizerEnabled = input.visualizerEnabled === true;
           if (input.visualizerRingCount !== undefined) next.visualizerRingCount = Math.max(1, Math.min(40, Math.round(Number(input.visualizerRingCount)) || DEFAULT_VISUALIZER_RING_COUNT));
           if (input.visualizerHue !== undefined) next.visualizerHue = ((Math.round(Number(input.visualizerHue)) || 0) % 360 + 360) % 360;
+          if (input.visualizerLineWidth !== undefined) next.visualizerLineWidth = Math.max(0.5, Math.min(8, Number(input.visualizerLineWidth) || DEFAULT_VISUALIZER_LINE_WIDTH));
           if (input.saveFormat !== undefined) next.saveFormat = input.saveFormat;
           if (input.viewMode !== undefined) next.viewMode = input.viewMode;
-          await saveJson(settingsFile, { provider: next.provider, enginePath: next.enginePath, pythonEnginePath: next.pythonEnginePath, pythonScriptPath: next.pythonScriptPath, pythonMemoryBudgetGib: next.pythonMemoryBudgetGib, sheetSagePythonPath: next.sheetSagePythonPath, settingPath: next.settingPath, musicPath: next.musicPath, examplesPath: next.examplesPath, coversPath: next.coversPath, abcNotesPath: next.abcNotesPath, stylePresets: next.stylePresets, visualizerEnabled: next.visualizerEnabled, visualizerRingCount: next.visualizerRingCount, visualizerHue: next.visualizerHue, saveFormat: next.saveFormat, viewMode: next.viewMode });
+          await saveJson(settingsFile, { provider: next.provider, enginePath: next.enginePath, pythonEnginePath: next.pythonEnginePath, pythonScriptPath: next.pythonScriptPath, pythonMemoryBudgetGib: next.pythonMemoryBudgetGib, sheetSagePythonPath: next.sheetSagePythonPath, settingPath: next.settingPath, musicPath: next.musicPath, examplesPath: next.examplesPath, coversPath: next.coversPath, abcNotesPath: next.abcNotesPath, stylePresets: next.stylePresets, visualizerEnabled: next.visualizerEnabled, visualizerRingCount: next.visualizerRingCount, visualizerHue: next.visualizerHue, visualizerLineWidth: next.visualizerLineWidth, saveFormat: next.saveFormat, viewMode: next.viewMode });
           settings = next;
           if (input.settingPath !== undefined) await mkdir(settingDir(), { recursive: true });
           if (input.musicPath !== undefined) await mkdir(musicDir(), { recursive: true });
