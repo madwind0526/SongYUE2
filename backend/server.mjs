@@ -50,6 +50,99 @@ const VIEW_MODES = new Set(['list', 'card']);
 const DEFAULT_ENGINE_PATH = path.join('engine', 'audio.cpp', 'build', 'windows-cuda-release', 'bin', 'audiocpp_cli.exe');
 const VOCAL_GENDERS = new Set(['', 'male', 'female', 'duet']);
 const DEFAULT_STYLE_PRESETS = 'Acoustic\nCity Pop\nBallad\nLo-fi\nJazz';
+export const DEFAULT_INSTRUMENTAL_ABC = `X:1
+T:
+M:4/4
+L:1/16
+Q:1/4=120
+V: Vocal clef=treble name="Vocal Melody" snm="Vocal"
+V: Ins clef=treble name="Ins Melody" snm="Inst."
+K:C
+% intro
+V: Vocal
+"C"z16 | "G"z16 | "Am"z16 | "F"z16 |
+V: Ins
+c4 e4 g4 e4 | d4 g4 b4 g4 | c4 e4 a4 e4 | A4 c4 f4 c4 |
+% verse
+V: Vocal
+"C"z8 "G"z8 | "Am"z8 "F"z8 | "C"z8 "G"z8 | "F"z8 "G"z8 |
+V: Ins
+e2g2 c'2g2 d2g2 b2g2 | c2e2 a2c2 A2c2 f2c2 | e2g2 c'2g2 d2g2 b2g2 | A2c2 f2c2 d2g2 b2g2 |
+% chorus
+V: Vocal
+"C"z16 | "F"z16 | "G"z16 | "C"z16 |
+V: Ins
+c'4 g4 e4 g4 | a4 f4 c4 f4 | b4 g4 d4 g4 | c'8 c4 z4 |
+`;
+
+export function toInstrumentalAbc(abc) {
+  if (!abc || !abc.trim()) return DEFAULT_INSTRUMENTAL_ABC;
+  const lines = abc.split(/\r?\n/);
+  const result = [];
+  let currentVoice = null;
+  let lastVocalLine = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith('V: Vocal') && !line.includes('clef=')) {
+      currentVoice = 'Vocal';
+      result.push(line);
+      continue;
+    }
+    if (line.startsWith('V: Ins') && !line.includes('clef=')) {
+      currentVoice = 'Ins';
+      result.push(line);
+      continue;
+    }
+    if (line.startsWith('V:')) {
+      result.push(line);
+      continue;
+    }
+    if (currentVoice === 'Vocal' && line.trim().endsWith('|')) {
+      lastVocalLine = line;
+      const bars = line.trim().slice(0, -1).split('|');
+      const vocalBars = bars.map(bar => {
+        const tokenRegex = /"([^"]*)"|\[K:[^\]]+\]|(\^\^|__|\^|_|=)?([A-Ga-gz])([,']*)([0-9]*)(-?)/g;
+        let m;
+        let curChord = null;
+        let curDur = 0;
+        const events = [];
+        while ((m = tokenRegex.exec(bar)) !== null) {
+          if (m[1] !== undefined) {
+            if (curChord !== null || curDur > 0) {
+              events.push({ chord: curChord, dur: curDur });
+              curDur = 0;
+            }
+            curChord = m[1];
+          } else if (m[3] !== undefined) {
+            const dur = parseInt(m[5] || '1', 10);
+            curDur += dur;
+          }
+        }
+        if (curChord !== null || curDur > 0) {
+          events.push({ chord: curChord, dur: curDur });
+        }
+        return events.map(e => e.chord ? `"${e.chord}"z${e.dur > 1 ? e.dur : ''}` : `z${e.dur > 1 ? e.dur : ''}`).join(' ');
+      });
+      result.push(' ' + vocalBars.join(' | ') + ' |');
+      continue;
+    }
+    if (currentVoice === 'Ins' && line.trim().endsWith('|')) {
+      if (lastVocalLine && (line.includes('Z') || !/[A-Ga-g]/.test(line))) {
+        const insLine = lastVocalLine.replace(/"[^"]*"/g, '').replace(/\s+/g, ' ').trim();
+        result.push(' ' + insLine);
+      } else {
+        result.push(line);
+      }
+      lastVocalLine = null;
+      continue;
+    }
+    result.push(line);
+  }
+  return result.join('\n');
+}
+
+
 const VOCAL_HINTS = { male: ', male vocal', female: ', female vocal', duet: ', duet: male and female vocals' };
 const vocalHint = (gender) => VOCAL_HINTS[gender] || '';
 // YuE2 has no dedicated instrumental flag and both the audio.cpp and Python engines require
@@ -466,7 +559,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const sheetSageDir = path.join(root, 'models', 'm-a-p', 'SheetSage2');
     const hasLocalSheetSage = await exists(path.join(sheetSageDir, 'config.json')) && await exists(path.join(sheetSageDir, 'model.safetensors'));
     const outDir = path.join(outputDirectory, 'cover-transcribe', randomUUID());
-    await mkdir(outDir, { recursive: true });
+    await mkdir(path.dirname(outDir), { recursive: true });
     const args = [transcribeScript, audioFile, '--output', outDir, '--task', task, ...(hasLocalSheetSage ? ['--model', sheetSageDir, '--offline'] : [])];
     const log = await new Promise((resolve, reject) => {
       const child = spawnImpl(python, args, { windowsHide: true, cwd: path.dirname(transcribeScript) });
@@ -852,6 +945,15 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           if (result.code === 0 && parsed) return send(200, { valid: true, report: parsed });
           return send(200, { valid: false, error: parsed?.error || result.text.trim().slice(0, 2000) || '악보를 해석할 수 없습니다.' });
         } finally { await unlink(tempFile).catch(() => {}); }
+      }
+            if (req.method === 'POST' && pathname === '/api/abc-instrumental') {
+        const input = await body(req, 512 * 1024);
+        const rawAbc = text(input.abc, 200000);
+        if (!rawAbc.trim()) {
+          return send(200, { abc: DEFAULT_INSTRUMENTAL_ABC, template: true });
+        }
+        const converted = toInstrumentalAbc(rawAbc);
+        return send(200, { abc: converted, template: false });
       }
       if (req.method === 'POST' && pathname === '/api/cover-transcribe') {
         const input = await body(req, 60 * 1024 * 1024);

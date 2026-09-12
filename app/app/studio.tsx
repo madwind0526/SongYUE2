@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import * as ABCJS from 'abcjs';
-import { AudioLines, ArrowDownToLine, ArrowRight, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Cpu, Dices, Download, FastForward, FileText, Folder, FolderOpen, Guitar, Headphones, Heart, Home, Image as ImageIcon, LayoutGrid, ListMusic, ListPlus, LoaderCircle, Menu, Mic, MoreVertical, Music2, Pause, Pencil, Play, Plus, Power, RefreshCw, Rewind, RotateCcw, Save, Search, Settings2, ShieldCheck, SkipBack, SkipForward, SlidersHorizontal, Sparkles, Square, Trash2, Upload, Volume2, WandSparkles, X } from 'lucide-react';
+import { AudioLines, ArrowDownToLine, Disc3, ArrowRight, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Cpu, Dices, Download, FastForward, FileText, Folder, FolderOpen, Guitar, Headphones, Heart, Home, Image as ImageIcon, LayoutGrid, ListMusic, ListPlus, LoaderCircle, Menu, Mic, MoreVertical, Music2, Pause, Pencil, Play, Plus, Power, RefreshCw, Rewind, RotateCcw, Save, Search, Settings2, ShieldCheck, SkipBack, SkipForward, SlidersHorizontal, Sparkles, Square, Trash2, Upload, Volume2, WandSparkles, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/compone
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogFooter, AlertDialogTitle, AlertDialogDescription, AlertDialogAction, AlertDialogCancel } from '@/components/ui/alert-dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Progress } from '@/components/ui/progress';
-import { api, emptyDraft, initialSettings, models, providers, saveFormats, viewModes, titles, gb, DEFAULT_SETTING_PATH, DEFAULT_MUSIC_PATH, DEFAULT_EXAMPLES_PATH, DEFAULT_COVERS_PATH, DEFAULT_ABC_NOTES_PATH, DEFAULT_STYLE_PRESETS, DEFAULT_ENGINE_PATH, PYTHON_MODEL_MIN_VRAM_MB, type Page, type Draft, type Project, type Settings, type Inventory, type Example, type Playlist, type AbcNote, type SaveFormat, type SystemInfo } from './studio-data';
+import { toInstrumentalAbc, DEFAULT_INSTRUMENTAL_ABC, api, emptyDraft, initialSettings, models, providers, saveFormats, viewModes, titles, gb, DEFAULT_SETTING_PATH, DEFAULT_MUSIC_PATH, DEFAULT_EXAMPLES_PATH, DEFAULT_COVERS_PATH, DEFAULT_ABC_NOTES_PATH, DEFAULT_STYLE_PRESETS, DEFAULT_ENGINE_PATH, PYTHON_MODEL_MIN_VRAM_MB, type Page, type Draft, type Project, type Settings, type Inventory, type Example, type Playlist, type AbcNote, type SaveFormat, type SystemInfo, type VocalGender } from './studio-data';
 
 type SaveFilePickerFn = (options?: { suggestedName?: string; types?: { description: string; accept: Record<string, string[]> }[] }) => Promise<{ name: string; createWritable: () => Promise<{ write: (data: string | Blob) => Promise<void>; close: () => Promise<void> }> }>;
 const RANDOMIZE_SEED_KEY = 'songyue2-randomize-seed';
@@ -834,6 +834,20 @@ export default function Studio() {
   const [abcEditText, setAbcEditText] = useState('');
   const [currentAbcNoteId, setCurrentAbcNoteId] = useState<string | null>(null);
   const [draftAbcDialogOpen, setDraftAbcDialogOpen] = useState(false);
+  const coverStudioFileInputRef = useRef<HTMLInputElement>(null);
+  const [coverAudioFile, setCoverAudioFile] = useState<File | null>(null);
+  const [coverAudioUrl, setCoverAudioUrl] = useState<string>('');
+  const [coverAudioDataUrl, setCoverAudioDataUrl] = useState<string>('');
+  const [coverTask, setCoverTask] = useState<'melody-full' | 'melody-vocal' | 'full'>('melody-full');
+  const [coverAbc, setCoverAbc] = useState<string>('');
+  const [coverTitle, setCoverTitle] = useState<string>('');
+  const [coverStyle, setCoverStyle] = useState<string>('Korean city pop, retro synthesizer, funky bass, groovy drums, nostalgic female vocal, 115 BPM');
+  const [coverLyrics, setCoverLyrics] = useState<string>('');
+  const [coverInstrumental, setCoverInstrumental] = useState<boolean>(false);
+  const [coverVocalGender, setCoverVocalGender] = useState<VocalGender>('female');
+  const [coverCot, setCoverCot] = useState<string>('melody');
+  const [coverSeed, setCoverSeed] = useState<number>(() => Math.floor(Math.random() * 2147483648));
+  const [coverResult, setCoverResult] = useState<Project | null>(null);
   const [draftAbcDraftText, setDraftAbcDraftText] = useState('');
   const [abcControlsSlot, setAbcControlsSlot] = useState<HTMLDivElement | null>(null);
   const [abcAiInstruction, setAbcAiInstruction] = useState('');
@@ -915,6 +929,10 @@ export default function Studio() {
     return () => lifecycle.abort();
   }, []);
   async function saveDraft(generate = false) {
+    if (draft.instrumental && !draft.lyrics.trim()) {
+      draft.lyrics = '[Instrumental]';
+      update({ lyrics: '[Instrumental]' });
+    }
     if (!draft.lyrics.trim() || !draft.style.trim()) { notify('가사와 음악 스타일을 입력해 주세요. 예시를 불러와 시작해도 좋아요.', true); return; }
     if (!Number.isInteger(draft.seed) || draft.seed < 0 || draft.seed > 2147483647 || !Number.isInteger(draft.steps) || draft.steps < 1 || draft.steps > 100) { notify('시드는 0~2147483647, 추론 단계는 1~100 사이의 정수를 입력해 주세요.', true); return; }
     const usedSeed = generate && randomizeSeed ? Math.floor(Math.random() * 2147483648) : draft.seed;
@@ -989,7 +1007,49 @@ export default function Studio() {
     update({ vocalGender: next });
   }
   // --- ABC score (symbolic plan) ---
+  
+  async function applyInstrumentalRule() {
+    let newAbc = draft.abc;
+    try {
+      const res = await api<{ abc: string; template: boolean }>('/abc-instrumental', 'POST', { abc: draft.abc });
+      if (res.abc) newAbc = res.abc;
+    } catch {
+      newAbc = toInstrumentalAbc(draft.abc);
+    }
+    const currentLyrics = draft.lyrics.trim();
+    const newLyrics = !currentLyrics || currentLyrics === '[Instrumental]'
+      ? '[Instrumental]'
+      : (currentLyrics.includes('[Instrumental]') ? draft.lyrics : `${draft.lyrics}\n[Instrumental]`);
+    
+    update({
+      lyrics: newLyrics,
+      instrumental: true,
+      abc: newAbc,
+      vocalGender: '',
+      cot: draft.cot === 'off' ? 'melody' : draft.cot,
+    });
+    notify('가사 [Instrumental] 및 악보 규칙(보컬 쉼표·악기 멜로디)이 적용되었습니다. 원샷으로 노래를 만들 수 있습니다!');
+  }
+
+  async function applyCoverInstrumentalRule() {
+    let newAbc = coverAbc;
+    try {
+      const res = await api<{ abc: string; template: boolean }>('/abc-instrumental', 'POST', { abc: coverAbc });
+      if (res.abc) newAbc = res.abc;
+    } catch {
+      newAbc = toInstrumentalAbc(coverAbc);
+    }
+    setCoverLyrics('[Instrumental]');
+    setCoverInstrumental(true);
+    setCoverAbc(newAbc);
+    notify('커버 가사와 악보에 악기만 규칙이 적용되었습니다!');
+  }
+
   async function runPlan() {
+    if (draft.instrumental && !draft.lyrics.trim()) {
+      draft.lyrics = '[Instrumental]';
+      update({ lyrics: '[Instrumental]' });
+    }
     if (!draft.lyrics.trim() || !draft.style.trim()) { notify('가사와 음악 스타일을 입력해 주세요.', true); return; }
     if (draft.cot === 'off') { notify('심볼릭 작곡은 "멜로디 계획" 또는 "멜로디와 코드 계획"에서만 가능합니다.', true); return; }
     setBusy('plan');
@@ -1001,8 +1061,17 @@ export default function Studio() {
           if (status.active && status.expectedMs > 0) setGenerateProgress(Math.min(96, Math.round(status.elapsedMs / status.expectedMs * 100)));
         }).catch(() => {});
       }, 500);
-      const result = await api<{ abc: string }>('/plan', 'POST', { title: draft.title, lyrics: draft.lyrics, style: draft.style, cot: draft.cot, seed: draft.seed, vocalGender: draft.vocalGender, instrumental: draft.instrumental });
-      update({ abc: result.abc });
+            const result = await api<{ abc: string }>('/plan', 'POST', { title: draft.title, lyrics: draft.lyrics, style: draft.style, cot: draft.cot, seed: draft.seed, vocalGender: draft.vocalGender, instrumental: draft.instrumental });
+      let plannedAbc = result.abc;
+      if (draft.instrumental) {
+        try {
+          const instRes = await api<{ abc: string }>('/abc-instrumental', 'POST', { abc: plannedAbc });
+          if (instRes.abc) plannedAbc = instRes.abc;
+        } catch {
+          plannedAbc = toInstrumentalAbc(plannedAbc);
+        }
+      }
+      update({ abc: plannedAbc });
       setCurrentAbcNoteId(null);
       notify('심볼릭 작곡을 만들었습니다. 아래 악보를 확인하고 필요하면 수정해 보세요.');
     } catch (error) { notify((error as Error).message, true); }
@@ -1297,13 +1366,364 @@ export default function Studio() {
   function abcNotePage() {
     return <section className="library-page page-scroll"><div className="page-heading library-heading"><div><span className="eyebrow">심볼릭 작곡 보관함</span><h1>ABC 악보</h1><p>열기로 검사·수정하고, 더블 클릭하면 지금 곡에 바로 불러옵니다.</p></div><div className="playlist-detail-actions"><Button variant="ghost" size="icon" aria-label={settings.viewMode === 'card' ? '목록 보기' : '카드 보기'} onClick={() => void setViewMode(settings.viewMode === 'card' ? 'list' : 'card')}>{settings.viewMode === 'card' ? <ListMusic/> : <LayoutGrid/>}</Button><Button onClick={() => navigate('create')}><Plus/>만들기로 이동</Button></div></div>{abcNotes.length ? <div className={`project-list ${settings.viewMode === 'card' ? 'card-view' : ''}`}>{abcNotes.map(note => <article className="song-card status-abc" key={note.id}><button className="song-symbol status-abc" aria-label={`${note.title} 열기`} onDoubleClick={() => loadAbcNote(note)} onClick={() => openAbcNote(note)}>{note.coverPath ? <img className="song-cover" src={abcNoteCoverUrl(note)} alt=""/> : <FileText size={24}/>}</button><button className="song-info" onDoubleClick={() => loadAbcNote(note)} onClick={() => openAbcNote(note)}><strong>{note.title}</strong><p>{new Date(note.createdAt).toLocaleDateString('ko-KR')}</p></button><Popover><PopoverTrigger render={<Button variant="ghost" size="icon" aria-label={`${note.title} 더보기`}/>}><MoreVertical/></PopoverTrigger><PopoverContent className="song-menu" align="end"><button className="song-menu-item" onClick={() => openAbcNote(note)}><Pencil size={15}/>열기</button><button className="song-menu-item" onClick={() => loadAbcNote(note)}><ArrowRight size={15}/>불러오기</button><button className="song-menu-item" onClick={() => openAbcNoteCoverPicker(note)}><ImageIcon size={15}/>커버 {note.coverPath ? '변경' : '등록'}</button>{note.coverPath && <button className="song-menu-item" onClick={() => void deleteAbcNoteCover(note)}><X size={15}/>커버 삭제</button>}<button className="song-menu-item danger" onClick={() => void deleteAbcNote(note)}><Trash2 size={15}/>삭제</button></PopoverContent></Popover></article>)}</div> : <div className="empty-library"><div className="empty-icon"><FileText size={42} strokeWidth={1.25}/></div><h2>저장된 악보가 없어요</h2><p>만들기 화면에서 심볼릭 작곡을 만들고 "라이브러리에 저장"을 눌러 보세요.</p></div>}</section>;
   }
+
+  function handleCoverStudioFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setCoverAudioFile(file);
+    if (coverAudioUrl) URL.revokeObjectURL(coverAudioUrl);
+    setCoverAudioUrl(URL.createObjectURL(file));
+    if (!coverTitle.trim()) {
+      const baseName = file.name.replace(/\.[^/.]+$/, '');
+      setCoverTitle(`${baseName} (Cover)`);
+    }
+    const reader = new FileReader();
+    reader.onload = () => setCoverAudioDataUrl(reader.result as string);
+    reader.readAsDataURL(file);
+    notify(`'${file.name}' 파일이 선택되었습니다. 멜로디 채보를 시작해 보세요.`);
+  }
+
+  async function runCoverTranscribe() {
+    if (!coverAudioDataUrl) { notify('먼저 원곡 오디오 파일을 업로드해 주세요.', true); return; }
+    setBusy('cover-transcribe');
+    try {
+      const result = await api<{ abc: string }>('/cover-transcribe', 'POST', { dataUrl: coverAudioDataUrl, task: coverTask });
+      setCoverAbc(result.abc);
+      notify('SheetSage2 멜로디 채보가 완료되었습니다! 악보를 확인하고 커버를 생성해 보세요.');
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function checkAbcScore(abcText: string) {
+    if (!abcText.trim()) return;
+    setBusy('abc-check');
+    try {
+      const result = await api<{ valid: boolean; error?: string }>('/abc-check', 'POST', { abc: abcText });
+      if (result.valid) notify('ABC 악보가 유효합니다.');
+      else notify(`악보 오류: ${result.error}`, true);
+    } catch (error) { notify((error as Error).message, true); }
+    finally { setBusy(''); }
+  }
+
+  async function runCoverGenerate() {
+    if (!coverAbc.trim()) { notify('먼저 원곡에서 멜로디를 채보하거나 ABC 악보를 준비해 주세요.', true); return; }
+    if (!coverStyle.trim()) { notify('새로운 커버 음악 스타일을 입력해 주세요.', true); return; }
+    const lyrics = coverInstrumental ? (coverLyrics.trim() || '[Instrumental]') : (coverLyrics.trim() || '[Verse]\n(Cover melody)\n\n[Chorus]\n(Cover melody)');
+    const title = coverTitle.trim() || (coverAudioFile ? `${coverAudioFile.name.replace(/\.[^/.]+$/, '')} (Cover)` : '새 커버곡');
+    setBusy('cover-generate');
+    setGenerateProgress(0);
+    let poll: number | null = null;
+    try {
+      poll = window.setInterval(() => {
+        api<{ active: boolean; elapsedMs: number; expectedMs: number }>('/generate/status').then(status => {
+          if (status.active && status.expectedMs > 0) setGenerateProgress(Math.min(96, Math.round(status.elapsedMs / status.expectedMs * 100)));
+        }).catch(() => {});
+      }, 1000);
+      const project = await api<Project>('/projects', 'POST', {
+        title,
+        lyrics,
+        style: coverStyle,
+        modelId: draft.modelId || 'yue2-original',
+        seed: coverSeed,
+        steps: draft.steps || 32,
+        cot: coverCot,
+        vocalGender: coverVocalGender,
+        instrumental: coverInstrumental,
+        abc: coverAbc,
+        mode: 'custom',
+      });
+      setProjects(previous => [project, ...previous]);
+      const completed = await api<Project>('/generate', 'POST', { projectId: project.id });
+      setGenerateProgress(100);
+      setProjects(previous => [completed, ...previous]);
+      setCoverResult(completed);
+      notify('제로샷 커버곡이 성공적으로 완성되었습니다!');
+    } catch (error) {
+      notify(`커버 생성 실패: ${(error as Error).message}`, true);
+    } finally {
+      if (poll !== null) window.clearInterval(poll);
+      setGenerateProgress(0);
+      setBusy('');
+    }
+  }
+
+  function coverStudioPage() {
+    return <section className="library-page page-scroll" style={{ maxWidth: '1120px', margin: '0 auto', paddingBottom: '80px' }}>
+      <div className="page-heading library-heading">
+        <div>
+          <span className="eyebrow">SheetSage2 × YuE2</span>
+          <h1>{titles.cover}</h1>
+          <p>원곡 오디오에서 멜로디를 자동으로 채보하고, 새로운 스타일과 편곡으로 독창적인 커버곡을 만듭니다.</p>
+        </div>
+        <Button variant="outline" onClick={() => navigate('create')}>
+          <Sparkles size={16}/>일반 작곡으로
+        </Button>
+      </div>
+
+      {coverResult && (
+        <div className="download-overview" style={{ flexDirection: 'column', alignItems: 'stretch', gap: '14px', background: 'linear-gradient(135deg, rgba(46, 62, 39, 0.7), rgba(30, 36, 29, 0.9))', borderColor: '#5a7a52', marginTop: '14px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <Check size={24} style={{ color: '#add7a5' }}/>
+              <div>
+                <h2 style={{ margin: 0, color: '#e8ece2', fontSize: '18px' }}>커버곡 완성!</h2>
+                <p style={{ margin: 0, fontSize: '13px', color: '#aec4ab' }}>{coverResult.title} · {coverResult.style}</p>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <Button variant="outline" size="sm" onClick={() => { loadProject(coverResult); }}>프로젝트 열기</Button>
+              <Button size="sm" onClick={() => { playQueue([coverResult]); }}>
+                <Play size={14}/>커버곡 재생
+              </Button>
+            </div>
+          </div>
+          
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '14px', marginTop: '4px' }}>
+            <div style={{ background: 'rgba(0,0,0,0.3)', padding: '12px', borderRadius: '8px', border: '1px solid #384038' }}>
+              <strong style={{ display: 'block', marginBottom: '8px', fontSize: '12px', color: '#a6b4a5' }}>1. 업로드한 원곡 오디오</strong>
+              {coverAudioUrl ? (
+                <audio src={coverAudioUrl} controls style={{ width: '100%', height: '36px' }}/>
+              ) : <span className="field-hint">원곡 파일</span>}
+            </div>
+            <div style={{ background: 'rgba(0,0,0,0.3)', padding: '12px', borderRadius: '8px', border: '1px solid #5a7a52' }}>
+              <strong style={{ display: 'block', marginBottom: '8px', fontSize: '12px', color: '#add7a5' }}>2. 새로 생성된 커버곡 (YuE2)</strong>
+              <audio src={`/api/projects/${coverResult.id}/audio`} controls style={{ width: '100%', height: '36px' }}/>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '20px', marginTop: '16px' }}>
+        <div className="composer" style={{ padding: '20px', borderRadius: '12px', border: '1px solid #384038', background: '#1c221b' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '26px', height: '26px', borderRadius: '50%', background: '#2e3e27', color: '#add7a5', fontWeight: 'bold', fontSize: '13px' }}>1</span>
+            <h2 style={{ fontSize: '16px', fontWeight: 600, margin: 0 }}>원곡 오디오 및 멜로디 채보</h2>
+          </div>
+
+          <input
+            ref={coverStudioFileInputRef}
+            type="file"
+            accept="audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/mp4,audio/ogg"
+            hidden
+            onChange={handleCoverStudioFileChange}
+          />
+
+          <div
+            style={{
+              border: '2px dashed #3b453b',
+              borderRadius: '8px',
+              padding: '24px 16px',
+              textAlign: 'center',
+              cursor: 'pointer',
+              background: coverAudioFile ? 'rgba(46, 62, 39, 0.25)' : 'rgba(255, 255, 255, 0.02)',
+              transition: 'all 0.2s',
+            }}
+            onClick={() => coverStudioFileInputRef.current?.click()}
+          >
+            <Upload size={28} style={{ margin: '0 auto 8px', color: '#add7a5' }}/>
+            <strong style={{ display: 'block', fontSize: '14px', marginBottom: '4px' }}>
+              {coverAudioFile ? coverAudioFile.name : '원곡 오디오 파일 선택 (또는 드래그앤드롭)'}
+            </strong>
+            <p style={{ fontSize: '12px', color: '#8a978c', margin: 0 }}>
+              WAV, MP3, FLAC, M4A, OGG 지원 (최대 50MB)
+            </p>
+          </div>
+
+          {coverAudioUrl && (
+            <div style={{ marginTop: '12px' }}>
+              <audio src={coverAudioUrl} controls style={{ width: '100%', height: '36px' }}/>
+            </div>
+          )}
+
+          <div style={{ marginTop: '16px' }}>
+            <label style={{ display: 'block', fontSize: '12px', color: '#a6b4a5', marginBottom: '6px' }}>채보 작업 유형 (SheetSage2)</label>
+            <select
+              value={coverTask}
+              onChange={event => setCoverTask(event.target.value as 'melody-full' | 'melody-vocal' | 'full')}
+              style={{ width: '100%', height: '38px', borderRadius: '6px', background: '#161a15', border: '1px solid #384038', color: '#e8ece2', padding: '0 10px', fontSize: '13px' }}
+            >
+              <option value="melody-full">보컬 + 리드 악기 멜로디 전체 채보 (권장)</option>
+              <option value="melody-vocal">보컬 전용 멜로디 채보</option>
+              <option value="full">멜로디 및 코드 진행 전체 채보</option>
+            </select>
+          </div>
+
+          <div style={{ marginTop: '16px' }}>
+            <Button
+              style={{ width: '100%', height: '42px' }}
+              onClick={() => void runCoverTranscribe()}
+              disabled={!coverAudioDataUrl || busy === 'cover-transcribe' || !online}
+            >
+              {busy === 'cover-transcribe' ? <LoaderCircle className="spin"/> : <WandSparkles size={16}/>}
+              SheetSage2로 멜로디 채보하기
+            </Button>
+          </div>
+
+          {coverAbc && (
+            <div style={{ marginTop: '20px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 600, color: '#add7a5' }}>채보된 ABC 악보</span>
+                <Button variant="ghost" size="sm" onClick={() => void checkAbcScore(coverAbc)}>
+                  <ShieldCheck size={14}/>악보 검사
+                </Button>
+              </div>
+              <Textarea
+                value={coverAbc}
+                onChange={event => setCoverAbc(event.target.value)}
+                style={{ height: '140px', fontFamily: 'monospace', fontSize: '11px' }}
+                placeholder="추출된 ABC 악보가 표시됩니다."
+              />
+              <div style={{ marginTop: '8px' }}>
+                <AbcPreview abc={coverAbc}/>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="composer" style={{ padding: '20px', borderRadius: '12px', border: '1px solid #384038', background: '#1c221b' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '16px' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '26px', height: '26px', borderRadius: '50%', background: '#2e3e27', color: '#add7a5', fontWeight: 'bold', fontSize: '13px' }}>2</span>
+            <h2 style={{ fontSize: '16px', fontWeight: 600, margin: 0 }}>새로운 스타일 및 커버곡 생성</h2>
+          </div>
+
+          <div className="form-section">
+            <label style={{ display: 'block', fontSize: '12px', color: '#a6b4a5', marginBottom: '4px' }}>커버곡 제목</label>
+            <Input
+              value={coverTitle}
+              onChange={event => setCoverTitle(event.target.value)}
+              placeholder="예: 아이유 - 밤편지 (City Pop Cover)"
+            />
+          </div>
+
+          <div className="form-section" style={{ marginTop: '12px' }}>
+            <label style={{ display: 'block', fontSize: '12px', color: '#a6b4a5', marginBottom: '4px' }}>새로운 음악 스타일 (Target Style)</label>
+            <Textarea
+              value={coverStyle}
+              onChange={event => setCoverStyle(event.target.value)}
+              placeholder="예: Korean city pop, retro synthesizer, funky bass, groovy drums, nostalgic female vocal, 115 BPM"
+              style={{ height: '70px', fontSize: '12px' }}
+            />
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginTop: '6px' }}>
+              {settings.stylePresets.split('\n').filter(Boolean).slice(0, 6).map(preset => (
+                <button
+                  key={preset}
+                  type="button"
+                  style={{ fontSize: '11px', padding: '3px 8px', borderRadius: '4px', background: '#222722', border: '1px solid #384038', color: '#a6b4a5', cursor: 'pointer' }}
+                  onClick={() => setCoverStyle(coverStyle.trim() ? `${coverStyle}, ${preset}` : preset)}
+                >
+                  +{preset}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="form-section" style={{ marginTop: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+              <label style={{ fontSize: '12px', color: '#a6b4a5' }}>커버 가사</label>
+              <button
+                type="button"
+                className="text-action"
+                onClick={() => void applyCoverInstrumentalRule()}
+              >
+                <Guitar size={13}/>[Instrumental] 삽입
+              </button>
+            </div>
+            <Textarea
+              value={coverLyrics}
+              onChange={event => setCoverLyrics(event.target.value)}
+              placeholder={coverInstrumental ? '[악기만 모드: 가사를 비워두어도 자동으로 악기 반주만 생성됩니다]' : '[Verse]\n원곡 가사 또는 개사한 가사를 적어주세요.\n\n[Chorus]\n비워두면 멜로디 허밍으로 생성됩니다.'}
+              style={{ height: '80px', fontSize: '12px' }}
+            />
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '12px' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '11px', color: '#a6b4a5', marginBottom: '4px' }}>보컬 모드</label>
+              <div className="mode-switch vocal-mode-switch" aria-label="보컬 여부"><button className={!draft.instrumental ? 'active' : ''} aria-pressed={!draft.instrumental} onClick={() => update({ instrumental: false, lyrics: draft.lyrics.trim() === '[Instrumental]' ? '' : draft.lyrics })}><Mic size={14}/>보컬+악기</button><button className={draft.instrumental ? 'active' : ''} aria-pressed={draft.instrumental} onClick={() => update({ instrumental: true, lyrics: draft.lyrics.trim() ? draft.lyrics : '[Instrumental]' })}><Guitar size={14}/>악기만</button></div>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '11px', color: '#a6b4a5', marginBottom: '4px' }}>보컬 성별</label>
+              <div className="vocal-gender-toggle" style={{ display: 'flex', gap: '4px' }}>
+                <button
+                  type="button"
+                  className={`vocal-gender-btn${coverVocalGender === 'female' ? ' active' : ''}`}
+                  onClick={() => setCoverVocalGender('female')}
+                >여성</button>
+                <button
+                  type="button"
+                  className={`vocal-gender-btn${coverVocalGender === 'male' ? ' active' : ''}`}
+                  onClick={() => setCoverVocalGender('male')}
+                >남성</button>
+                <button
+                  type="button"
+                  className={`vocal-gender-btn${coverVocalGender === 'duet' ? ' active' : ''}`}
+                  onClick={() => setCoverVocalGender('duet')}
+                >듀엣</button>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '12px' }}>
+            <div>
+              <label style={{ display: 'block', fontSize: '11px', color: '#a6b4a5', marginBottom: '4px' }}>작곡 계획 (CoT)</label>
+              <select
+                value={coverCot}
+                onChange={event => setCoverCot(event.target.value)}
+                style={{ width: '100%', height: '34px', borderRadius: '6px', background: '#161a15', border: '1px solid #384038', color: '#e8ece2', padding: '0 8px', fontSize: '12px' }}
+              >
+                <option value="melody">멜로디 유지 (재화성화 편곡, 추천)</option>
+                <option value="full">멜로디와 코드 유지</option>
+              </select>
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '11px', color: '#a6b4a5', marginBottom: '4px' }}>
+                Seed <button type="button" className="dice-btn" onClick={() => setCoverSeed(Math.floor(Math.random() * 2147483648))}><Dices size={12}/></button>
+              </label>
+              <Input
+                type="number"
+                value={coverSeed}
+                onChange={event => setCoverSeed(Number(event.target.value))}
+                style={{ height: '34px', fontSize: '12px' }}
+              />
+            </div>
+          </div>
+
+          <div style={{ marginTop: '20px' }}>
+            <Button
+              className="generate-button"
+              style={{ width: '100%', height: '44px', fontSize: '15px' }}
+              onClick={() => void runCoverGenerate()}
+              disabled={!coverAbc.trim() || !coverStyle.trim() || !!busy || !online}
+            >
+              {busy === 'cover-generate' ? <LoaderCircle className="spin"/> : <Sparkles size={17}/>}
+              YuE2 제로샷 커버곡 생성하기
+            </Button>
+          </div>
+
+          {busy === 'cover-generate' && (
+            <div className="generate-progress" style={{ marginTop: '12px' }}>
+              <Progress aria-label="커버 생성 진행률" value={generateProgress}/>
+              <span>커버곡 생성 중... {generateProgress}%</span>
+            </div>
+          )}
+        </div>
+      </div>
+    </section>;
+  }
+
   return <div className="studio-shell">
-    <aside className={`sidebar ${mobileNav ? 'mobile-open' : ''}`}><button className="brand" onClick={() => navigate('create')} aria-label="SongYUE2 만들기로 이동"><span className="brand-symbol"><AudioLines size={25}/></span><span>Song<b>YUE2</b><small>by madwind</small></span></button><div className="sidebar-main"><span className="nav-caption">작업 공간</span><nav aria-label="주 메뉴">{([{ id: 'create', icon: Sparkles }, { id: 'home', icon: Home }, { id: 'projects', icon: Folder }, { id: 'library', icon: ListMusic }, { id: 'playlists', icon: ListPlus }, { id: 'abc', icon: FileText }, { id: 'favorites', icon: Heart }] as const).map(({ id, icon: Icon }) => <button className={`nav-item ${page === id ? 'active' : ''}`} onClick={() => navigate(id)} key={id} aria-current={page === id ? 'page' : undefined}><Icon size={19}/><span>{titles[id]}</span>{id === 'create' && <Plus size={15} className="nav-plus"/>}</button>)}</nav><div className="sidebar-divider"/><div className="sidebar-subhead"><span>최근 프로젝트</span><button aria-label="프로젝트 보기" onClick={() => navigate('projects')}><Plus size={14}/></button></div>{projects.length ? projects.slice(0, 4).map(item => <button className="recent-item" key={item.id} onClick={() => loadProject(item)}><span className="recent-dot"/>{item.title}</button>) : <p className="sidebar-empty">새로운 아이디어가<br/>음악이 되는 곳.</p>}</div><div className="sidebar-bottom"><div className="local-card"><span className="status-dot"/><strong>내 PC 작업 공간</strong><p>아이디어는 자유롭게.<br/>음악은 나의 공간에.</p></div><nav aria-label="도구 메뉴"><button className={`nav-item ${page === 'models' ? 'active' : ''}`} onClick={() => navigate('models')}><Cpu size={18}/>모델 관리</button><button className={`nav-item ${page === 'settings' ? 'active' : ''}`} onClick={() => navigate('settings')}><Settings2 size={18}/>설정</button><button className="nav-item" onClick={() => { setHelp(true); setMobileNav(false); }}><CircleHelp size={18}/>도움말</button></nav><div className="profile"><span className="avatar"><Headphones size={18}/></span><div>나의 스튜디오<small>로컬 워크스페이스</small></div><span className="version">0.1</span></div></div></aside>
+    <aside className={`sidebar ${mobileNav ? 'mobile-open' : ''}`}><button className="brand" onClick={() => navigate('create')} aria-label="SongYUE2 만들기로 이동"><span className="brand-symbol"><AudioLines size={25}/></span><span>Song<b>YUE2</b><small>by madwind</small></span></button><div className="sidebar-main"><span className="nav-caption">작업 공간</span><nav aria-label="주 메뉴">{([{ id: 'create', icon: Sparkles }, { id: 'cover', icon: Disc3 }, { id: 'home', icon: Home }, { id: 'projects', icon: Folder }, { id: 'library', icon: ListMusic }, { id: 'playlists', icon: ListPlus }, { id: 'abc', icon: FileText }, { id: 'favorites', icon: Heart }] as const).map(({ id, icon: Icon }) => <button className={`nav-item ${page === id ? 'active' : ''}`} onClick={() => navigate(id)} key={id} aria-current={page === id ? 'page' : undefined}><Icon size={19}/><span>{titles[id]}</span>{id === 'create' && <Plus size={15} className="nav-plus"/>}</button>)}</nav><div className="sidebar-divider"/><div className="sidebar-subhead"><span>최근 프로젝트</span><button aria-label="프로젝트 보기" onClick={() => navigate('projects')}><Plus size={14}/></button></div>{projects.length ? projects.slice(0, 4).map(item => <button className="recent-item" key={item.id} onClick={() => loadProject(item)}><span className="recent-dot"/>{item.title}</button>) : <p className="sidebar-empty">새로운 아이디어가<br/>음악이 되는 곳.</p>}</div><div className="sidebar-bottom"><div className="local-card"><span className="status-dot"/><strong>내 PC 작업 공간</strong><p>아이디어는 자유롭게.<br/>음악은 나의 공간에.</p></div><nav aria-label="도구 메뉴"><button className={`nav-item ${page === 'models' ? 'active' : ''}`} onClick={() => navigate('models')}><Cpu size={18}/>모델 관리</button><button className={`nav-item ${page === 'settings' ? 'active' : ''}`} onClick={() => navigate('settings')}><Settings2 size={18}/>설정</button><button className="nav-item" onClick={() => { setHelp(true); setMobileNav(false); }}><CircleHelp size={18}/>도움말</button></nav><div className="profile"><span className="avatar"><Headphones size={18}/></span><div>나의 스튜디오<small>로컬 워크스페이스</small></div><span className="version">0.1</span></div></div></aside>
     {mobileNav && <button className="nav-scrim" aria-label="메뉴 닫기" onClick={() => setMobileNav(false)}/>}
     <main className="main-shell"><header className="topbar"><div className="topbar-title"><Button variant="ghost" size="icon" className="mobile-menu" aria-label="메뉴 열기" onClick={() => setMobileNav(true)}><Menu/></Button><span className="breadcrumb">작업 공간</span><ChevronRight size={14}/><strong>{titles[page]}</strong></div><Popover open={modelOpen} onOpenChange={setModelOpen}><PopoverTrigger render={<Button variant="outline" className="model-trigger" aria-label="음악 모델 선택"/>}><AudioLines size={17}/><span>{model.name}</span><span className="model-recommended">{model.id === 'yue2-q4' ? '추천' : model.engine}</span><ChevronDown size={15}/></PopoverTrigger><PopoverContent className="model-menu" align="start"><div className="menu-heading">음악 생성 모델<span>새 작업에 적용할 모델을 선택하세요</span></div>{models.map(item => <button key={item.id} className={`model-option ${draft.modelId === item.id ? 'selected' : ''}`} disabled={item.selectable === false} onClick={() => { if (item.selectable === false) return; update({ modelId: item.id }); setModelOpen(false); }}><Cpu size={18}/><span><strong>{item.name}<em>{item.badge}</em></strong><small>{item.detail} · {item.size}</small></span>{draft.modelId === item.id && <Check size={17}/>}</button>)}<div className="model-menu-footer">모델 파일과 실행 엔진의 준비 상태는 별도로 확인합니다.<button onClick={() => { navigate('models'); setModelOpen(false); }}>모델 관리 <ArrowRight size={13}/></button></div></PopoverContent></Popover><div className="device-status"><span className={`status-dot ${online ? '' : 'offline'}`}/><span>{online ? '로컬 연결됨' : '로컬 연결 대기'}</span><span className="device-divider"/><Cpu size={14}/><span>RTX 5070 <span className="muted">· 12 GB</span></span></div></header>
-    {page === 'create' ? <div className="creation-layout"><section className="composer" aria-label="노래 편집기"><div className="composer-scroll"><div className="composer-heading"><div><span className="eyebrow">작은 아이디어, 나만의 음악</span><h1>어떤 노래를 만들까요?</h1></div><Music2 size={24}/></div><div className="mode-switch" aria-label="제작 모드"><button className={draft.mode === 'simple' ? 'active' : ''} aria-pressed={draft.mode === 'simple'} onClick={() => update({ mode: 'simple' })}>간편 모드</button><button className={draft.mode === 'custom' ? 'active' : ''} aria-pressed={draft.mode === 'custom'} onClick={() => update({ mode: 'custom' })}>직접 만들기<SlidersHorizontal size={14}/></button></div><div className="mode-switch vocal-mode-switch" aria-label="보컬 여부"><button className={!draft.instrumental ? 'active' : ''} aria-pressed={!draft.instrumental} onClick={() => update({ instrumental: false })}><Mic size={14}/>보컬+악기</button><button className={draft.instrumental ? 'active' : ''} aria-pressed={draft.instrumental} onClick={() => update({ instrumental: true })}><Guitar size={14}/>악기만</button></div>
+    {page === 'create' ? <div className="creation-layout"><section className="composer" aria-label="노래 편집기"><div className="composer-scroll"><div className="composer-heading"><div><span className="eyebrow">작은 아이디어, 나만의 음악</span><h1>어떤 노래를 만들까요?</h1></div><Music2 size={24}/></div><div className="mode-switch" aria-label="제작 모드"><button className={draft.mode === 'simple' ? 'active' : ''} aria-pressed={draft.mode === 'simple'} onClick={() => update({ mode: 'simple' })}>간편 모드</button><button className={draft.mode === 'custom' ? 'active' : ''} aria-pressed={draft.mode === 'custom'} onClick={() => update({ mode: 'custom' })}>직접 만들기<SlidersHorizontal size={14}/></button></div><div className="mode-switch vocal-mode-switch" aria-label="보컬 여부"><button className={!draft.instrumental ? 'active' : ''} aria-pressed={!draft.instrumental} onClick={() => update({ instrumental: false })}><Mic size={14}/>보컬+악기</button><button className={draft.instrumental ? 'active' : ''} aria-pressed={draft.instrumental} onClick={() => void applyInstrumentalRule()}><Guitar size={14}/>악기만</button></div>
     {draft.mode === 'simple' && <div className="form-section idea-section"><label htmlFor="idea">떠오르는 아이디어</label><Textarea id="idea" value={idea} onChange={event => setIdea(event.target.value)} placeholder="친구에게 위로를 건네는 따뜻한 노래"/><Button variant="outline" onClick={() => void assist('lyrics')} disabled={!!busy}><WandSparkles/>아이디어로 가사 초안 만들기</Button><p className="field-hint">설정한 LLM이 가사 작성을 도와줘요. 직접 작성해도 좋아요.</p></div>}
-    <div className="form-section"><div className="field-heading"><label htmlFor="lyrics"><FileText size={16}/>가사</label><button className="text-action" onClick={() => void assist('lyrics')} disabled={!!busy}><WandSparkles size={13}/>작사 도우미</button></div><div className="lyrics-box"><Textarea id="lyrics" value={draft.lyrics} onChange={event => update({ lyrics: event.target.value })} placeholder={'[Verse]\n이곳에 나만의 이야기를 적어 주세요.\n직접 쓴 가사를 붙여 넣어도 좋아요.\n\n[Chorus]\n마음에 남을 후렴을 들려주세요.'} maxLength={12000}/><div className="textarea-footer"><span>{draft.lyrics.length.toLocaleString()} / 12,000</span></div></div>{draft.instrumental && <p className="field-hint">{model.engine === 'Python' ? '"원본" 모델은 악기만 선택 시 악보의 보컬 성부를 자동으로 쉼표 처리해 생성합니다(악보가 없으면 먼저 심볼릭 작곡을 실행). 가사는 스타일 프롬프트에만 참고로 남고, 실제로 불려지지 않도록 구조적으로 처리됩니다.' : 'GGUF(Q4/Q8/BF16) 모델은 악보 기반 처리를 지원하지 않아, "instrumental, no vocals" 스타일 힌트만 추가됩니다 — 보컬이 완전히 사라진다고 보장되지는 않습니다. 확실한 악기만 생성을 원하면 "원본" 모델을 선택하세요.'}</p>}</div>
+    <div className="form-section"><div className="field-heading"><label htmlFor="lyrics"><FileText size={16}/>가사</label><div style={{ display: 'flex', gap: '8px' }}><button type="button" className="text-action" onClick={() => update({ lyrics: draft.lyrics.trim() ? `${draft.lyrics}\n[Instrumental]` : '[Instrumental]', instrumental: true })}><Guitar size={13}/>[Instrumental] 삽입</button><button className="text-action" onClick={() => void assist('lyrics')} disabled={!!busy}><WandSparkles size={13}/>작사 도우미</button></div></div><div className="lyrics-box"><Textarea id="lyrics" value={draft.lyrics} onChange={event => update({ lyrics: event.target.value })} placeholder={'[Verse]\n이곳에 나만의 이야기를 적어 주세요.\n직접 쓴 가사를 붙여 넣어도 좋아요.\n\n[Chorus]\n마음에 남을 후렴을 들려주세요.'} maxLength={12000}/><div className="textarea-footer"><span>{draft.lyrics.length.toLocaleString()} / 12,000</span></div></div>{draft.instrumental && <p className="field-hint">{model.engine === 'Python' ? '"원본" 모델은 악기만 선택 시 악보의 보컬 성부를 자동으로 쉼표 처리해 생성합니다(악보가 없으면 먼저 심볼릭 작곡을 실행). 가사는 스타일 프롬프트에만 참고로 남고, 실제로 불려지지 않도록 구조적으로 처리됩니다.' : 'GGUF(Q4/Q8/BF16) 모델은 악보 기반 처리를 지원하지 않아, "instrumental, no vocals" 스타일 힌트만 추가됩니다 — 보컬이 완전히 사라진다고 보장되지는 않습니다. 확실한 악기만 생성을 원하면 "원본" 모델을 선택하세요.'}</p>}</div>
     <div className="form-section"><div className="field-heading"><label htmlFor="style"><AudioLines size={16}/>음악 스타일</label><button className="text-action" onClick={() => void assist('style')} disabled={!!busy}><Sparkles size={13}/>스타일 다듬기</button></div><Textarea id="style" className="style-input" value={draft.style} onChange={event => update({ style: event.target.value })} placeholder={'장르, 분위기, 악기, 목소리…\n예: 따뜻한 어쿠스틱 팝, 잔잔한 기타, 부드러운 보컬'} maxLength={4000}/><div className="style-tags">{stylePresets.map(tag => <button key={tag} onClick={() => update({ style: draft.style ? `${draft.style}, ${tag}` : tag })}><Plus size={11}/>{tag}</button>)}</div></div>
     <div className="form-section title-section"><div className="field-heading"><label htmlFor="song-title">곡 제목<span className="optional">선택</span></label></div><Input id="song-title" value={draft.title} onChange={event => update({ title: event.target.value })} placeholder="이 노래의 이름을 지어 주세요" maxLength={120}/></div><div className="advanced-section"><button className="advanced-toggle" onClick={() => setAdvanced(!advanced)} aria-expanded={advanced}><span><SlidersHorizontal size={16}/>고급 설정</span><ChevronDown size={15} className={advanced ? 'rotated' : ''}/></button>{advanced && <div className="advanced-fields"><label className="seed-field"><span className="seed-label-row">Seed<button type="button" className="dice-btn" aria-label="Seed 무작위로 바꾸기" onClick={() => update({ seed: Math.floor(Math.random() * 2147483648) })}><Dices size={14}/></button></span><Input type="number" min="0" max="2147483647" value={draft.seed} disabled={randomizeSeed} onChange={event => update({ seed: Number(event.target.value) })}/><span className="seed-randomize"><input type="checkbox" checked={randomizeSeed} onChange={event => toggleRandomizeSeed(event.target.checked)}/>매번 무작위(randomize)</span></label><label>추론 단계<Input type="number" min="1" max="100" value={draft.steps} onChange={event => update({ steps: Number(event.target.value) })}/></label><label className="wide-field">작곡 계획<select value={draft.cot} onChange={event => update({ cot: event.target.value })}><option value="full">멜로디와 코드 계획 (기본)</option><option value="melody">멜로디 계획</option><option value="off">계획 없이 생성</option></select></label>{draft.instrumental ? <div className="wide-field vocal-gender-field"><span className="field-label">보컬</span><span className="vocal-gender-hint">악기만 모드에서는 보컬 없이 생성됩니다.</span></div> : <div className="wide-field vocal-gender-field"><span className="field-label">보컬</span><div className="vocal-gender-toggle"><button type="button" className={`vocal-gender-btn${draft.vocalGender === 'male' || draft.vocalGender === 'duet' ? ' active' : ''}`} onClick={() => toggleVocal('male')}>남성</button><button type="button" className={`vocal-gender-btn${draft.vocalGender === 'female' || draft.vocalGender === 'duet' ? ' active' : ''}`} onClick={() => toggleVocal('female')}>여성</button></div>{draft.vocalGender === 'duet' && <span className="vocal-gender-hint">둘 다 선택하면 듀엣으로 만들어져요</span>}</div>}<div className="wide-field abc-score-field"><div className="abc-score-header"><span className="field-label">ABC 악보 (심볼릭 작곡)<span className="optional">선택</span></span><Button type="button" variant="outline" size="sm" onClick={() => navigate('abc')}><FileText size={14}/>라이브러리 열기</Button></div><Textarea className="abc-score-textarea" value={draft.abc} onChange={event => update({ abc: event.target.value })} placeholder="비워두면 가사와 스타일만으로 생성합니다. 심볼릭 작곡을 누르면 멜로디/코드 악보가 여기에 채워져요."/><AbcPreview abc={draft.abc}/><div className="abc-score-actions"><Button type="button" variant="outline" size="sm" onClick={() => void runPlan()} disabled={!!busy || !online}>{busy === 'plan' ? <LoaderCircle className="spin"/> : <WandSparkles size={14}/>}심볼릭 작곡</Button><Button type="button" variant="outline" size="sm" onClick={() => void checkAbc()} disabled={!!busy || !draft.abc.trim()}>{busy === 'abc-check' ? <LoaderCircle className="spin"/> : <ShieldCheck size={14}/>}검사</Button><Button type="button" variant="outline" size="sm" onClick={openDraftAbcEdit} disabled={!draft.abc.trim()}><Pencil size={14}/>편집</Button><Button type="button" variant="outline" size="sm" onClick={() => void saveAbcViaPicker()} disabled={!!busy || !draft.abc.trim()}>{busy === 'abc-save-file' ? <LoaderCircle className="spin"/> : <Save size={14}/>}저장</Button><Button type="button" variant="outline" size="sm" onClick={() => abcImportInputRef.current?.click()}><FolderOpen size={14}/>파일에서 가져오기</Button><Button type="button" variant="outline" size="sm" onClick={() => coverAudioInputRef.current?.click()} disabled={!!busy || !online}>{busy === 'cover-transcribe' ? <LoaderCircle className="spin"/> : <Upload size={14}/>}오디오에서 추출</Button><Button type="button" variant="ghost" size="sm" onClick={clearAbc} disabled={!draft.abc.trim()}><X size={14}/>삭제</Button></div>{busy === 'plan' && <div className="generate-progress"><Progress aria-label="심볼릭 작곡 진행률" value={generateProgress}/><span>작곡 중... {generateProgress}%</span></div>}</div><p className="field-hint wide-field">{['yue2-q4', 'yue2-q8'].includes(model.id) ? 'VAE: F16 · 메모리를 절약하는 조합' : 'VAE: F32 · 고용량 GPU 환경용'}<br/>설정과 모델 정보는 초안에 함께 저장됩니다.</p></div>}</div></div><div className="composer-footer"><div className="compose-actions"><Button variant="outline" onClick={() => void saveDraft()} disabled={!!busy || !online}>{busy === 'save' ? <LoaderCircle className="spin"/> : <Save/>}초안 저장</Button><Button className="generate-button" onClick={requestGenerate} disabled={!!busy || !online}>{busy === 'generate' ? <LoaderCircle className="spin"/> : <Sparkles/>}노래 만들기</Button></div>{busy === 'generate' && <div className="generate-progress"><Progress aria-label="생성 진행률" value={generateProgress}/><span>생성 중... {generateProgress}%</span></div>}</div></section>
     <section className="workspace" aria-label="내 작업"><div className="workspace-heading"><div><h2>내 작업<span className="count-label">{projects.length}</span></h2><p>오늘의 아이디어가 다음 노래가 되는 곳</p></div></div>{projectList()}<div className="inspiration-section"><div className="section-caption"><span><Sparkles size={15}/>어디서 시작할지 고민된다면</span><button onClick={() => setPresetOpen(true)}>예시 둘러보기<ChevronRight size={14}/></button></div><div className="inspiration-carousel">{examples.length > 3 && <Button variant="ghost" size="icon" aria-label="이전 예시" onClick={() => setExampleIndex(previous => (previous - 1 + examples.length) % examples.length)}><ChevronLeft/></Button>}<div className="inspiration-grid">{exampleWindow.map(example => <button key={example.id} className={`inspiration-card ${example.color || ''}`} onClick={() => useExample(example)}><div className="preset-top"><Music2 size={21}/><ArrowRight size={15}/></div><span className="genre-label">{example.genre || '예시'}</span><strong>{example.title}</strong><small>{example.caption}</small></button>)}</div>{examples.length > 3 && <Button variant="ghost" size="icon" aria-label="다음 예시" onClick={() => setExampleIndex(previous => (previous + 1) % examples.length)}><ChevronRight/></Button>}</div></div><div className="workspace-note"><ShieldCheck size={15}/><span>가사와 초안은 내 PC에 저장됩니다. 클라우드 LLM은 요청할 때만 연결됩니다.</span></div></section></div>
@@ -1313,6 +1733,7 @@ export default function Studio() {
     : page === 'models' ? <section className="models-page page-scroll"><div className="page-heading"><span className="eyebrow">내 스튜디오의 사운드 엔진</span><h1>모델 관리</h1><p>원본과 GGUF 모델을 보관하고, 상단에서 사용할 모델을 고르세요.</p></div><div className="download-overview"><div className="setting-icon"><ArrowDownToLine size={23}/></div><div className="download-copy"><h2>{inventory?.state === 'complete' ? '모델 다운로드 완료' : '모델 파일 준비 중'}</h2><p>{inventory ? `${gb(inventory.completedBytes)} / ${gb(inventory.totalBytes)}` : '로컬 다운로드 상태를 확인하고 있습니다.'}</p><Progress aria-label="전체 모델 다운로드" value={inventory?.totalBytes ? Math.min(100, inventory.completedBytes / inventory.totalBytes * 100) : 0}/></div><span className="small-badge">Hugging Face</span></div><div className="model-card-grid">{models.map(item => <article className={`model-detail-card ${draft.modelId === item.id ? 'selected' : ''}`} key={item.id}><div className="model-card-top"><Cpu size={23}/><span className="small-badge">{item.badge}</span></div><h2>{item.name}</h2><p>{item.detail}</p><div className="model-meta"><span>실행 방식<strong>{item.engine}</strong></span><span>본체 크기<strong>{item.size}</strong></span></div><div className="model-file-state"><span className={`status-dot ${installed(item) ? '' : 'amber'}`}/>{installed(item) ? '본체 다운로드됨' : '파일 준비 중'}<span>{item.engine === 'audio.cpp' ? '생성 지원' : '엔진 미지원'}</span></div><Button variant={draft.modelId === item.id ? 'default' : 'outline'} disabled={item.selectable === false} onClick={() => { update({ modelId: item.id }); notify(`${item.name} 모델을 선택했습니다.`); }}>{draft.modelId === item.id ? <><Check/>현재 선택한 모델</> : item.selectable === false ? '연결 대기' : '이 모델 선택'}</Button></article>)}</div><section className="repository-section"><h2>다운로드 보관함</h2>{inventory?.repositories?.map(repo => <div className="repository-row" key={repo.id}><Folder size={19}/><div><strong>{repo.id}</strong><small>{repo.files?.filter(file => file.state === 'complete').length || 0} / {repo.files?.length || 0}개 파일 · {gb(repo.completedBytes)} / {gb(repo.totalBytes)}</small></div><span className="small-badge">{repo.state === 'complete' ? '완료' : '다운로드 중'}</span></div>)}</section><div className="inline-note"><ShieldCheck size={18}/><span>모델 가중치 라이선스: CC BY-NC 4.0. 앱 배포 파일과 모델은 분리해 관리합니다. 다운로드와 실제 실행 가능 여부는 다릅니다.</span></div></section>
     : page === 'playlists' ? playlistPage()
     : page === 'abc' ? abcNotePage()
+    : page === 'cover' ? coverStudioPage()
     : <section className="library-page page-scroll"><div className="page-heading library-heading"><div><span className="eyebrow">나의 음악을 한곳에</span><h1>{titles[page]}</h1><p>{page === 'projects' ? '저장할 때마다 새 버전으로 남아, 이전 아이디어를 다시 꺼낼 수 있어요.' : '가사, 스타일, 설정까지 함께 보관하는 나만의 컬렉션.'}</p></div><Button onClick={() => navigate('create')}><Plus/>노래 만들기</Button></div>{projectList()}</section>}
     <audio ref={audioRef} onEnded={playNext} onTimeUpdate={event => setPlaybackTime(event.currentTarget.currentTime)} onLoadedMetadata={event => setPlaybackDuration(event.currentTarget.duration)} hidden/>
     <input ref={coverInputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={event => void handleCoverFile(event)}/>

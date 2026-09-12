@@ -1,4 +1,4 @@
-export type Page = 'create' | 'home' | 'library' | 'projects' | 'favorites' | 'playlists' | 'abc' | 'models' | 'settings';
+export type Page = 'create' | 'home' | 'cover' | 'library' | 'projects' | 'favorites' | 'playlists' | 'abc' | 'models' | 'settings';
 export type Provider = 'none' | 'ollama' | 'claude' | 'chatgpt' | 'gemini';
 export type VocalGender = '' | 'male' | 'female' | 'duet';
 export type Draft = { title: string; lyrics: string; style: string; modelId: string; seed: number; steps: number; cot: string; vocalGender: VocalGender; instrumental: boolean; abc: string; mode: string };
@@ -45,7 +45,7 @@ export const providers: { id: Provider; label: string; mark: string; description
   { id: 'gemini', label: 'Gemini', mark: '✦', description: 'Google AI API' },
 ];
 export type Example = { id: string; title: string; genre?: string; caption?: string; color?: string; style: string; lyrics: string; createdAt?: string };
-export const titles: Record<Page, string> = { create: '만들기', home: '내 홈', library: '내 라이브러리', projects: '프로젝트', favorites: '좋아요', playlists: '재생목록', abc: 'ABC 악보', models: '모델 관리', settings: '설정' };
+export const titles: Record<Page, string> = { create: '만들기', home: '내 홈', cover: '커버 스튜디오', library: '내 라이브러리', projects: '프로젝트', favorites: '좋아요', playlists: '재생목록', abc: 'ABC 악보', models: '모델 관리', settings: '설정' };
 export const gb = (bytes = 0) => `${(bytes / 1e9).toFixed(2)} GB`;
 export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   const sending = method !== 'GET';
@@ -54,4 +54,97 @@ export async function api<T>(path: string, method = 'GET', body?: unknown): Prom
   try { data = await response.json(); } catch { throw new Error('로컬 서비스에 연결할 수 없습니다. 앱을 다시 실행해 주세요.'); }
   if (!response.ok) throw new Error((data as { error?: string }).error || '요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.');
   return data as T;
+}
+
+
+export const DEFAULT_INSTRUMENTAL_ABC = `X:1
+T:
+M:4/4
+L:1/16
+Q:1/4=120
+V: Vocal clef=treble name="Vocal Melody" snm="Vocal"
+V: Ins clef=treble name="Ins Melody" snm="Inst."
+K:C
+% intro
+V: Vocal
+"C"z16 | "G"z16 | "Am"z16 | "F"z16 |
+V: Ins
+c4 e4 g4 e4 | d4 g4 b4 g4 | c4 e4 a4 e4 | A4 c4 f4 c4 |
+% verse
+V: Vocal
+"C"z8 "G"z8 | "Am"z8 "F"z8 | "C"z8 "G"z8 | "F"z8 "G"z8 |
+V: Ins
+e2g2 c'2g2 d2g2 b2g2 | c2e2 a2c2 A2c2 f2c2 | e2g2 c'2g2 d2g2 b2g2 | A2c2 f2c2 d2g2 b2g2 |
+% chorus
+V: Vocal
+"C"z16 | "F"z16 | "G"z16 | "C"z16 |
+V: Ins
+c'4 g4 e4 g4 | a4 f4 c4 f4 | b4 g4 d4 g4 | c'8 c4 z4 |
+`;
+
+export function toInstrumentalAbc(abc: string): string {
+  if (!abc || !abc.trim()) return DEFAULT_INSTRUMENTAL_ABC;
+  const lines = abc.split(/\r?\n/);
+  const result: string[] = [];
+  let currentVoice: 'Vocal' | 'Ins' | null = null;
+  let lastVocalLine: string | null = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith('V: Vocal') && !line.includes('clef=')) {
+      currentVoice = 'Vocal';
+      result.push(line);
+      continue;
+    }
+    if (line.startsWith('V: Ins') && !line.includes('clef=')) {
+      currentVoice = 'Ins';
+      result.push(line);
+      continue;
+    }
+    if (line.startsWith('V:')) {
+      result.push(line);
+      continue;
+    }
+    if (currentVoice === 'Vocal' && line.trim().endsWith('|')) {
+      lastVocalLine = line;
+      const bars = line.trim().slice(0, -1).split('|');
+      const vocalBars = bars.map(bar => {
+        const tokenRegex = /"([^"]*)"|\[K:[^\]]+\]|(\^\^|__|\^|_|=)?([A-Ga-gz])([,']*)([0-9]*)(-?)/g;
+        let m: RegExpExecArray | null;
+        let curChord: string | null = null;
+        let curDur = 0;
+        const events: { chord: string | null; dur: number }[] = [];
+        while ((m = tokenRegex.exec(bar)) !== null) {
+          if (m[1] !== undefined) {
+            if (curChord !== null || curDur > 0) {
+              events.push({ chord: curChord, dur: curDur });
+              curDur = 0;
+            }
+            curChord = m[1];
+          } else if (m[3] !== undefined) {
+            const dur = parseInt(m[5] || '1', 10);
+            curDur += dur;
+          }
+        }
+        if (curChord !== null || curDur > 0) {
+          events.push({ chord: curChord, dur: curDur });
+        }
+        return events.map(e => e.chord ? `"${e.chord}"z${e.dur > 1 ? e.dur : ''}` : `z${e.dur > 1 ? e.dur : ''}`).join(' ');
+      });
+      result.push(' ' + vocalBars.join(' | ') + ' |');
+      continue;
+    }
+    if (currentVoice === 'Ins' && line.trim().endsWith('|')) {
+      if (lastVocalLine && (line.includes('Z') || !/[A-Ga-g]/.test(line))) {
+        const insLine = lastVocalLine.replace(/"[^"]*"/g, '').replace(/\s+/g, ' ').trim();
+        result.push(' ' + insLine);
+      } else {
+        result.push(line);
+      }
+      lastVocalLine = null;
+      continue;
+    }
+    result.push(line);
+  }
+  return result.join('\n');
 }
