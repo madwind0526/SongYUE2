@@ -61,7 +61,7 @@ const DEFAULT_VISUALIZER_RING_MODE = 'radial';
 const DEFAULT_VISUALIZER_TIME_STEP = 0.5;
 const DEFAULT_VISUALIZER_TIME_SKEW = 1;
 const DEFAULT_VISUALIZER_RING_STEP = 1;
-const DEFAULT_VISUALIZER_AMPLITUDE = 1.3;
+const DEFAULT_VISUALIZER_AMPLITUDE = 2;
 const VOCAL_HINTS = { male: ', male vocal', female: ', female vocal', duet: ', duet: male and female vocals' };
 const vocalHint = (gender) => VOCAL_HINTS[gender] || '';
 // YuE2 has no dedicated instrumental flag and both the audio.cpp and Python engines require
