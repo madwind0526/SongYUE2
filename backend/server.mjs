@@ -420,12 +420,22 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     if (gpuInfoCache) return gpuInfoCache;
     gpuInfoCache = await new Promise((resolve) => {
       let out = '';
-      const child = spawnImpl('nvidia-smi', ['--query-gpu=memory.total', '--format=csv,noheader,nounits'], { windowsHide: true });
+      const child = spawnImpl('nvidia-smi', ['--query-gpu=name,memory.total', '--format=csv,noheader,nounits'], { windowsHide: true });
       child.stdout.on('data', (chunk) => { out += chunk; });
-      child.once('error', () => resolve({ vramMb: null }));
+      child.once('error', () => resolve({ name: null, vramMb: null }));
       child.once('close', (code) => {
-        const value = Number.parseInt(out.trim().split('\n')[0], 10);
-        resolve(code === 0 && Number.isFinite(value) ? { vramMb: value } : { vramMb: null });
+        const firstLine = out.trim().split(/\r?\n/)[0] || '';
+        const parts = firstLine.split(',');
+        if (code === 0 && parts.length >= 2) {
+          const rawName = parts[0].trim();
+          const name = rawName.replace(/^NVIDIA\s+GeForce\s+/i, '').replace(/^NVIDIA\s+/i, '').trim();
+          const value = Number.parseInt(parts[1].trim(), 10);
+          resolve({ name: name || null, vramMb: Number.isFinite(value) ? value : null });
+        } else if (code === 0 && Number.isFinite(Number.parseInt(firstLine, 10))) {
+          resolve({ name: null, vramMb: Number.parseInt(firstLine, 10) });
+        } else {
+          resolve({ name: null, vramMb: null });
+        }
       });
     });
     return gpuInfoCache;
