@@ -470,16 +470,18 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
               const radius = Math.max(baseRadius * 0.1, baseRadius + directional * baseRadius * visualizerAmplitude);
               nodes.push({ x: cx + Math.cos(angle) * radius, y: cy + Math.sin(angle) * radius });
             }
+            // Open curve: no segment connects the last point back to the first. With the
+            // low/high bin margins excluded, those two ends read very different frequencies
+            // and can jump sharply, which looked like a stray line when the loop was closed.
             ctx2d.beginPath();
-            const first = { x: (nodes[0].x + nodes[points - 1].x) / 2, y: (nodes[0].y + nodes[points - 1].y) / 2 };
-            ctx2d.moveTo(first.x, first.y);
-            for (let i = 0; i < points; i++) {
+            ctx2d.moveTo(nodes[0].x, nodes[0].y);
+            for (let i = 1; i < points - 1; i++) {
               const p0 = nodes[i];
-              const p1 = nodes[(i + 1) % points];
+              const p1 = nodes[i + 1];
               const mid = { x: (p0.x + p1.x) / 2, y: (p0.y + p1.y) / 2 };
               ctx2d.quadraticCurveTo(p0.x, p0.y, mid.x, mid.y);
             }
-            ctx2d.closePath();
+            ctx2d.lineTo(nodes[points - 1].x, nodes[points - 1].y);
             ctx2d.strokeStyle = `hsla(${ring.hue}, 95%, 78%, 0.55)`;
             ctx2d.lineWidth = visualizerLineWidth;
             ctx2d.stroke();
