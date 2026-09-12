@@ -27,7 +27,9 @@ GGUF 폴더에는 BF16, Q8_0, Q4_0 본체와 F16/F32 VAE 및 `sidecars/`가 있�
 
 사용자가 직접 받은 `sheetsage2_bf16.safetensors`는 `models/m-a-p/SheetSage2/model.safetensors` 위치에 두었고, 이후 Hugging Face `m-a-p/SheetSage2` 스냅샷의 `config.json`과 나머지 코드·자산 파일(`modeling_sheetsage2.py`, `pipeline_sheetsage2.py`, `notation_sheetsage2.py`, `requirements.txt` 등 전체)도 같은 폴더에 받아 두어, `AutoModel.from_pretrained(..., trust_remote_code=True)`로 로드 가능한 상태입니다. 앱의 `GET /api/models`/`POST /api/cover-transcribe`는 `config.json`+`model.safetensors` 존재 여부로 로컬 모델 사용 가능 여부를 판단하므로, 이 조건은 이미 충족됩니다.
 
-다만 이 폴더의 코드가 요구하는 Python 패키지 버전(`torch==2.8.0`, `transformers==4.45.2` 등, `requirements-sheetsage2.txt`)은 YuE2 본체용 venv에 이미 설치된 더 최신 버전(`torch 2.10`, `transformers 4.57`)과 다릅니다. 같은 venv에 같이 설치하면 버전 충돌 위험이 있으므로, SheetSage2 실행을 위해서는 **별도 Python 가상환경**을 만들어 `requirements-sheetsage2.txt`를 설치하고, 설정 화면의 `sheetSagePythonPath`를 그 venv의 `python.exe`로 지정해야 합니다. 이 venv 준비만 남은 상태이며, 코드(`transcribe.py`)와 모델 파일은 모두 준비되어 있습니다.
+이 폴더의 코드가 요구하는 Python 패키지 버전(`torch==2.8.0`+cu128, `transformers==4.45.2` 등, `requirements-sheetsage2.txt`)은 YuE2 본체용 venv에 이미 설치된 더 최신 버전(`torch 2.10`, `transformers 4.57`)과 달라 같은 venv를 공유하면 버전 충돌 위험이 있으므로, **별도 Python 가상환경**(`test/YuE2-source/.venv-sheetsage2`)을 만들어 `requirements-sheetsage2.txt`를 설치하고, 설정 화면의 `sheetSagePythonPath`를 그 venv의 `python.exe`로 지정해야 합니다.
+
+**2026-09-12: 실제 오디오로 종단 테스트 성공.** venv 준비 후 `config.json`에 문제가 하나 더 있었습니다 — 다운로드한 `model.safetensors`를 직접 열어보면 `encoder.*` 키가 876개 포함된 **완전히 병합된(merged) 체크포인트**인데, `config.json`은 `"weights_format": "adapter"`(원격 `m-a-p/MERT-v2-FullSong`을 따로 받아 LoRA 어댑터와 병합하는 방식)로 되어 있어 `missing_keys` 오류로 로드가 실패했습니다. `config.json`의 `weights_format`을 `"merged"`로 고치면 정상 로드됩니다(베이스 모델 다운로드 자체가 불필요해짐). `models/`는 `.gitignore`에 있어 이 수정은 저장소에 남지 않으므로, 모델을 다시 받을 경우 이 값을 다시 고쳐야 합니다. 자세한 내용과 백엔드 쪽에 있었던 두 번째 문제(출력 폴더 충돌)는 [docs/local-api.md](local-api.md#sheetsage2)를 참고하세요.
 
 공식 가중치 라이선스는 **CC BY-NC 4.0**입니다. 각 원본 저장소의 `LICENSE`, `THIRD_PARTY_NOTICES.md`, `licenses/`를 보존했습니다. GGUF 저장소는 README에 라이선스를 표시하지만 별도 LICENSE 파일은 제공하지 않습니다. 배포 시 모델 용량 및 라이선스를 고려해 앱 설치 파일과 모델 다운로드를 분리할 수 있습니다.
 

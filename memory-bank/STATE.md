@@ -2,10 +2,10 @@
 
 ## Current Wave
 
-- **Wave:** 12
+- **Wave:** 13
 - **Status:** Done
 - **Cache Status:** CLEAN
-- **Last Checkpoint:** 2026-09-12 사용자가 YuE2의 Vocal/Ins 2성부 설계를 상세히 설명하며 "악기만" 무보컬 메커니즘 재검토를 요청 — 기존 `abc_tools.py strip-chords --keep-voice Ins`가 Vocal을 쉼표로 바꾸며 화음 기호까지 지워버려(native 방언에서 화성은 오직 Vocal에만, 쉬는 동안에도 존재해야 함) 설계와 어긋난 것을 발견. 화음은 유지하고 음표만 쉼표로 바꾸는 `mute-voice` 명령을 `abc_tools.py`에 신설, `backend/server.mjs`/테스트/`abc-editing.md` 전환(테스트 8/8 통과, 실제 오디오 검증은 아직). `docs/local-api.md` 엔드포인트 표를 실제 코드 기준으로 전면 재작성(예상보다 훨씬 많은 엔드포인트가 미문서화 상태였음), `Setting/` 폴더 문서화, `docs/models.md`의 SheetSage2 절을 최신 파일 상태(config.json+코드 설치 완료, venv만 남음)로 갱신, progress.md/memory-bank 갱신.
+- **Last Checkpoint:** 2026-09-12 SheetSage2 제로샷 커버를 실제 오디오로 종단 검증 완료 — 별도 venv(Python 3.11+torch 2.8.0+cu128) 구축 후 `POST /api/cover-transcribe` 실기 테스트에서 버그 2개 발견/수정: (1) `config.json`의 `weights_format`이 `adapter`로 잘못 설정(실제 파일은 merged 체크포인트) → `merged`로 수정, (2) `backend/server.mjs`가 출력 폴더를 미리 만들어 `transcribe.py`의 `fresh_directory()` 안전장치와 충돌 → 부모 폴더만 미리 생성하도록 수정. 결과 ABC가 구조 검증 통과(128 음표, 37마디). 또한 원형 비주얼라이저를 색조/라인개수/굵기/변동폭(비대칭 양방향)/잔상/나선/모드(회전·시간축)까지 전부 설정화, 캔버스 왜곡·스파이럴·wrap-around 라인 등 여러 시각 버그 수정, 후처리 다이얼로그에 재생 위치 슬라이더 추가. GGUF 모델에서 "악기만" 토글을 3개 경로(직접 토글/프로젝트 로드/localStorage 복원) 모두에서 완전히 비활성화. 문서(`docs/local-api.md`, `docs/models.md`, `progress.md`) 및 memory-bank 갱신.
 
 ## Wave History
 
@@ -23,6 +23,7 @@
 | 10 | "악기만" 옵션이 실제로 보컬을 빼지 못하던 버그 수정(가사 비우기 시도 → 되돌림 → abc_tools.py strip-chords로 구조적 해결), 완성곡 후처리/EQ 팝업 신규(10밴드 EQ+FxSound 노브+리버브/에코, Web Audio 실시간 미리듣기+디바운스 렌더링, 원본 포맷 유지 저장) | Done |
 | 11 | 후처리/EQ UI 반복 개선(EQ·전체 설정 프리셋을 이름 붙여 `Setting/` 폴더에 저장하는 백엔드 엔드포인트 3개 추가, 토글+초기화 버튼 병합, 재생 중 박스 강조, AnalyserNode 원형 라이브 비주얼라이저), progress.md/revision.md 신규 + README.md 갱신 | Done |
 | 12 | "악기만" 무보컬 메커니즘 재검증(화음 기호를 지우지 않는 `abc_tools.py mute-voice` 신설, `strip-chords` 오용 수정), `docs/local-api.md` 전면 재작성 + `Setting/` 폴더 문서화, `docs/models.md` SheetSage2 상태 갱신 | Done |
+| 13 | SheetSage2 제로샷 커버 종단 검증 성공(venv 구축, config.json weights_format 버그 + 백엔드 디렉터리 충돌 버그 수정), 원형 비주얼라이저 설정 전면 확장, 후처리 재생 위치 슬라이더, GGUF "악기만" 완전 비활성화(3개 경로) | Done |
 
 ## Session Notes
 

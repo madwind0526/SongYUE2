@@ -15,9 +15,14 @@
 - [x] 사용자가 지적한 대로, 기존 `abc_tools.py strip-chords --keep-voice Ins`는 Vocal 성부를 쉼표로 바꾸는 것과 별개로 **전체 성부의 화음 기호까지 모두 지워버려**, Vocal이 쉬는 동안에도 화성을 오케스트라에 전달해야 하는 native 방언의 설계(코드 파서의 `"Native chord symbols belong in Vocal, not Ins"` 불변식, `references/abc-editing.md`의 "harmony is represented by quoted symbols in Vocal, including when resting")와 어긋났음.
 - [x] `abc_tools.py`에 `mute-voice` 명령을 새로 추가 — 선택하지 않은 성부의 소리 나는 음표만 같은 박자 그리드의 쉼표로 바꾸고, 화음 기호는 전혀 건드리지 않음(`"D"C8` → `"D"z8`). `backend/server.mjs`의 `stripVocalVoice()`를 이 명령을 쓰도록 전환, 백엔드 테스트/`references/abc-editing.md` 갱신, `node --test backend/server.test.mjs` 8/8 통과 확인.
 
+## SheetSage2 제로샷 커버 — 종단 검증 완료 (2026-09-12)
+
+- [x] 실제 완성곡 오디오를 `POST /api/cover-transcribe`에 넣어 종단 테스트 성공. 결과 ABC가 `abc_tools.py inspect` 구조 검증도 통과(Vocal/Ins 두 성부, 128개 소리 나는 음표, 37마디, 원본 길이와 일치하는 nominal duration). 과정에서 실제로 막혔던 문제 두 가지를 찾아 고침:
+  1. `models/m-a-p/SheetSage2/config.json`의 `weights_format`이 `"adapter"`로 되어 있었지만, 실제 `model.safetensors`를 열어보면 `encoder.*` 키가 876개 포함된 **완전히 병합된(merged) 체크포인트**였음 — `missing_keys` 오류로 로드 실패. `weights_format`을 `"merged"`로 고쳐 해결(원격 베이스 모델 다운로드도 불필요해짐). `models/`는 `.gitignore`라 이 수정은 저장소에 안 남으므로 모델을 다시 받으면 다시 고쳐야 함 — [docs/models.md](docs/models.md)에 기록.
+  2. `backend/server.mjs`가 출력 폴더를 미리 만들어(`mkdir`) `transcribe.py`의 안전장치(`fresh_directory()`, `exist_ok=False`)와 항상 충돌해 즉시 실패하고 있었음. 부모 폴더만 미리 만들도록 수정(커밋 반영됨).
+
 ## 실제 환경에서 검증 필요 (코드는 준비됐지만 종단 테스트 못 함)
 
-- [ ] **SheetSage2 제로샷 커버**: 별도 venv(`test/YuE2-source/.venv-sheetsage2`, Python 3.11 + torch 2.8.0+cu128 + `requirements-sheetsage2.txt`)를 생성하고 설정의 `sheetSagePythonPath`도 지정 완료 — `torch.cuda.is_available()`로 RTX 5070 인식까지 확인함. 아직 안 한 것은 `POST /api/cover-transcribe` 실제 오디오 파일로 종단 테스트뿐(전사 스크립트 자체 실행 여부 미확인).
 - [ ] **"악기만" mute-voice 전환의 실제 오디오 검증**: 코드 수정과 유닛 테스트(가짜 spawn)는 통과했지만, 실제 원본(공식 Python) 엔진으로 생성해 Vocal 화음 기호가 남은 ABC가 실제로 화성이 유지된 무보컬 오디오를 만드는지는 아직 실기 검증 전.
 - [ ] **INT8 ConvRot 모델**: 지금은 명확한 한국어 안내로 생성을 차단만 함. ComfyUI 어댑터를 실제로 붙여 생성 가능하게 만드는 작업은 시작 전.
 - [ ] **ABC "파일에서 가져오기"**: JSON의 `abc` 필드 추출 / 일반 텍스트 폴백 로직은 코드 리뷰로만 검증했고, 실제 파일 업로드로 브라우저에서 종단 테스트는 아직 안 함.
@@ -25,7 +30,7 @@
 
 ## 알려진 제약 (설계상 의도이며 버그 아님)
 
-- GGUF 모델(Q4/Q8/BF16)에서 "악기만"은 `instrumental, no vocals` 스타일 힌트일 뿐 구조적 보장이 없음. 보컬을 확실히 제거하려면 "원본"(공식 Python) 모델을 써야 함 — `abc_tools.py mute-voice`로 보컬 성부를 화음 기호는 남긴 채 쉼표 처리하는 구조적 방식은 원본 모델 전용.
+- GGUF 모델(Q4/Q8/BF16)은 "악기만"을 구조적으로 보장할 수 없어, 만들기 화면에서 아예 선택하지 못하도록 막아둠(버튼 비활성화). 무보컬 생성을 원하면 "원본"(공식 Python) 모델을 선택해야 함 — `abc_tools.py mute-voice`로 보컬 성부를 화음 기호는 남긴 채 쉼표 처리하는 구조적 방식은 원본 모델 전용.
 - 후처리/EQ는 **브라우저 세션 내 실시간 미리듣기**(Web Audio API)이며, "저장" 버튼을 눌러야만 서버가 처리된 오디오를 원본과 같은 파일 형식으로 재인코딩해 저장함. 원본 곡 파일은 절대 바뀌지 않음.
 - EQ 프리셋과 전체 설정 프리셋은 `SongYUE2/Setting/EQ-preset/`, `SongYUE2/Setting/PostProcess/`에 로컬 파일로만 저장됨 — 다른 PC로 옮기려면 해당 폴더를 직접 복사해야 하고, 자동 동기화 기능은 없음.
 
@@ -36,9 +41,8 @@
 
 ## 향후 개선 아이디어 (필수 아님, 우선순위 낮음)
 
-Playwright로 실제 후처리/EQ 다이얼로그를 열어 재확인(2026-09-12): 아래 두 가지는 여전히 미구현.
+~~비주얼라이저 커스터마이즈~~ — 완료(2026-09-12). 설정 화면에 표시 켬/끔, 라인 모드(1: 회전/2: 시간축), 색조·라인 개수·굵기·변동폭·잔상·나선 정도·R 간격(회전 모드)·시간 간격·가속도(시간축 모드)까지 모두 설정 가능. `studio.tsx`의 하드코딩된 상수는 전부 설정값으로 교체됨.
 
-- 비주얼라이저 커스터마이즈(라인 색상/개수, 켜고 끄기) — `studio.tsx`에 `ringCount`/`radiusFactor`/`hue`가 그대로 하드코딩되어 있고 관련 설정 UI 없음
-- EQ 프리셋 / 전체 설정 프리셋 파일 내보내기·가져오기(다른 PC로 옮기기 쉽게) — 다이얼로그에 저장(POST)만 있고 내보내기/가져오기 버튼 없음
+- EQ 프리셋 / 전체 설정 프리셋 파일 내보내기·가져오기(다른 PC로 옮기기 쉽게) — 다이얼로그에 저장(POST)만 있고 내보내기/가져오기 버튼 없음 (Playwright로 2026-09-12 재확인, 여전히 미구현)
 
 ~~후처리 다이얼로그에 "전체 초기화" 버튼~~ — 애초 EQ/FX/리버브·에코를 한 번에 초기화하는 버튼으로 의도했으나, 실제로는 셋을 각각 초기화하는 버튼으로 구현되어 통합 버튼은 드롭하기로 결정. 각 섹션의 개별 초기화 버튼(`EQ 초기화`/`FX Sound 초기화`/`리버브/에코 초기화`)으로 충분하다고 판단.

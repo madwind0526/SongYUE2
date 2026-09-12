@@ -134,7 +134,12 @@ YuE2는 범용 악보 리더가 아니라, `V: Vocal`/`V: Ins` 두 성부를 각
 
 `POST /api/cover-transcribe`는 설정의 `sheetSagePythonPath`로 별도 Python 환경을 실행합니다. `models/m-a-p/SheetSage2/config.json`과 `models/m-a-p/SheetSage2/model.safetensors`가 있으면 `--model models/m-a-p/SheetSage2 --offline`으로 로컬 모델을 사용합니다. 가중치 파일만 있으면 준비가 끝난 것이 아니며, Hugging Face 스냅샷의 Python 코드와 설정 파일이 같은 폴더에 있어야 합니다.
 
-**현재 상태(2026-09-12)**: `models/m-a-p/SheetSage2/`에 `config.json`과 나머지 Python 코드 파일(`modeling_sheetsage2.py`, `pipeline_sheetsage2.py`, `notation_sheetsage2.py` 등)까지 모두 설치되어 있어, 앱은 이 폴더를 오프라인 모델로 인식하는 조건(`config.json`+`model.safetensors` 존재)을 이미 만족합니다. 남은 준비물은 **SheetSage2 전용 Python 가상환경**입니다: 이 모델은 `test/YuE2-source/requirements-sheetsage2.txt`에 고정된 버전(`torch==2.8.0`, `transformers==4.45.2` 등)이 필요한데, YuE2 본체 실행에 쓰는 기존 `.venv`는 이미 더 최신 버전(`torch 2.10`, `transformers 4.57`)이 설치돼 있어 같은 venv를 공유하면 버전 충돌이 날 수 있습니다. 별도 venv를 만들어 `pip install -r requirements-sheetsage2.txt`로 설치한 뒤, 설정 화면에서 `sheetSagePythonPath`를 그 venv의 `python.exe`로 지정해야 `POST /api/cover-transcribe`가 실제로 동작합니다. `transcribe.py`(전사 스크립트)는 `pythonScriptPath`와 같은 폴더(`test/YuE2-source/skills/yue2-music/scripts/`)에 이미 있습니다.
+**현재 상태(2026-09-12)**: 실제 오디오 파일로 `POST /api/cover-transcribe` 종단 테스트에 성공했습니다 — 완성곡을 입력으로 넣어 `abc_tools.py inspect`로 구조 검증까지 통과하는 native ABC(Vocal/Ins 두 성부, 128개 소리 나는 음표, 37마디)가 정상 생성됨을 확인했습니다. 준비 과정에서 실제로 걸렸던 문제 두 가지와 해결책:
+
+1. **`models/m-a-p/SheetSage2/config.json`의 `weights_format` 불일치.** 다운로드한 `model.safetensors`를 직접 열어보면(`safetensors.safe_open`) `encoder.*` 키가 876개 들어 있는 **완전히 병합(merged)된 체크포인트**인데, `config.json`은 `"weights_format": "adapter"`(별도 LoRA 어댑터 + 원격 `m-a-p/MERT-v2-FullSong` 베이스 모델을 따로 받아 병합하는 방식)로 되어 있어 `missing_keys` 오류로 로드가 실패했습니다. `config.json`의 `weights_format` 값을 `"merged"`로 바꾸면(어댑터/베이스 모델 다운로드 자체가 불필요해짐) 정상 로드됩니다. `models/`는 `.gitignore`에 있어 이 수정은 코드 저장소에 남지 않으므로, 모델을 다시 받을 경우 이 값을 다시 고쳐야 합니다.
+2. **`backend/server.mjs`가 출력 폴더를 미리 만들어 `transcribe.py`와 충돌.** `transcribe.py`는 안전장치로 `fresh_directory()`(`exist_ok=False`)를 써서 출력 폴더가 이미 있으면 실패하도록 만들어져 있는데, 백엔드가 그 폴더를 스크립트 실행 전에 미리 만들어 항상 충돌했습니다. 부모 폴더만 미리 만들고 실제 출력 폴더는 스크립트가 직접 만들게 하도록 수정했습니다(백엔드 코드 수정이라 git에 반영됨).
+
+**SheetSage2 전용 Python 가상환경 준비**: `test/YuE2-source/requirements-sheetsage2.txt`에 고정된 버전(`torch==2.8.0`+cu128, `transformers==4.45.2` 등)이 필요한데, YuE2 본체 실행에 쓰는 기존 `.venv`는 더 최신 버전(`torch 2.10`, `transformers 4.57`)이 설치돼 있어 같은 venv를 공유하면 버전 충돌이 날 수 있습니다. 별도 venv(`.venv-sheetsage2`)를 만들어 `pip install -r requirements-sheetsage2.txt`로 설치한 뒤, 설정 화면에서 `sheetSagePythonPath`를 그 venv의 `python.exe`로 지정해야 합니다. `transcribe.py`(전사 스크립트)는 `pythonScriptPath`와 같은 폴더(`test/YuE2-source/skills/yue2-music/scripts/`)에 있습니다.
 
 ## 검증
 

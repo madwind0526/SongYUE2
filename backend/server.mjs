@@ -489,7 +489,11 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const sheetSageDir = path.join(root, 'models', 'm-a-p', 'SheetSage2');
     const hasLocalSheetSage = await exists(path.join(sheetSageDir, 'config.json')) && await exists(path.join(sheetSageDir, 'model.safetensors'));
     const outDir = path.join(outputDirectory, 'cover-transcribe', randomUUID());
-    await mkdir(outDir, { recursive: true });
+    // transcribe.py creates outDir itself via a "fresh_directory" helper that requires the
+    // path not already exist (exist_ok=False), as a safety check against reusing a stale run's
+    // directory -- only ensure its parent exists here, or the script's own mkdir collides with
+    // one the backend already did and fails immediately.
+    await mkdir(path.dirname(outDir), { recursive: true });
     const args = [transcribeScript, audioFile, '--output', outDir, '--task', task, ...(hasLocalSheetSage ? ['--model', sheetSageDir, '--offline'] : [])];
     const log = await new Promise((resolve, reject) => {
       const child = spawnImpl(python, args, { windowsHide: true, cwd: path.dirname(transcribeScript) });
@@ -502,6 +506,10 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       child.once('error', (error) => { clearTimeout(timer); reject(error); });
       child.once('close', (code, signal) => { clearTimeout(timer); resolve({ text: Buffer.concat(chunks).toString('utf8'), code, signal }); });
     }).catch(() => { throw fail(502, 'SheetSage2 전사 스크립트를 실행할 수 없습니다. 설정의 Python 경로를 확인해 주세요.'); });
+    // The script may have failed before ever creating outDir itself (e.g. an import error),
+    // so make sure it exists before writing the log -- mkdir recursive is safe to call even
+    // if transcribe.py already created it, unlike fresh_directory's exist_ok=False.
+    await mkdir(outDir, { recursive: true });
     await writeFile(path.join(outDir, 'run.log'), log.text);
     const abcFile = path.join(outDir, 'score.abc');
     if (!(await exists(abcFile))) {
