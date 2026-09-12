@@ -76,7 +76,7 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 | POST `/api/llm/test` | `{}` → `{ok:true,text,provider,model}` |
 | POST `/api/llm/assist` | `{task:'lyrics'|'style',prompt,lyrics,style}` → `{text,provider,model}` |
 | POST `/api/llm/abc-edit` | `{instruction,abc}` → `{abc,provider,model}`. LLM에게 ABC notation을 지시사항대로 수정하게 하고, 코드펜스를 벗겨낸 결과 전체를 반환(설명 텍스트 없음). 지시사항이 비어있으면 400 |
-| POST `/api/generate` | `{projectId}` → 선택 모델에 따라 audio.cpp GGUF 또는 공식 Python YuE2 엔진을 실행해 음악을 생성하고, 성공하면 `library/music`에 새 완성곡으로 저장합니다. 200과 갱신된 프로젝트(`status:'completed'`, `audioPath`, `durationMs`, `rtf`, `saveError?`) 반환. 모델·가사·스타일·시드·스텝·cot·instrumental·abc는 저장된 프로젝트 값을 그대로 사용합니다. 400: 엔진 경로 미설정/모델 미지원/모델 파일 누락/가사·스타일 없음. 409: 이미 다른 곡을 생성 중. 502: 엔진 실행 실패, 제한 시간(10분) 초과, 종료 코드 비정상 — `runs/<id>/generate.log`에서 로그 확인 가능 |
+| POST `/api/generate` | `{projectId}` → 선택 모델에 따라 audio.cpp GGUF 또는 공식 Python YuE2 엔진을 실행해 음악을 생성하고, 성공하면 `library/music`에 새 완성곡으로 저장합니다. 200과 갱신된 프로젝트(`status:'completed'`, `audioPath`, `durationMs`, `rtf`, `saveError?`) 반환. 모델·가사·스타일·시드·스텝·cot·instrumental·abc는 저장된 프로젝트 값을 그대로 사용합니다. 400: 엔진 경로 미설정/모델 미지원/모델 파일 누락/가사·스타일 없음/**GGUF 모델에 비어있지 않은 `abc`가 있는 경우**(`runAudioCpp`는 `--abc-file`을 지원하지 않아 조용히 무시되므로 사전 차단). 409: 이미 다른 곡을 생성 중. 502: 엔진 실행 실패, 제한 시간(10분) 초과, 종료 코드 비정상 — `runs/<id>/generate.log`에서 로그 확인 가능 |
 | GET `/api/generate/status` | 생성 진행 상황 폴링용. `{active:false,elapsedMs:0,expectedMs:0}` 또는 `{active:true,projectId,elapsedMs,expectedMs}` |
 | GET `/api/projects/:id/audio` | 완성된 오디오를 실제 확장자에 맞는 Content-Type(wav/flac/mp3/mp4)으로 스트리밍. 아직 생성되지 않았거나 파일이 없으면 404 |
 | POST `/api/projects/:id/post-process` | `{dataUrl}`(`audio/wav`, base64, 최대 150MB) → 브라우저에서 Web Audio로 EQ/FX/리버브·에코 처리된 오디오를 원본과 같은 파일 형식(mp4는 원본 비디오+새 오디오 트랙 합성)으로 재인코딩해 바이너리로 응답(다운로드). 원본 프로젝트 파일 자체는 바뀌지 않음. `ffmpeg`가 없거나 실패하면 502 |
@@ -128,7 +128,11 @@ audio.cpp 자체의 설치/빌드 방법은 [audiocpp-setup.md](audiocpp-setup.m
 
 YuE2는 범용 악보 리더가 아니라, `V: Vocal`/`V: Ins` 두 성부를 각각 사람 목소리/악기 연주로 렌더링하도록 학습된 2채널 전용 모델입니다. `V: Vocal` 성부를 통째로 지우면 `AbcError: Incomplete native two-voice ABC`로 즉시 실패하고, 지우지 않더라도 그 자리를 실제 멜로디로 채우면 YuE2가 다시 사람 목소리로 합성해 버립니다. 화성(코드) 심볼은 이 native 방언에서 오직 `Vocal` 성부에만 존재할 수 있고(`Ins`에 있으면 파싱 단계에서 거부됩니다), Vocal이 쉬는 구간에도 화성 전달을 위해 그대로 남아 있어야 합니다.
 
-그래서 `instrumental:true`로 생성할 때 서버는 `abc_tools.py mute-voice <원본.abc> <output.abc> --keep-voice Ins`를 실행합니다 — `Vocal`의 소리 나는 음표만 같은 박자 그리드 위의 쉼표(`z`)로 바꾸고, `"Am7"` 같은 화음 기호는 코드가 아니라 텍스트 위치만 유지되므로 그대로 남아 `"Am7"z16` 형태가 됩니다. `Ins` 성부는 그대로(코드 없이 실제 반주 멜로디)이며, 이렇게 만든 ABC를 `--abc-file`로 넘겨 생성합니다. 기존에 있던 `strip-chords --keep-voice`(모든 화음 기호를 지우는 명령, `cot="melody"` 재작곡용)로는 Vocal의 화성 정보까지 사라져 이 용도에 맞지 않아 별도 명령으로 분리했습니다. GGUF 모델(Q4/Q8/BF16)은 이 구조적 방식을 쓰지 않으며 `instrumental, no vocals` 스타일 힌트로만 지원합니다(보장 없음).
+그래서 `instrumental:true`로 생성할 때 서버는 `abc_tools.py mute-voice <원본.abc> <output.abc> --keep-voice Ins`를 실행합니다 — `Vocal`의 소리 나는 음표만 같은 박자 그리드 위의 쉼표(`z`)로 바꾸고, `"Am7"` 같은 화음 기호는 코드가 아니라 텍스트 위치만 유지되므로 그대로 남아 `"Am7"z16` 형태가 됩니다. `Ins` 성부는 그대로(코드 없이 실제 반주 멜로디)이며, 이렇게 만든 ABC를 `--abc-file`로 넘겨 생성합니다. 기존에 있던 `strip-chords --keep-voice`(모든 화음 기호를 지우는 명령, `cot="melody"` 재작곡용)로는 Vocal의 화성 정보까지 사라져 이 용도에 맞지 않아 별도 명령으로 분리했습니다. GGUF 모델(Q4/Q8/BF16)은 이 구조적 방식을 쓰지 않으며 `instrumental, no vocals` 스타일 힌트로만 지원합니다(보장 없음). 프론트엔드는 GGUF 모델 선택 시 "악기만" 버튼 자체를 비활성화합니다(2026-09-12부터).
+
+### ABC 악보(심볼릭 작곡/커버)도 원본 모델 한정
+
+`runAudioCpp()`(GGUF 경로)는 애초에 `--abc-file` 인자를 지원하지 않습니다 — `runPythonAction()`(원본 Python 경로)만 저장된 `project.abc`를 파일로 써서 엔진에 넘깁니다. 즉 "심볼릭 작곡"(`/api/plan`)이나 SheetSage2 "오디오에서 추출"(`/api/cover-transcribe`)로 만든 ABC는 GGUF 모델로 생성할 때 조용히 무시되고 가사/스타일만으로 생성됩니다. 이를 막기 위해(2026-09-13) 프론트엔드는 GGUF 선택 시 두 버튼을 비활성화하고, `/api/generate`도 GGUF+비어있지 않은 `abc` 조합을 400으로 거부합니다.
 
 ## SheetSage2
 

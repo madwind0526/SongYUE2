@@ -2,19 +2,54 @@
 
 `git log`를 기준으로 정리한 커밋 단위 변경 이력입니다. 최신 항목이 위에 옵니다.
 
-## Unreleased — 이 커밋에 포함될 변경사항 (2026-09-12)
+## `4fed156` — Disable ABC-driven generation (symbolic plan/cover) on GGUF models (2026-09-13)
 
-**"악기만" 무보컬 메커니즘 재검증 및 수정**
+`runAudioCpp()`는 애초에 `--abc-file` 인자를 지원한 적이 없어, GGUF 모델을 선택한 채 ABC 악보(심볼릭 작곡이든 SheetSage2 "오디오에서 추출" 커버 결과든)를 채우고 생성하면 조용히 무시되고 가사/스타일만으로 생성되는 함정이 있었음. "심볼릭 작곡"/"오디오에서 추출" 버튼을 GGUF 선택 시 비활성화하고 안내 문구를 추가, `/api/generate`에도 GGUF+비어있지 않은 ABC 조합을 명확한 오류로 거부하는 보루를 추가.
 
-- 사용자가 YuE2의 Vocal/Ins 2성부 설계를 상세히 설명하며 재검토를 요청: `V: Vocal` 성부는 지우면 안 되고, 화음 기호가 붙은 쉼표(예 `"D"z16`)로 채워야 화성이 오케스트라에 전달됨.
-- 로컬에 설치된(레포 밖, `test/` — `.gitignore`) `abc_tools.py`를 확인해 보니 기존 `strip-chords --keep-voice Ins`는 Vocal을 쉼표로 바꾸는 것과 별개로 **전체 성부의 화음 기호까지 지워버려** 이 설계와 어긋났음 — 파서 자체의 불변식(`"Native chord symbols belong in Vocal, not Ins"`)과 `references/abc-editing.md`("harmony is represented by quoted symbols in Vocal, including when resting")가 이를 뒷받침.
-- `abc_tools.py`에 화음 기호는 건드리지 않고 선택하지 않은 성부의 음표만 쉼표로 바꾸는 `mute-voice` 명령을 신설, `backend/server.mjs`의 `stripVocalVoice()`를 이 명령을 쓰도록 전환. `backend/server.test.mjs`의 관련 검증도 함께 갱신, 8개 스위트 전체 통과.
+## `bec5aad` — Fix SheetSage2 cover-transcribe directory collision; verify end-to-end (2026-09-12)
 
-**문서화**
+`runTranscribe()`가 출력 폴더를 미리 만들어(`mkdir`) `transcribe.py`의 안전장치(`fresh_directory()`, `exist_ok=False`)와 항상 충돌해 즉시 실패하던 버그 수정 — 부모 폴더만 미리 만들도록 변경. 실제 완성곡 오디오로 `/api/cover-transcribe` 종단 테스트 성공, 결과 ABC가 `abc_tools.py inspect` 구조 검증도 통과. 과정에서 로컬 `models/m-a-p/SheetSage2/config.json`의 `weights_format` 오기(`adapter`→`merged`)도 함께 발견해 수정(모델 폴더는 `.gitignore`라 저장소에는 안 남고 `docs/models.md`에 기록).
 
-- `docs/local-api.md`의 엔드포인트 표를 실제 코드 기준으로 전면 재작성. 이전에는 3개 엔드포인트만 누락된 것으로 파악했으나, 실제로는 재생목록·프로젝트 커버·심볼릭 작곡(ABC) 관련 엔드포인트 대부분(`plan`/`abc-check`/`cover-transcribe`/`abc-file`/`abc-notes`+하위 경로/`llm/abc-edit`/`generate/status`)이 문서화되어 있지 않았음.
-- `Setting/` 폴더(앱 레벨 설정 저장소, `library/`와 별개)의 존재와 용도를 `docs/local-api.md`에 문서화.
-- `docs/models.md`의 SheetSage2 절이 "config.json 미설치" 기준으로 정체되어 있던 것을, 실제로 설치가 끝난 현재 상태(config.json+코드 완비, 별도 Python venv만 남음)로 갱신.
+## `4be5312` — Disable "악기만" entirely for GGUF models instead of just warning (2026-09-12)
+
+GGUF는 "악기만"을 구조적으로 보장할 수 없어 소프트 스타일 힌트로만 허용해 왔던 것을, 만들기 화면에서 버튼 자체를 비활성화하도록 변경. 직접 토글뿐 아니라 프로젝트 리믹스 로드(`loadProject()`)와 localStorage 초안 복원 경로에서도 `instrumental` 값이 비-Python 모델에 stuck되지 않도록 정리 — 세 경로 모두 Playwright로 검증.
+
+## `6f94640` — Add a seek/position slider below the post-process waveforms (2026-09-12)
+
+후처리/EQ 다이얼로그의 원본·처리 결과 파형 아래에 재생 위치를 보여주고 이동할 수 있는 슬라이더 추가(기존 Web Audio 재생 상태를 재사용하는 `seekTo(seconds)` 신설). 전송 바의 볼륨 아이콘도 속도 컨트롤과의 간격을 위해 약간 오른쪽으로 이동.
+
+## 원형 비주얼라이저 전면 설정화 (11개 커밋, 2026-09-12)
+
+`d8c597b`부터 `52fb4d4`까지, 후처리 다이얼로그의 원형 라이브 비주얼라이저에 하드코딩되어 있던 상수를 사용자가 조정 가능한 설정으로 하나씩 옮기고, 그 과정에서 발견된 시각적 버그를 함께 고침:
+
+- 라인 굵기(`d8c597b`), 잔상/afterimage(`1153411`) 설정 추가.
+- 잔상이 배경을 검게 물들이던 버그를 `destination-out` 합성으로 수정, 나선(spiral) 정도 설정 추가(`862ce22`).
+- 링마다 같은 프레임을 다른 위상으로 읽는 회전(radial) 모드 외에, 링마다 과거의 다른 프레임을 읽는 시간축(time) 모드 신설(`befb6d1`).
+- 항상 0으로 죽어 있던 최상단 주파수 빈과 항상 포화된 최하단 빈을 원 매핑에서 제외(`4cae637`).
+- 시간축 모드에 고정 반지름 + 초 단위 시간 간격/가속도(가속도=지수) 설정 추가, 회전 모드의 링 간격도 설정화, 고주파 제외 폭을 25%→35%로 확대(`087a24a`).
+- 캔버스의 HTML 해상도와 실제 CSS 박스 크기가 어긋나 원이 타원으로 찌그러지던 버그 수정(`705570c`).
+- 변동폭(진폭)을 설정으로 노출(`041db60`), 이후 양방향(줄어듦 포함)으로 개선하고 기본값을 2로 상향(`115ef38`), 줄어드는 쪽은 늘어나는 쪽의 절반 강도로 비대칭 처리(`741ff69`).
+- 마지막 점과 첫 점을 잇던 이상한 연결선을 없애고 열린 곡선으로 변경(`52fb4d4`).
+
+## `a73f190` — Triple the height of the lyrics/style suggestion edit textarea (2026-09-12)
+
+AI 제안을 적용 전에 편집하는 다이얼로그의 텍스트영역이 공용 최소 높이(90px)로는 너무 좁아, 전용 클래스로 분리해 세 배로 키움(프로젝트 메모 텍스트영역은 영향 없음).
+
+## `5683fd5` — Update progress.md: SheetSage2 venv is set up, only e2e transcribe test remains (2026-09-12)
+
+진행 상황 문서만 갱신(venv 준비 완료, 남은 것은 실기 종단 테스트뿐이라는 상태 반영).
+
+## `c82248c` — Fix recent-projects sidebar leak, add visualizer settings, UI cleanup (2026-09-12)
+
+사이드바 "최근 프로젝트"가 필터링 없는 전체 프로젝트 목록을 그대로 써서, 방금 완성한 곡이 프로젝트로 잘못 표시되던 버그 수정(초안만 보이도록 제한). 설정 화면에 비주얼라이저 켬/끔·링 개수·색조 설정 섹션 신설, 후처리 다이얼로그의 하드코딩 상수를 이 설정과 연결. 그 외: 사이드바/작곡 화면의 중복 라벨 제거, AI 제안 다이얼로그에 편집 토글 추가, 카드 뷰에 곡 길이(MM:SS, Orbitron) 표시.
+
+## `ccde9ca` — Re-verify low-priority ideas in the browser, drop combined reset button (2026-09-12)
+
+Playwright로 재확인한 결과 비주얼라이저 커스터마이즈와 프리셋 내보내기/가져오기는 여전히 미구현으로 확인. "전체 초기화" 버튼은 이미 EQ/FX/리버브·에코 개별 초기화 버튼 세 개로 구현되어 있어, 통합 버튼을 추가하지 않고 의도된 설계로 확정.
+
+## `841641d` — Fix instrumental vocal-muting to preserve harmony, overhaul API docs (2026-09-12)
+
+"악기만" 생성 경로가 쓰던 `abc_tools.py strip-chords --keep-voice Ins`는 전체 악보의 화음 기호까지 지워버렸음 — native 방언에서 화음 기호는 오직 Vocal에만, 쉬는 동안에도 존재해야 화성이 오케스트라에 전달되는데 그 신호를 잃게 됨. 화음 기호는 건드리지 않고 선택하지 않은 성부의 음표만 쉼표로 바꾸는 `mute-voice` 명령을 신설해 전환. `docs/local-api.md`의 엔드포인트 표도 실제 코드 기준으로 전면 재작성(재생목록·프로젝트 커버·심볼릭 ABC 관련 엔드포인트 대부분이 미문서화 상태였음), `docs/models.md`의 SheetSage2 상태도 갱신.
 
 ## `369caf3` — Enlarge and simplify the sidebar by-line (2026-09-12)
 
