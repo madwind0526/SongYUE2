@@ -17,3 +17,4 @@ logs/
 *.log
 __pycache__/
 *.partial
+.playwright-mcp/
