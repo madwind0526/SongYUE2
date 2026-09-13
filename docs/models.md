@@ -8,7 +8,7 @@
 python scripts/download_models.py
 ```
 
-Python 표준 라이브러리만 사용합니다. 중단 후 같은 명령을 실행하면 부분 파일부터 이어 받고, 완성된 파일은 해시를 검증한 후 건너뜁니다. 한 번에 세 파일을 전송합니다. 모델 저장소의 리비전을 고정하고 LFS SHA-256과 대조합니다. 작은 비 LFS 파일도 다운로드한 SHA-256을 기록합니다.
+Python 표준 라이브러리만 사용합니다. 중단 후 같은 명령을 실행하면 부분 파일부터 이어 받고, 완성된 파일은 해시를 검증한 후 건너뜁니다. 한 번에 세 파일을 전송합니다. 모델 저장소의 리비전을 고정하고 LFS SHA-256과 대조합니다. 작은 비 LFS 파일도 다운로드한 SHA-256을 기록합니다. **저장소를 선택해서 받는 옵션은 없습니다** — 실행할 때마다 아래 4개 저장소를 전부 대상으로 합니다(이미 완료된 파일은 해시 검증 후 건너뜀). GGUF만 쓸 계획이어도 원본 모델(m-a-p/YuE2-3B, YuE2-Vae)이 함께 받아지고, 그 반대도 마찬가지입니다. 일부만 받고 싶다면 스크립트 상단의 `REPOS` 딕셔너리를 직접 편집해야 합니다.
 
 총 다운로드 대상은 **23,314,925,299 바이트 (약 23.31 GB / 21.71 GiB)** 입니다. 모델과 구성 파일, 토크나이저, 모델 코드, 최신 추론 패키지 wheel, 라이선스 문서를 포함합니다. 데모 음원·영상·홍보 이미지, 이전 wheel, 별도 MERT/SheetSage 모델은 제외합니다.
 
@@ -27,7 +27,7 @@ GGUF 폴더에는 BF16, Q8_0, Q4_0 본체와 F16/F32 VAE 및 `sidecars/`가 있�
 
 사용자가 직접 받은 `sheetsage2_bf16.safetensors`는 `models/m-a-p/SheetSage2/model.safetensors` 위치에 두었고, 이후 Hugging Face `m-a-p/SheetSage2` 스냅샷의 `config.json`과 나머지 코드·자산 파일(`modeling_sheetsage2.py`, `pipeline_sheetsage2.py`, `notation_sheetsage2.py`, `requirements.txt` 등 전체)도 같은 폴더에 받아 두어, `AutoModel.from_pretrained(..., trust_remote_code=True)`로 로드 가능한 상태입니다. 앱의 `GET /api/models`/`POST /api/cover-transcribe`는 `config.json`+`model.safetensors` 존재 여부로 로컬 모델 사용 가능 여부를 판단하므로, 이 조건은 이미 충족됩니다.
 
-이 폴더의 코드가 요구하는 Python 패키지 버전(`torch==2.8.0`+cu128, `transformers==4.45.2` 등, `requirements-sheetsage2.txt`)은 YuE2 본체용 venv에 이미 설치된 더 최신 버전(`torch 2.10`, `transformers 4.57`)과 달라 같은 venv를 공유하면 버전 충돌 위험이 있으므로, **별도 Python 가상환경**(`test/YuE2-source/.venv-sheetsage2`)을 만들어 `requirements-sheetsage2.txt`를 설치하고, 설정 화면의 `sheetSagePythonPath`를 그 venv의 `python.exe`로 지정해야 합니다.
+이 폴더의 코드가 요구하는 Python 패키지 버전(`torch==2.8.0`+cu128, `transformers==4.45.2` 등, `requirements-sheetsage2.txt`)은 YuE2 본체용 venv에 이미 설치된 더 최신 버전(`torch 2.10`, `transformers 4.57`)과 달라 같은 venv를 공유하면 버전 충돌 위험이 있으므로, **별도 Python 가상환경**(`test/YuE2-source/.venv-sheetsage2`)을 만들어 `requirements-sheetsage2.txt`를 설치하고, 설정 화면의 `sheetSagePythonPath`를 그 venv의 `python.exe`로 지정해야 합니다. 처음부터 설치하는 절차는 [docs/python-engine-setup.md](python-engine-setup.md)의 SheetSage2 절을 참고하세요.
 
 **2026-09-12: 실제 오디오로 종단 테스트 성공.** venv 준비 후 `config.json`에 문제가 하나 더 있었습니다 — 다운로드한 `model.safetensors`를 직접 열어보면 `encoder.*` 키가 876개 포함된 **완전히 병합된(merged) 체크포인트**인데, `config.json`은 `"weights_format": "adapter"`(원격 `m-a-p/MERT-v2-FullSong`을 따로 받아 LoRA 어댑터와 병합하는 방식)로 되어 있어 `missing_keys` 오류로 로드가 실패했습니다. `config.json`의 `weights_format`을 `"merged"`로 고치면 정상 로드됩니다(베이스 모델 다운로드 자체가 불필요해짐). `models/`는 `.gitignore`에 있어 이 수정은 저장소에 남지 않으므로, 모델을 다시 받을 경우 이 값을 다시 고쳐야 합니다. 자세한 내용과 백엔드 쪽에 있었던 두 번째 문제(출력 폴더 충돌)는 [docs/local-api.md](local-api.md#sheetsage2)를 참고하세요.
 

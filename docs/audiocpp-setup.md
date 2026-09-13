@@ -11,6 +11,56 @@ YuE2 지원은 [`0xShug0/audio.cpp`](https://github.com/0xShug0/audio.cpp)의 **
 - NVIDIA CUDA Toolkit (RTX 50시리즈/Blackwell은 12.8 이상 필요)
 - git
 
+## 0. 사전 준비
+
+### 0-1. git 설치 확인
+
+```powershell
+git --version
+```
+
+버전이 안 나오면 설치하세요(설치 후 **새 PowerShell 창을 열어야** PATH가 반영됩니다).
+
+```powershell
+winget install --id Git.Git -e
+```
+
+### 0-2. Visual Studio 2022 Build Tools + C++ workload 설치
+
+winget으로 한 번에 설치할 수 있습니다(수 GB, 몇 분 소요).
+
+```powershell
+winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+```
+
+또는 [visualstudio.microsoft.com/downloads](https://visualstudio.microsoft.com/downloads/) → **Build Tools for Visual Studio 2022**를 받아 실행한 뒤, 워크로드 목록에서 **"C++를 사용한 데스크톱 개발"(Desktop development with C++)**을 체크하고 설치하세요. Visual Studio IDE 전체를 설치할 필요는 없습니다.
+
+설치 확인 — 아래 명령이 실행되는 새 PowerShell 창을 여세요(`vcvars64.bat`가 MSVC 컴파일러를 PATH에 넣어 줍니다).
+
+```powershell
+& "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+```
+
+경로가 출력되면 C++ workload가 정상 설치된 것입니다. 아무 것도 안 나오면 workload 없이 Build Tools만 설치된 것이니 위 winget 명령을 다시 실행하세요.
+
+### 0-3. NVIDIA CUDA Toolkit 설치
+
+먼저 드라이버가 지원하는 최대 CUDA 버전을 확인하세요.
+
+```powershell
+nvidia-smi
+```
+
+우측 상단에 표시되는 CUDA 버전을 확인합니다(RTX 50시리즈/Blackwell은 **12.8 이상 필수**). [developer.nvidia.com/cuda-downloads](https://developer.nvidia.com/cuda-downloads)에서 Windows용 설치 프로그램을 받아 실행하세요(**express(권장) 설치**로 충분합니다). 여러 버전이 필요하면 같은 페이지의 [Archive](https://developer.nvidia.com/cuda-toolkit-archive)에서 특정 버전을 받을 수 있습니다.
+
+설치 확인 — 새 PowerShell 창에서:
+
+```powershell
+nvcc --version
+```
+
+버전이 출력되지 않으면 설치가 안 됐거나 PATH가 반영되지 않은 것입니다(재부팅 후 재시도).
+
 ## 빌드
 
 ```powershell
@@ -65,3 +115,19 @@ RTX 5070(12GB) 기준 Q4_0 + F16 VAE 조합으로 58초 분량 음악을 22.9초
 - `.env`의 `ENGINE_PATH` (최초 실행 시 설정의 기본값으로 사용됨)
 
 모델 선택(Q4/Q8/BF16)에 따라 자동으로 맞는 GGUF 본체+VAE 조합이 선택됩니다. 자세한 API 동작은 [local-api.md](local-api.md)를 참고하세요.
+
+## "악기만"/ABC 커버를 GGUF에서 쓰려면 Python도 필요
+
+GGUF 모델로 최종 오디오를 생성하는 데는 이 문서만으로 충분하지만, "악기만" 생성이나 ABC 악보 기반 커버/심볼릭 작곡을 쓰려면 ABC 준비 단계(계획 생성, 보컬 성부 뮤트)가 항상 공식 Python 엔진(`abc_tools.py`)을 거칩니다. 이 기능들까지 쓰려면 [python-engine-setup.md](python-engine-setup.md)의 Python 환경 구성도 함께 해야 합니다.
+
+## 자주 만나는 문제
+
+| 증상 | 원인 / 해결 |
+|---|---|
+| `'cl' is not recognized`, MSVC 컴파일러를 못 찾음 | C++ workload 없이 Build Tools만 설치됨 — 0-2번의 winget 명령을 다시 실행하거나, Visual Studio Installer를 열어 workload를 추가 |
+| CMake가 CUDA 컴파일러를 못 찾음 | CUDA Toolkit 설치 후 새 PowerShell 창을 열지 않음 — 터미널 재시작(그래도 안 되면 재부팅) |
+| `no kernel image is available for execution`, 또는 빌드는 되는데 실행 시 GPU 인식 실패 | `-CudaArchitectures`가 내 GPU와 안 맞음 — `120a-real`(RTX 50시리즈 전용) 대신 `auto`로 다시 빌드 |
+| 빌드가 너무 오래 걸림 | `-ModelSet full`로 잘못 실행했을 가능성 — `-ModelSet custom -Models yue2`인지 확인 |
+| `--list-loaders`에 `yue2`가 안 보임 | `dev` 브랜치가 아니라 `main`을 클론했을 가능성 — `git branch`로 확인(`-b dev`로 다시 클론) |
+| 모델 파일이 없다는 오류 | `scripts/download_models.py`를 아직 안 돌렸거나 중간에 중단됨 — 다시 실행하면 이어받기 |
+| VRAM 부족(OOM) | 더 작은 양자화(BF16→Q8→Q4) 또는 F16 VAE 조합으로 모델 선택 변경 |

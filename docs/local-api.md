@@ -124,15 +124,15 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 
 audio.cpp 자체의 설치/빌드 방법은 [audiocpp-setup.md](audiocpp-setup.md)를 참고하세요. 한 번에 한 곡만 생성합니다(서버 내부 플래그로 동시 실행 차단, GPU 하나를 공유하기 때문). `wav`가 아닌 형식을 선택했는데 `ffmpeg`가 PATH에 없으면 변환이 실패해도 생성 자체는 성공 처리하고 `wav`로 대신 저장하며, `saveError`에 이유를 남깁니다.
 
-### "악기만"(구조적 무보컬)이 실제로 동작하는 방식 — 원본(공식 Python) 모델 한정
+### "악기만"(구조적 무보컬)이 실제로 동작하는 방식 — GGUF/원본 공통 (2026-09-14부터)
 
 YuE2는 범용 악보 리더가 아니라, `V: Vocal`/`V: Ins` 두 성부를 각각 사람 목소리/악기 연주로 렌더링하도록 학습된 2채널 전용 모델입니다. `V: Vocal` 성부를 통째로 지우면 `AbcError: Incomplete native two-voice ABC`로 즉시 실패하고, 지우지 않더라도 그 자리를 실제 멜로디로 채우면 YuE2가 다시 사람 목소리로 합성해 버립니다. 화성(코드) 심볼은 이 native 방언에서 오직 `Vocal` 성부에만 존재할 수 있고(`Ins`에 있으면 파싱 단계에서 거부됩니다), Vocal이 쉬는 구간에도 화성 전달을 위해 그대로 남아 있어야 합니다.
 
-그래서 `instrumental:true`로 생성할 때 서버는 `abc_tools.py mute-voice <원본.abc> <output.abc> --keep-voice Ins`를 실행합니다 — `Vocal`의 소리 나는 음표만 같은 박자 그리드 위의 쉼표(`z`)로 바꾸고, `"Am7"` 같은 화음 기호는 코드가 아니라 텍스트 위치만 유지되므로 그대로 남아 `"Am7"z16` 형태가 됩니다. `Ins` 성부는 그대로(코드 없이 실제 반주 멜로디)이며, 이렇게 만든 ABC를 `--abc-file`로 넘겨 생성합니다. 기존에 있던 `strip-chords --keep-voice`(모든 화음 기호를 지우는 명령, `cot="melody"` 재작곡용)로는 Vocal의 화성 정보까지 사라져 이 용도에 맞지 않아 별도 명령으로 분리했습니다. GGUF 모델(Q4/Q8/BF16)은 이 구조적 방식을 쓰지 않으며 `instrumental, no vocals` 스타일 힌트로만 지원합니다(보장 없음). 프론트엔드는 GGUF 모델 선택 시 "악기만" 버튼 자체를 비활성화합니다(2026-09-12부터).
+그래서 `instrumental:true`로 생성할 때 서버는 `abc_tools.py mute-voice <원본.abc> <output.abc> --keep-voice Ins`를 실행합니다 — `Vocal`의 소리 나는 음표만 같은 박자 그리드 위의 쉼표(`z`)로 바꾸고, `"Am7"` 같은 화음 기호는 코드가 아니라 텍스트 위치만 유지되므로 그대로 남아 `"Am7"z16` 형태가 됩니다. `Ins` 성부는 그대로(코드 없이 실제 반주 멜로디)이며, 이렇게 만든 ABC를 원본(Python) 경로는 `--abc-file`로, GGUF 경로는 아래 방식으로 넘겨 생성합니다. 기존에 있던 `strip-chords --keep-voice`(모든 화음 기호를 지우는 명령, `cot="melody"` 재작곡용)로는 Vocal의 화성 정보까지 사라져 이 용도에 맞지 않아 별도 명령으로 분리했습니다. ABC 준비(계획/mute-voice) 자체는 두 경로 모두 Python 엔진(`pythonEnginePath`/`pythonScriptPath`)을 거치므로, GGUF만 쓰더라도 이 설정은 필요합니다.
 
-### ABC 악보(심볼릭 작곡/커버)도 원본 모델 한정
+### ABC 악보(심볼릭 작곡/커버)도 GGUF에서 동작함 — `--request-option abc_file=`
 
-`runAudioCpp()`(GGUF 경로)는 애초에 `--abc-file` 인자를 지원하지 않습니다 — `runPythonAction()`(원본 Python 경로)만 저장된 `project.abc`를 파일로 써서 엔진에 넘깁니다. 즉 "심볼릭 작곡"(`/api/plan`)이나 SheetSage2 "오디오에서 추출"(`/api/cover-transcribe`)로 만든 ABC는 GGUF 모델로 생성할 때 조용히 무시되고 가사/스타일만으로 생성됩니다. 이를 막기 위해(2026-09-13) 프론트엔드는 GGUF 선택 시 두 버튼을 비활성화하고, `/api/generate`도 GGUF+비어있지 않은 `abc` 조합을 400으로 거부합니다.
+`audiocpp_cli`는 전용 `--abc-file` 플래그는 없지만, 범용 `--request-option key=value` 메커니즘으로 `abc`(텍스트) 또는 `abc_file`(경로)을 받습니다(`cot=melody`/`full`일 때만 허용 — `engine/audio.cpp/src/models/yue2/request.cpp`의 `abc_from_options()`). `runAudioCpp()`는 `project.abc`가 있으면(또는 `instrumental:true`로 위 mute-voice를 거치면) 이를 `runs/<project>/input.abc`에 쓰고 `--request-option abc_file=<path>`로 넘깁니다. 이전에는 이 메커니즘을 놓치고 "GGUF는 ABC를 지원하지 않는다"고 잘못 판단해 프론트엔드에서 두 버튼을 막고 `/api/generate`에서 GGUF+abc 조합을 거부했으나(2026-09-13), 실제로는 동작함을 CLI로 직접 검증(`yue2.plan.abc_tokens` 로그로 토큰화 확인)한 뒤 그 제약을 제거했습니다(2026-09-14). "심볼릭 작곡"(`/api/plan`)과 SheetSage2 "오디오에서 추출"(`/api/cover-transcribe`)은 어느 모델을 선택했든 동일하게 쓸 수 있습니다.
 
 ## SheetSage2
 

@@ -312,16 +312,41 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       if (!(await exists(path.join(modelRoot, relative)))) throw fail(400, `모델 파일이 없습니다: ${relative}. 모델 관리 화면에서 다운로드 상태를 확인해 주세요.`);
     }
     if (!project.lyrics.trim() || !project.style.trim()) throw fail(400, '가사와 음악 스타일이 필요합니다.');
+    if (project.abc && project.abc.trim() && project.cot === 'off') throw fail(400, '악보를 사용하려면 작곡 계획을 "멜로디 계획" 또는 "멜로디와 코드 계획"으로 설정해 주세요.');
     const projectRuns = path.join(outputDirectory, project.id);
     await mkdir(projectRuns, { recursive: true });
+    // audio.cpp's yue2 pipeline does accept an external ABC score -- not via a dedicated flag,
+    // but through the generic `--request-option abc_file=<path>` mechanism (gated behind
+    // cot=melody/full, same as the official Python engine). Reuse the same plan/mute-voice
+    // prep as runPythonYue2() so "악기만" and ABC-driven cover work identically on GGUF.
+    let effectiveProject = project;
+    let abcFile = null;
+    if (project.instrumental) {
+      let sourceAbc = project.abc && project.abc.trim() ? project.abc : null;
+      if (!sourceAbc) {
+        const planProject = { ...project, cot: project.cot === 'off' ? 'full' : project.cot };
+        const { outDir: planOutDir } = await runPythonAction('plan', planProject, [], 20000);
+        const planAbcFile = path.join(planOutDir, 'score.abc');
+        if (!(await exists(planAbcFile))) throw fail(502, '악기만 생성을 위한 심볼릭 작곡에 실패했습니다.');
+        sourceAbc = await readFile(planAbcFile, 'utf8');
+      }
+      const instrumentalAbc = await stripVocalVoice(sourceAbc, projectRuns);
+      abcFile = path.join(projectRuns, 'input.abc');
+      await writeFile(abcFile, instrumentalAbc, 'utf8');
+      effectiveProject = { ...project, cot: project.cot === 'off' ? 'melody' : project.cot };
+    } else if (project.abc && project.abc.trim()) {
+      abcFile = path.join(projectRuns, 'input.abc');
+      await writeFile(abcFile, project.abc, 'utf8');
+    }
     const audioFile = path.join(projectRuns, 'audio.wav');
     const logFile = path.join(projectRuns, 'generate.log');
     const threads = Math.max(1, Math.min(8, os.cpus().length));
     const args = [
       '--task', 'gen', '--family', 'yue2', '--model', modelRoot, '--backend', 'cuda', '--threads', String(threads),
       '--session-option', `yue2.model_gguf=${preset.model}`, '--session-option', `yue2.vae_gguf=${preset.vae}`,
-      '--lyrics', project.lyrics, '--request-option', `style=${project.style}${styleHint(project)}`, '--request-option', `cot=${project.cot}`,
-      '--request-option', `num_inference_steps=${project.steps}`, '--seed', String(project.seed),
+      '--lyrics', effectiveProject.lyrics, '--request-option', `style=${effectiveProject.style}${styleHint(effectiveProject)}`, '--request-option', `cot=${effectiveProject.cot}`,
+      '--request-option', `num_inference_steps=${effectiveProject.steps}`, '--seed', String(effectiveProject.seed),
+      ...(abcFile ? ['--request-option', `abc_file=${abcFile}`] : []),
       '--out', audioFile, '--log', '--metrics',
     ];
     const log = await new Promise((resolve, reject) => {
@@ -831,10 +856,6 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         if (!entry) throw fail(404, '프로젝트를 찾을 수 없습니다.');
         if (UNSUPPORTED_MODEL_MESSAGES[entry.project.modelId]) throw fail(400, UNSUPPORTED_MODEL_MESSAGES[entry.project.modelId]);
         const isPython = Boolean(PYTHON_MODELS[entry.project.modelId]);
-        // audio.cpp's CLI has no ABC-file input at all (runAudioCpp never passes one), so an
-        // ABC score would be silently ignored on GGUF instead of shaping the generation --
-        // reject up front so users don't mistake a lyrics-only result for a working cover/plan.
-        if (!isPython && entry.project.abc && entry.project.abc.trim()) throw fail(400, 'ABC 악보(심볼릭 작곡/커버)는 GGUF 모델에서 생성에 반영되지 않습니다. "원본" 모델을 선택하거나 악보를 비워 주세요.');
         if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
         generating = true;
         const runner = isPython ? runPythonYue2 : runAudioCpp;

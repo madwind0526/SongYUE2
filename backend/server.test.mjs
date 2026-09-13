@@ -375,6 +375,65 @@ test('audio.cpp generation copies the song into library/music, leaving the sourc
   assert.equal((await call(`/api/projects/${secondGenerate.data.id}/audio`)).status, 200);
 });
 
+test('audio.cpp (GGUF) generation accepts an external ABC score for cover/instrumental via --request-option abc_file', async t => {
+  resetEnv();
+  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-gguf-abc-'));
+  const { enginePath } = await setUpEngine(root);
+  const pythonEnginePath = path.join(root, 'fake-python.exe');
+  const pythonScriptPath = path.join(root, 'run_yue2.py');
+  await writeFile(pythonEnginePath, 'stub');
+  await writeFile(pythonScriptPath, 'stub');
+  await writeFile(path.join(root, 'abc_tools.py'), 'stub');
+  // instrumental's auto-plan step runs through the Python engine (there is no GGUF plan path),
+  // so it needs the same Python model/vae directories runPythonAction() checks for even though
+  // final rendering below happens on audio.cpp
+  await mkdir(path.join(root, 'models', 'm-a-p', 'YuE2-3B'), { recursive: true });
+  await mkdir(path.join(root, 'models', 'm-a-p', 'YuE2-Vae'), { recursive: true });
+  const fakePython = makeFakePythonSpawn(pythonScriptPath);
+  const fakeAudioCpp = makeFakeSpawn();
+  // ABC prep (plan/mute-voice) always runs through Python; final audio still renders through
+  // audio.cpp, so this dispatches each spawn call to whichever fake matches its executable.
+  const spawnImpl = (engine, args, options) => (engine === enginePath ? fakeAudioCpp : fakePython).spawnImpl(engine, args, options);
+  const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}), spawnImpl });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const call = async (route, method = 'GET', payload) => fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) });
+  const callJson = async (route, method, payload) => { const response = await call(route, method, payload); return { status: response.status, data: await response.json() }; };
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+
+  await call('/api/settings', 'PUT', { enginePath, pythonEnginePath, pythonScriptPath });
+
+  // abc + cot=off is rejected before spawning anything, same as the Python engine
+  const badCombo = (await callJson('/api/projects', 'POST', { title: '잘못된 조합', lyrics: '가사', style: '스타일', modelId: 'yue2-q4', cot: 'off', abc: 'X:1\nT:\nK:C\nV: Vocal\nz32|\nV: Ins\nz32|\n' })).data;
+  assert.equal((await callJson('/api/generate', 'POST', { projectId: badCombo.id })).status, 400);
+  assert.equal(fakeAudioCpp.calls.length, 0);
+
+  // an existing ABC score (e.g. from "심볼릭 작곡"/"오디오에서 추출") is written to a file and
+  // passed as --request-option abc_file=<path>, with cot preserved
+  const abcWithVocals = 'X:1\nT:\nM:4/4\nL:1/8\nK:C\nV: Vocal\nCDEF GABc|\nV: Ins\nz8|\n';
+  const withAbc = (await callJson('/api/projects', 'POST', { title: '악보로 생성', lyrics: '가사', style: '스타일', modelId: 'yue2-q4', cot: 'melody', abc: abcWithVocals })).data;
+  assert.equal((await callJson('/api/generate', 'POST', { projectId: withAbc.id })).status, 200);
+  const coverArgs = fakeAudioCpp.calls[0].args;
+  assert.ok(coverArgs.some(arg => arg === 'cot=melody'));
+  const coverAbcOption = coverArgs.find(arg => typeof arg === 'string' && arg.startsWith('abc_file='));
+  assert.ok(coverAbcOption, 'expected --request-option abc_file=<path> for a GGUF generation with an ABC score');
+  assert.equal(await readFile(coverAbcOption.slice('abc_file='.length), 'utf8'), abcWithVocals);
+
+  // instrumental mode with no existing ABC: auto-plans (Python), strips the Vocal voice
+  // (Python abc_tools.py mute-voice), then hands the result to audio.cpp with cot forced melody
+  const instrumentalDraft = (await callJson('/api/projects', 'POST', { title: '악기만 GGUF', lyrics: '가사', style: '스타일', modelId: 'yue2-q4', cot: 'off', instrumental: true })).data;
+  assert.equal((await callJson('/api/generate', 'POST', { projectId: instrumentalDraft.id })).status, 200);
+  assert.ok(fakePython.calls.some(c => c.args[1] === 'plan'), 'expected an auto-plan for instrumental with no existing ABC');
+  const muteCall = fakePython.calls.find(c => path.basename(c.args[0]) === 'abc_tools.py' && c.args[1] === 'mute-voice');
+  assert.ok(muteCall, 'expected abc_tools.py mute-voice to run for GGUF instrumental generation');
+  const instrumentalArgs = fakeAudioCpp.calls[1].args;
+  assert.ok(instrumentalArgs.some(arg => arg === 'cot=melody'));
+  const instrumentalAbcOption = instrumentalArgs.find(arg => typeof arg === 'string' && arg.startsWith('abc_file='));
+  assert.ok(instrumentalAbcOption, 'expected --request-option abc_file=<path> for GGUF instrumental generation');
+  // the persisted draft keeps the user's original cot; only the generation call was adjusted
+  assert.equal((await callJson(`/api/projects/${instrumentalDraft.id}`)).data.cot, 'off');
+});
+
 test('save format controls what gets written into a custom, relative music folder', async t => {
   resetEnv();
   const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-save-'));
