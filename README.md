@@ -155,6 +155,8 @@ npm run check   # 프론트엔드 타입 체크
 npm run build   # 프론트엔드 빌드
 ```
 
+`start.bat`/`stop.bat`도 있습니다 — `start-studio.mjs`는 포트 4311에 이미 떠 있는 백엔드가 있으면 그대로 재사용하기 때문에(`Start-SongYUE2.cmd`도 동일), 코드를 수정한 뒤 다시 실행해도 예전 백엔드가 계속 응답할 수 있습니다. `start.bat`은 실행 전 4311/5173 포트를 먼저 정리해 항상 최신 코드로 새로 뜨도록 하고, `stop.bat`은 두 포트를 정리만 합니다.
+
 ## 문서
 
 - [docs/local-api.md](docs/local-api.md) — 로컬 API 엔드포인트 목록
