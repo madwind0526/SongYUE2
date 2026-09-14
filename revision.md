@@ -2,6 +2,14 @@
 
 `git log`를 기준으로 정리한 커밋 단위 변경 이력입니다. 최신 항목이 위에 옵니다.
 
+## Mastering-1의 masterVolume을 146→103으로 재보정 (2026-09-15)
+
+DistroKid-Like2(현재 Mastering-1)를 만들 때 masterVolume/dynamicBoost를 "메이크업 게인 공식(1+dynamicBoost/100*0.4)의 정적 수치"만으로 역산했는데, 이게 틀렸다. 먼저 이 값들을 검증하려고 ffmpeg `acompressor` 필터로 앱의 실제 처리를 흉내 내 오디오를 렌더링했는데, ffmpeg의 컴프레서가 Web Audio `DynamicsCompressorNode`와 전혀 다르게 동작해서(같은 파라미터인데도 마스터링인데 오히려 원곡보다 조용해짐, 최대 -8.5dB까지 떨어짐) 완전히 잘못된 비교 파일을 사용자에게 전달하는 실수를 했다.
+
+Playwright로 브라우저의 실제 `OfflineAudioContext`+`buildProcessingGraph`(앱 코드 그대로)를 돌려 재검증한 결과, `DynamicsCompressorNode`는 정적 메이크업 게인 수치보다 훨씬 크게 평균 레벨을 끌어올린다(지속적으로 프로그램 신호를 압축하면서 조용한 구간을 문턱값 쪽으로 밀어올리는 실제 동적 효과 때문) — masterVolume=146일 때 목표는 +3.77dB였는데 실측은 +7.37dB(같은 30초 클립 기준 실제 LANDR 마스터링은 +3.84~4.27dB)로 거의 2배 더 세게 걸리고 있었다. masterVolume 후보 여러 개를 브라우저에서 직접 렌더링해 실측 비교한 결과 **103**이 실측 목표(+3.84dB)와 가장 근접(+3.73~4.34dB)해서 이 값으로 수정. dynamicBoost(압축비)는 정적으로 예측 불가능한 비선형 요소라 masterVolume처럼 정밀 보정하지 않고 "느낌상 완화" 목적의 근사값(14, 비율 2.54:1)으로 유지.
+
+교훈: **다른 엔진/도구(ffmpeg)로 Web Audio 노드의 동작을 근사하려 하지 말 것** — 같은 이름의 파라미터(threshold, ratio, makeup)라도 구현이 다르면 결과가 완전히 달라질 수 있다. 이후로는 항상 Playwright로 앱이 실제로 쓰는 `OfflineAudioContext` 코드를 그대로 실행해서 검증.
+
 ## `db69f10` — Rebuild DistroKid-Like as DistroKid-Like2 from a 10-song sample (2026-09-15)
 
 기존 "DistroKid-Like" 프리셋은 LANDR 전/후 곡 2개만 보고 만든 것인데, 사용자가 실제로 써보고 "너무 과하게 걸린다"고 지적했다. `F:\Music\Music-DistroKid`(마스터링 전, K00xxx)와 `F:\Music\Music-Mastered`(마스터링 후)에서 실제 짝이 존재하는 10곡(0001,0004,0008,0012,0016,0019,0022,0027,0031,0035)을 골라 FFT 대역별 RMS·`ffmpeg loudnorm`·M/S 비율로 재측정했다. 처음엔 K00 원본 폴더가 0040~0062만 있고 Mastered 폴더는 0001~0037만 있어 번호가 아예 안 겹쳤는데(사용자가 `F:\Music\Music-DistroKid` 위치를 알려줘서 해결), 그 폴더에 0001~0039 원본이 K00 이름 그대로 있어서 진짜 같은 곡 짝을 구했다.
