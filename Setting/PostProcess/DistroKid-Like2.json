@@ -1,0 +1,30 @@
+{
+  "name": "DistroKid-Like2",
+  "params": {
+    "eq": [
+      9,
+      9,
+      12,
+      3,
+      0,
+      -1,
+      11,
+      17,
+      18,
+      16
+    ],
+    "masterVolume": 146,
+    "eqEnabled": true,
+    "fxEnabled": true,
+    "reverbEchoEnabled": true,
+    "clarity": 0,
+    "spaciousness": 0,
+    "surround": -41,
+    "dynamicBoost": 14,
+    "bassBoost": 0,
+    "reverbAmount": 0,
+    "reverbLength": 50,
+    "echoAmount": 0,
+    "echoDelayMs": 300
+  }
+}
