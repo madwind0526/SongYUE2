@@ -4,13 +4,17 @@
 
 **2026-09-12 03:41:57 KST: 46개 파일, 23,314,925,299 바이트 다운로드 및 SHA-256 검증 완료.** 공식 main/VAE/legacy VAE와 GGUF Q4/Q8/BF16/F16 VAE/F32 VAE가 모두 포함됩니다. Windows Defender 실시간 보호 활성 상태에서 다운로드했고, 공식 main의 Python 코드 및 wheel이 들어 있는 폴더를 사용자 지정 검사했습니다. 검사 명령은 정상 종료했고 이후 위협 탐지 조회 결과는 없었습니다. 이 검사는 모델 추론이나 코드 안전성의 완전한 보증은 아닙니다.
 
+**2026-09-14: STEM 분리(완성곡의 보컬/드럼/베이스/기타 악기 분리)용 HTDemucs Q8_0 GGUF(61,940,768 바이트) 추가.** `audio-cpp/audio.cpp-gguf`는 60개 이상의 무관한 모델 패밀리를 한 저장소에 같이 담고 있어서, 전체 스냅샷 대신 `REPOS`에 `prefix: "HTDemucs-GGUF/htdemucs-q8_0.gguf"`를 지정해 그 파일 하나만 받도록 `scripts/download_models.py`를 확장했습니다(리비전은 `6d5436fc85f7a20c2e9f4e472b7f3a532f686444`로 고정). 총 다운로드 대상이 **23,376,866,067 바이트 (약 23.38 GB / 21.77 GiB)** 로 늘었습니다.
+
+**2026-09-14 (이어서): BS-RoFormer ep368 Q8_0 GGUF(172,532,256 바이트) 추가.** 사용자가 직접 HTDemucs 결과를 들어보고 "보컬에 악기가 섞이고 보컬 일부가 사라진다"고 지적해서 원인을 조사한 결과, audio.cpp의 HTDemucs 구현이 고품질 앙상블("bag"/공식 ft) 체크포인트를 지원하지 않음을 소스에서 확인(`src/models/demucs/assets.cpp`: `"HTDemucs package-spec loader currently supports only single-model manifests"`)했고, 대신 다른 아키텍처라 이 제약이 없는 BS-RoFormer를 보컬/악기 2갈래 분리 모드로 추가했습니다. `REPOS`의 `prefixes`를 리스트로 바꿔 같은 저장소에서 두 파일을 모두 받도록 확장(`["HTDemucs-GGUF/htdemucs-q8_0.gguf", "BS-RoFormer-ep368-GGUF/bs-roformer-ep368-q8_0.gguf"]`). 총 다운로드 대상이 **23,549,398,323 바이트 (약 23.55 GB / 21.93 GiB)** 로 늘었습니다. `num_overlap`(bs_roformer)을 기본값 4보다 올리면 더 나을지도 확인했으나, 프로젝트 자체 벤치마크(`tests/bs_roformer/README.md`)가 4를 "정식 기준치"로 명시하고 그보다 낮출 때만 코사인 유사도가 실측으로 떨어짐을 보여줘서(더 높일 때의 개선 근거는 없음) 기본값을 그대로 둠. bs_roformer GGUF는 "legacy model spec"을 내장하고 있어 `model_specs/bs_roformer.json`으로 보충해야 하는데, 백엔드가 `audiocpp_cli`를 항상 audio.cpp 소스 루트를 작업 디렉터리로 실행하도록 고쳐서(이전엔 프로젝트 루트가 작업 디렉터리였음) 이 조회가 되게 함 — yue2/htdemucs는 이 문제가 없었지만(GGUF에 완전한 스펙이 내장됨) 일관성을 위해 모든 `audiocpp_cli` 호출에 적용.
+
+**2026-09-15: BS-RoFormer ep368 Q8_0 GGUF를 Mel-Band RoFormer F16 GGUF(456,514,816 바이트)로 교체.** 사용자가 STEM 분리(보컬+악기) 결과를 직접 들어보고 "보컬이 너무 많이 짤린다"고 다시 지적했습니다. `num_overlap`을 4→8로 올려 같은 곡으로 실측 비교했으나(엔진 자체 오버랩-애드 구현은 표준적이고 Python 레퍼런스와 코사인 0.996으로 이미 검증되어 있었음) 보컬 트랙 파형 코사인 유사도 0.9996, 100ms 단위 무음 구간 개수도 350/1318 vs 342/1318로 거의 동일해 overlap 파라미터는 원인이 아님을 확인. `model_specs/`를 전체 확인해보니 audio.cpp가 sep 작업을 지원하는 RoFormer 계열 패밀리가 `bs_roformer` 외에 `mel_band_roformer`도 있었음(같은 `roformer` 코드 경로, CMake에서도 같은 모듈의 별칭 — 다른 체크포인트, dim 384/depth 6로 bs_roformer의 512/12보다 가벼움). GGUF는 q8_0(252MB)과 F16(457MB) 두 정밀도가 있어 더 높은 F16을 받아 같은 곡으로 비교(보컬 트랙 코사인 0.97 — 실제로 다른 결과)한 뒤 사용자가 직접 듣고 mel_band 쪽을 선호해서 STEM 분리(보컬+악기) 모드의 기본 모델을 이걸로 교체하고 bs_roformer 모델 파일은 삭제했습니다(`REPOS`의 `prefixes`에서도 제거). mel_band_roformer는 RTX 5070에서 2분 12초 곡 기준 약 10초(RTF ≈ 0.076)로, bs_roformer(약 37초)보다도 빠릅니다. `mel_band_roformer.json`에는 3번째 패키지(`mlx-community/mel-roformer-mlx`, safetensors)도 있지만 원본 체크포인트 메타데이터가 없어 검증하지 않고 보류함. 총 다운로드 대상이 **23,833,380,883 바이트 (약 23.83 GB / 22.20 GiB)** 로 바뀌었습니다.
+
 ```powershell
 python scripts/download_models.py
 ```
 
-Python 표준 라이브러리만 사용합니다. 중단 후 같은 명령을 실행하면 부분 파일부터 이어 받고, 완성된 파일은 해시를 검증한 후 건너뜁니다. 한 번에 세 파일을 전송합니다. 모델 저장소의 리비전을 고정하고 LFS SHA-256과 대조합니다. 작은 비 LFS 파일도 다운로드한 SHA-256을 기록합니다. **저장소를 선택해서 받는 옵션은 없습니다** — 실행할 때마다 아래 4개 저장소를 전부 대상으로 합니다(이미 완료된 파일은 해시 검증 후 건너뜀). GGUF만 쓸 계획이어도 원본 모델(m-a-p/YuE2-3B, YuE2-Vae)이 함께 받아지고, 그 반대도 마찬가지입니다. 일부만 받고 싶다면 스크립트 상단의 `REPOS` 딕셔너리를 직접 편집해야 합니다.
-
-총 다운로드 대상은 **23,314,925,299 바이트 (약 23.31 GB / 21.71 GiB)** 입니다. 모델과 구성 파일, 토크나이저, 모델 코드, 최신 추론 패키지 wheel, 라이선스 문서를 포함합니다. 데모 음원·영상·홍보 이미지, 이전 wheel, 별도 MERT/SheetSage 모델은 제외합니다.
+Python 표준 라이브러리만 사용합니다. 중단 후 같은 명령을 실행하면 부분 파일부터 이어 받고, 완성된 파일은 해시를 검증한 후 건너뜁니다. 한 번에 세 파일을 전송합니다. 모델 저장소의 리비전을 고정하고 LFS SHA-256과 대조합니다. 작은 비 LFS 파일도 다운로드한 SHA-256을 기록합니다. **저장소를 선택해서 받는 옵션은 없습니다** — 실행할 때마다 아래 5개 저장소(4개는 전체 스냅샷, `audio-cpp/audio.cpp-gguf`는 `prefixes`로 좁힌 HTDemucs+Mel-Band RoFormer 파일 2개)를 전부 대상으로 합니다(이미 완료된 파일은 해시 검증 후 건너뜀). GGUF만 쓸 계획이어도 원본 모델(m-a-p/YuE2-3B, YuE2-Vae)이 함께 받아지고, 그 반대도 마찬가지입니다. 일부만 받고 싶다면 스크립트 상단의 `REPOS` 딕셔너리를 직접 편집해야 합니다.
 
 | 저장소 | 고정 리비전 | 로컬 폴더 |
 |---|---|---|
@@ -18,8 +22,9 @@ Python 표준 라이브러리만 사용합니다. 중단 후 같은 명령을 �
 | [공식 VAE](https://huggingface.co/m-a-p/YuE2-Vae) | `9a94e1d0ea9f8087e98f77fa88df4a4068104d2a` | `models/m-a-p/YuE2-Vae` |
 | [공식 레거시 VAE](https://huggingface.co/m-a-p/YuE2-Vae-legacy) | `5ddd12f79acb90d24b3a672dcd2ebf88da7c92a9` | `models/m-a-p/YuE2-Vae-legacy` |
 | [audio.cpp GGUF](https://huggingface.co/audio-cpp/Yue2-3B-GGUF) | `9c31f1c64f73d36799693aa89295b410c76928c3` | `models/audio-cpp/Yue2-3B-GGUF` |
+| [audio.cpp GGUF 패키지 모음](https://huggingface.co/audio-cpp/audio.cpp-gguf)(`HTDemucs-GGUF/htdemucs-q8_0.gguf` + `Mel-Band-RoFormer-GGUF/mel-band-roformer-f16.gguf`만) | `6d5436fc85f7a20c2e9f4e472b7f3a532f686444` | `models/audio-cpp/audio.cpp-gguf/{HTDemucs-GGUF,Mel-Band-RoFormer-GGUF}` |
 
-GGUF 폴더에는 BF16, Q8_0, Q4_0 본체와 F16/F32 VAE 및 `sidecars/`가 있습니다. RTX 5070 12 GB에서는 Q4_0 + F16 VAE를 우선 검증합니다. 공식 PyTorch 경로는 상위 사양 PC 및 추후 배포를 위해 함께 보관하며, 다운로드 완료가 추론 검증 완료를 의미하지는 않습니다. wheel과 모델 Python 코드는 다운로드만 하며 자동 설치·실행하지 않습니다.
+GGUF 폴더에는 BF16, Q8_0, Q4_0 본체와 F16/F32 VAE 및 `sidecars/`가 있습니다. RTX 5070 12 GB에서는 Q4_0 + F16 VAE를 우선 검증합니다. 공식 PyTorch 경로는 상위 사양 PC 및 추후 배포를 위해 함께 보관하며, 다운로드 완료가 추론 검증 완료를 의미하지는 않습니다. wheel과 모델 Python 코드는 다운로드만 하며 자동 설치·실행하지 않습니다. HTDemucs Q8_0/Mel-Band RoFormer F16는 SongYUE2의 "STEM 분리" 기능(각각 보컬/드럼/베이스/기타 4갈래, 보컬/악기 2갈래) 전용이며, RTX 5070에서 2분짜리 곡 기준 HTDemucs는 약 5~7초(RTF ≈ 0.037), Mel-Band RoFormer는 약 10초(RTF ≈ 0.076)에 분리를 마칩니다.
 
 ## 직접 추가한 safetensors 파일
 

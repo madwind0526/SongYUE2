@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import * as ABCJS from 'abcjs';
-import { AudioLines, ArrowDownToLine, ArrowRight, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Cpu, Dices, Disc3, Download, FastForward, FileText, Folder, FolderOpen, Guitar, Headphones, Heart, Home, Image as ImageIcon, LayoutGrid, ListMusic, ListPlus, LoaderCircle, Menu, Mic, MoreVertical, Music2, Pause, Pencil, Play, Plus, Power, RefreshCw, Rewind, RotateCcw, Save, Search, Settings2, ShieldCheck, SkipBack, SkipForward, SlidersHorizontal, Sparkles, Square, Trash2, Upload, Volume2, WandSparkles, X } from 'lucide-react';
+import { AudioLines, ArrowDownToLine, ArrowRight, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Combine, Cpu, Dices, Disc3, Download, FastForward, FileText, Folder, FolderOpen, Guitar, Headphones, Heart, Home, Image as ImageIcon, Layers, LayoutGrid, ListMusic, ListPlus, LoaderCircle, Menu, Mic, MoreVertical, Music2, Pause, Pencil, Play, Plus, Power, RefreshCw, Rewind, RotateCcw, Save, Search, Settings2, ShieldCheck, SkipBack, SkipForward, SlidersHorizontal, Sparkles, Square, Trash2, Upload, Volume2, WandSparkles, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -283,6 +283,54 @@ function audioBufferToWavBlob(buffer: AudioBuffer): Blob {
   return new Blob([arrayBuffer], { type: 'audio/wav' });
 }
 
+async function saveProcessedBuffer(projectId: string, title: string, buffer: AudioBuffer, notify: (text: string, error?: boolean) => void): Promise<void> {
+  const wavBlob = audioBufferToWavBlob(buffer);
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(wavBlob);
+  });
+  const response = await fetch(`/api/projects/${projectId}/post-process`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dataUrl }) });
+  if (!response.ok) { const data = await response.json().catch(() => null) as { error?: string } | null; throw new Error(data?.error || '후처리 저장에 실패했습니다.'); }
+  const resultBlob = await response.blob();
+  const disposition = response.headers.get('content-disposition') || '';
+  const match = disposition.match(/filename="([^"]+)"/);
+  const suggestedName = match ? decodeURIComponent(match[1]) : `${title}-modified`;
+  const picker = (window as unknown as { showSaveFilePicker?: SaveFilePickerFn }).showSaveFilePicker;
+  if (typeof picker === 'function') {
+    const handle = await picker({ suggestedName });
+    const writable = await handle.createWritable();
+    await writable.write(resultBlob);
+    await writable.close();
+    notify(`"${handle.name}" 파일로 저장했습니다.`);
+  } else {
+    const blobUrl = URL.createObjectURL(resultBlob);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = suggestedName;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(blobUrl);
+    notify(`"${suggestedName}" 파일을 다운로드했습니다.`);
+  }
+}
+
+async function mixBuffers(buffers: AudioBuffer[]): Promise<AudioBuffer> {
+  const length = Math.max(...buffers.map(buffer => buffer.length));
+  const channels = Math.max(...buffers.map(buffer => buffer.numberOfChannels));
+  const sampleRate = buffers[0].sampleRate;
+  const offlineCtx = new OfflineAudioContext(channels, length, sampleRate);
+  for (const buffer of buffers) {
+    const source = offlineCtx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(offlineCtx.destination);
+    source.start();
+  }
+  return offlineCtx.startRendering();
+}
+
 function computeWaveformPeaks(buffer: AudioBuffer, buckets: number): number[] {
   const channel = buffer.getChannelData(0);
   const perBucket = Math.max(1, Math.floor(channel.length / buckets));
@@ -296,6 +344,8 @@ function computeWaveformPeaks(buffer: AudioBuffer, buckets: number): number[] {
   }
   return peaks;
 }
+
+function formatSeekTime(seconds: number) { if (!Number.isFinite(seconds) || seconds < 0) return '0:00'; const mins = Math.floor(seconds / 60); const secs = Math.floor(seconds % 60); return `${mins}:${String(secs).padStart(2, '0')}`; }
 
 function Waveform({ peaks, playedFraction, variant }: { peaks: number[]; playedFraction?: number; variant?: 'processed' }) {
   return <div className={variant ? `pp-waveform pp-waveform-${variant}` : 'pp-waveform'}>{peaks.map((peak, index) => <span key={index} className={playedFraction !== undefined && index / peaks.length <= playedFraction ? 'played' : ''} style={{ height: `${Math.max(4, peak * 100)}%` }}/>)}</div>;
@@ -349,8 +399,8 @@ function Knob({ label, value, min, max, onChange, variant }: { label: string; va
   </div>;
 }
 
-function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visualizerRingCount, visualizerHue, visualizerLineWidth, visualizerTrail, visualizerSpiral, visualizerRingMode, visualizerTimeStep, visualizerTimeSkew, visualizerRingStep, visualizerAmplitude }: { project: Project; onClose: () => void; notify: (text: string, error?: boolean) => void; visualizerEnabled: boolean; visualizerRingCount: number; visualizerHue: number; visualizerLineWidth: number; visualizerTrail: number; visualizerSpiral: number; visualizerRingMode: 'radial' | 'time'; visualizerTimeStep: number; visualizerTimeSkew: number; visualizerRingStep: number; visualizerAmplitude: number }) {
-  const [params, setParams] = useState<PostProcessParams>(PP_DEFAULT_PARAMS);
+function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visualizerRingCount, visualizerHue, visualizerLineWidth, visualizerTrail, visualizerSpiral, visualizerRingMode, visualizerTimeStep, visualizerTimeSkew, visualizerRingStep, visualizerAmplitude, sourceOverride, onSaveOverride, titleOverride }: { project: Project; onClose: () => void; notify: (text: string, error?: boolean) => void; visualizerEnabled: boolean; visualizerRingCount: number; visualizerHue: number; visualizerLineWidth: number; visualizerTrail: number; visualizerSpiral: number; visualizerRingMode: 'radial' | 'time'; visualizerTimeStep: number; visualizerTimeSkew: number; visualizerRingStep: number; visualizerAmplitude: number; sourceOverride?: { buffer: AudioBuffer; params: PostProcessParams }; onSaveOverride?: (buffer: AudioBuffer, params: PostProcessParams) => void; titleOverride?: string }) {
+  const [params, setParams] = useState<PostProcessParams>(sourceOverride?.params || PP_DEFAULT_PARAMS);
   const [loading, setLoading] = useState(true);
   const [rendering, setRendering] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -529,15 +579,20 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
     analyserRef.current = analyser;
     (async () => {
       try {
-        const response = await fetch(`/api/projects/${project.id}/audio`);
-        if (!response.ok) throw new Error('load failed');
-        const arrayBuffer = await response.arrayBuffer();
-        const decoded = await ctx.decodeAudioData(arrayBuffer);
+        let decoded: AudioBuffer;
+        if (sourceOverride) {
+          decoded = sourceOverride.buffer;
+        } else {
+          const response = await fetch(`/api/projects/${project.id}/audio`);
+          if (!response.ok) throw new Error('load failed');
+          const arrayBuffer = await response.arrayBuffer();
+          decoded = await ctx.decodeAudioData(arrayBuffer);
+        }
         if (cancelled) return;
         decodedRef.current = decoded;
         setOriginalPeaks(computeWaveformPeaks(decoded, 300));
         setLoading(false);
-        await renderProcessed(PP_DEFAULT_PARAMS);
+        await renderProcessed(sourceOverride?.params || PP_DEFAULT_PARAMS);
       } catch { if (!cancelled) setErrorText('원본 오디오를 불러오지 못했습니다.'); }
     })();
     return () => { cancelled = true; void ctx.close(); };
@@ -697,7 +752,6 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
     setPositionSeconds(next);
     setActiveTrack(track);
   }
-  function formatSeekTime(seconds: number) { if (!Number.isFinite(seconds) || seconds < 0) return '0:00'; const mins = Math.floor(seconds / 60); const secs = Math.floor(seconds % 60); return `${mins}:${String(secs).padStart(2, '0')}`; }
   function cycleSpeed() {
     const next = playbackRate >= 2 ? 1 : 2;
     const pos = currentPosition();
@@ -727,40 +781,11 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
   async function handleSave() {
     const buffer = processedRef.current;
     if (!buffer) return;
+    if (onSaveOverride) { onSaveOverride(buffer, params); return; }
     setSaving(true);
     setErrorText('');
     try {
-      const wavBlob = audioBufferToWavBlob(buffer);
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = () => reject(reader.error);
-        reader.readAsDataURL(wavBlob);
-      });
-      const response = await fetch(`/api/projects/${project.id}/post-process`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dataUrl }) });
-      if (!response.ok) { const data = await response.json().catch(() => null) as { error?: string } | null; throw new Error(data?.error || '후처리 저장에 실패했습니다.'); }
-      const resultBlob = await response.blob();
-      const disposition = response.headers.get('content-disposition') || '';
-      const match = disposition.match(/filename="([^"]+)"/);
-      const suggestedName = match ? decodeURIComponent(match[1]) : `${project.title}-modified`;
-      const picker = (window as unknown as { showSaveFilePicker?: SaveFilePickerFn }).showSaveFilePicker;
-      if (typeof picker === 'function') {
-        const handle = await picker({ suggestedName });
-        const writable = await handle.createWritable();
-        await writable.write(resultBlob);
-        await writable.close();
-        notify(`"${handle.name}" 파일로 저장했습니다.`);
-      } else {
-        const blobUrl = URL.createObjectURL(resultBlob);
-        const link = document.createElement('a');
-        link.href = blobUrl;
-        link.download = suggestedName;
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-        URL.revokeObjectURL(blobUrl);
-        notify(`"${suggestedName}" 파일을 다운로드했습니다.`);
-      }
+      await saveProcessedBuffer(project.id, project.title, buffer, notify);
       onClose();
     } catch (error) {
       if ((error as { name?: string }).name === 'AbortError') return;
@@ -774,9 +799,9 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
   return <>
     <Dialog open onOpenChange={open => { if (!open) onClose(); }}>
     <DialogContent className="studio-dialog postprocess-dialog">
-      <DialogTitle>후처리 / EQ</DialogTitle>
+      <DialogTitle>{titleOverride ? `후처리 / EQ — ${titleOverride}` : '후처리 / EQ'}</DialogTitle>
       <div className="pp-description-row">
-        <DialogDescription>"{project.title}"의 사본에 EQ와 효과를 적용한 뒤 원하는 위치에 저장하세요. 원본 파일은 바뀌지 않습니다.</DialogDescription>
+        <DialogDescription>{onSaveOverride ? `"${titleOverride}" STEM에 EQ와 효과를 적용합니다. "저장"을 누르면 STEM 분리 화면으로 돌아가 이 상태가 반영됩니다.` : `"${project.title}"의 사본에 EQ와 효과를 적용한 뒤 원하는 위치에 저장하세요. 원본 파일은 바뀌지 않습니다.`}</DialogDescription>
         <div className="pp-settings-io">
           <select className="pp-preset-select" value={postprocessPreset} onChange={event => applyPostprocessPreset(event.target.value)} aria-label="전체 설정 프리셋">
             <option value="">전체 설정 불러오기</option>
@@ -889,6 +914,275 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
   </>;
 }
 
+const STEM_MODE_CONFIG = {
+  full: { stems: ['vocals', 'drums', 'bass', 'other'] as const, menuSub: '보컬+드럼+베이스+기타', description: '보컬·드럼·베이스·기타 악기 4갈래' },
+  vocal: { stems: ['vocals', 'instrumental'] as const, menuSub: '보컬+악기', description: '보컬·악기 2갈래(보컬 누출이 적은 분리 모델)' },
+};
+type StemMode = keyof typeof STEM_MODE_CONFIG;
+type StemName = typeof STEM_MODE_CONFIG[StemMode]['stems'][number];
+const STEM_LABELS: Record<StemName, string> = { vocals: '보컬', drums: '드럼', bass: '베이스', other: '기타 악기', instrumental: '악기' };
+
+function StemDialog({ project, mode, onClose, notify, visualizerEnabled, visualizerRingCount, visualizerHue, visualizerLineWidth, visualizerTrail, visualizerSpiral, visualizerRingMode, visualizerTimeStep, visualizerTimeSkew, visualizerRingStep, visualizerAmplitude }: { project: Project; mode: StemMode; onClose: () => void; notify: (text: string, error?: boolean) => void; visualizerEnabled: boolean; visualizerRingCount: number; visualizerHue: number; visualizerLineWidth: number; visualizerTrail: number; visualizerSpiral: number; visualizerRingMode: 'radial' | 'time'; visualizerTimeStep: number; visualizerTimeSkew: number; visualizerRingStep: number; visualizerAmplitude: number }) {
+  const stemOrder = STEM_MODE_CONFIG[mode].stems as readonly StemName[];
+  const [loading, setLoading] = useState(true);
+  const [errorText, setErrorText] = useState('');
+  const [merging, setMerging] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [merged, setMerged] = useState(false);
+  const [editingStem, setEditingStem] = useState<StemName | null>(null);
+  const [stemPeaks, setStemPeaks] = useState<Partial<Record<StemName, number[]>>>({});
+  const [processedStems, setProcessedStems] = useState<Partial<Record<StemName, boolean>>>({});
+  const [combinedPeaks, setCombinedPeaks] = useState<number[]>([]);
+  const [previewPeaks, setPreviewPeaks] = useState<number[]>([]);
+  const [activeKey, setActiveKey] = useState<string | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [positionSeconds, setPositionSeconds] = useState(0);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [previewVolume, setPreviewVolume] = useState(1);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const previewGainRef = useRef<GainNode | null>(null);
+  const currentBuffersRef = useRef<Partial<Record<StemName, AudioBuffer>>>({});
+  const stemParamsRef = useRef<Partial<Record<StemName, PostProcessParams>>>({});
+  const combinedOriginalRef = useRef<AudioBuffer | null>(null);
+  const combinedPreviewRef = useRef<AudioBuffer | null>(null);
+  const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const playStartCtxTimeRef = useRef(0);
+  const playOffsetRef = useRef(0);
+  const rateRef = useRef(1);
+  const isPlayingRef = useRef(false);
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+
+  function bufferForKey(key: string | null): AudioBuffer | null {
+    if (!key) return null;
+    if (key === 'combined-original') return combinedOriginalRef.current;
+    if (key === 'combined-preview') return combinedPreviewRef.current;
+    return currentBuffersRef.current[key as StemName] || null;
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        await api(`/projects/${project.id}/stems`, 'POST', { mode });
+        const ctx = new AudioContext();
+        audioCtxRef.current = ctx;
+        const gainNode = ctx.createGain();
+        gainNode.gain.value = previewVolume;
+        gainNode.connect(ctx.destination);
+        previewGainRef.current = gainNode;
+        const peaks: Partial<Record<StemName, number[]>> = {};
+        for (const name of stemOrder) {
+          const response = await fetch(`/api/projects/${project.id}/stems/${name}`);
+          if (!response.ok) throw new Error('load failed');
+          const arrayBuffer = await response.arrayBuffer();
+          const decoded = await ctx.decodeAudioData(arrayBuffer);
+          currentBuffersRef.current[name] = decoded;
+          peaks[name] = computeWaveformPeaks(decoded, 160);
+        }
+        if (cancelled) return;
+        setStemPeaks(peaks);
+        const combined = await mixBuffers(stemOrder.map(name => currentBuffersRef.current[name]!));
+        if (cancelled) return;
+        combinedOriginalRef.current = combined;
+        combinedPreviewRef.current = combined;
+        setCombinedPeaks(computeWaveformPeaks(combined, 300));
+        setPreviewPeaks(computeWaveformPeaks(combined, 300));
+        setLoading(false);
+      } catch (error) {
+        if (cancelled) return;
+        const message = error instanceof Error && error.message && error.message !== 'load failed' ? error.message : 'STEM 분리에 실패했습니다. audio.cpp가 해당 분리 모델을 포함해 빌드되어 있는지, 모델 파일이 있는지 확인해 주세요.';
+        setErrorText(message);
+        setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      void api(`/projects/${project.id}/stems`, 'DELETE').catch(() => {});
+      void audioCtxRef.current?.close();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id, mode]);
+
+  async function refreshPreview() {
+    const buffers = stemOrder.map(name => currentBuffersRef.current[name]).filter((buffer): buffer is AudioBuffer => !!buffer);
+    if (buffers.length !== stemOrder.length) return;
+    const combined = await mixBuffers(buffers);
+    combinedPreviewRef.current = combined;
+    setPreviewPeaks(computeWaveformPeaks(combined, 300));
+  }
+
+  function handleStemSaved(name: StemName, buffer: AudioBuffer, params: PostProcessParams) {
+    currentBuffersRef.current[name] = buffer;
+    stemParamsRef.current[name] = params;
+    setProcessedStems(previous => ({ ...previous, [name]: true }));
+    setStemPeaks(previous => ({ ...previous, [name]: computeWaveformPeaks(buffer, 160) }));
+    setEditingStem(null);
+    setMerged(false);
+    void refreshPreview();
+  }
+
+  function pausePlayback() {
+    if (isPlaying) playOffsetRef.current = currentPosition();
+    currentSourceRef.current?.stop();
+    currentSourceRef.current = null;
+    setIsPlaying(false);
+  }
+  function currentPosition(): number {
+    const ctx = audioCtxRef.current;
+    if (!ctx || !isPlayingRef.current) return playOffsetRef.current;
+    return playOffsetRef.current + (ctx.currentTime - playStartCtxTimeRef.current) * rateRef.current;
+  }
+  function playKey(key: string, atPosition?: number) {
+    const ctx = audioCtxRef.current;
+    const buffer = bufferForKey(key);
+    if (!ctx || !buffer) return;
+    const position = atPosition !== undefined ? atPosition : currentPosition();
+    const clamped = Math.max(0, Math.min(position, Math.max(0, buffer.duration - 0.02)));
+    currentSourceRef.current?.stop();
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.playbackRate.value = rateRef.current;
+    source.connect(previewGainRef.current || ctx.destination);
+    source.onended = () => { if (currentSourceRef.current === source) { currentSourceRef.current = null; setIsPlaying(false); playOffsetRef.current = 0; setPositionSeconds(0); } };
+    source.start(0, clamped);
+    currentSourceRef.current = source;
+    playStartCtxTimeRef.current = ctx.currentTime;
+    playOffsetRef.current = clamped;
+    setPositionSeconds(clamped);
+    setActiveKey(key);
+    setIsPlaying(true);
+  }
+  function handleKeyClick(key: string) {
+    if (activeKey === key && isPlaying) { pausePlayback(); return; }
+    playKey(key);
+  }
+  function stopPlayback() { pausePlayback(); setActiveKey(null); setPositionSeconds(0); }
+  function seekBy(deltaSeconds: number) {
+    const key = activeKey || 'combined-original';
+    const buffer = bufferForKey(key);
+    if (!buffer) return;
+    const next = Math.max(0, Math.min(currentPosition() + deltaSeconds, Math.max(0, buffer.duration - 0.02)));
+    if (isPlaying) { playKey(key, next); return; }
+    playOffsetRef.current = next;
+    setPositionSeconds(next);
+    setActiveKey(key);
+  }
+  function seekTo(nextSeconds: number) {
+    const key = activeKey || 'combined-original';
+    const buffer = bufferForKey(key);
+    if (!buffer) return;
+    const next = Math.max(0, Math.min(nextSeconds, Math.max(0, buffer.duration - 0.02)));
+    if (isPlaying) { playKey(key, next); return; }
+    playOffsetRef.current = next;
+    setPositionSeconds(next);
+    setActiveKey(key);
+  }
+  function cycleSpeed() {
+    const next = playbackRate >= 2 ? 1 : 2;
+    const pos = currentPosition();
+    setPlaybackRate(next);
+    rateRef.current = next;
+    if (isPlaying && activeKey) { playKey(activeKey, pos); return; }
+    playOffsetRef.current = pos;
+    setPositionSeconds(pos);
+  }
+  function applyPreviewVolume(next: number) {
+    setPreviewVolume(next);
+    if (previewGainRef.current) previewGainRef.current.gain.value = next;
+  }
+
+  useEffect(() => {
+    if (!isPlaying) return;
+    let raf = 0;
+    const tick = () => { setPositionSeconds(currentPosition()); raf = requestAnimationFrame(tick); };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying]);
+
+  async function handleMerge() {
+    setMerging(true);
+    try { await refreshPreview(); setMerged(true); }
+    catch { setErrorText('오디오를 합치지 못했습니다.'); }
+    finally { setMerging(false); }
+  }
+  async function handleSave() {
+    const buffer = combinedPreviewRef.current;
+    if (!buffer) return;
+    setSaving(true);
+    try {
+      stopPlayback();
+      await saveProcessedBuffer(project.id, project.title, buffer, notify);
+      onClose();
+    } catch (error) { setErrorText((error as Error).message); }
+    finally { setSaving(false); }
+  }
+
+  const activeBuffer = bufferForKey(activeKey);
+  const playedFraction = activeBuffer ? Math.min(1, positionSeconds / activeBuffer.duration) : 0;
+  const rowClass = (key: string, kind: 'dry' | 'wet', base: string) => `${base}${activeKey === key && isPlaying ? (kind === 'wet' ? ' pp-row-playing-processed' : ' pp-row-playing-original') : ''}`;
+
+  return <>
+    {!editingStem && <Dialog open onOpenChange={open => { if (!open) { stopPlayback(); onClose(); } }}>
+      <DialogContent className="studio-dialog stem-dialog">
+        <DialogTitle>STEM 분리 ({STEM_MODE_CONFIG[mode].menuSub})</DialogTitle>
+        <DialogDescription>"{project.title}"을(를) {STEM_MODE_CONFIG[mode].description}로 분리했습니다. 각 STEM을 후처리한 뒤 합쳐서 저장하세요. 여기서 만든 STEM 파일은 창을 닫으면 사라지고, 원본 완성곡은 바뀌지 않습니다.</DialogDescription>
+        {loading ? <div className="stem-loading"><LoaderCircle className="spin"/>STEM 분리 중...</div> : errorText ? <p className="field-hint warning">{errorText}</p> : <>
+          <div className="stem-list">
+            {stemOrder.map(name => <div key={name} className={rowClass(name, processedStems[name] ? 'wet' : 'dry', 'stem-row')}>
+              <button type="button" className="pp-waveform-label" aria-label={activeKey === name && isPlaying ? `${STEM_LABELS[name]} 일시정지` : `${STEM_LABELS[name]} 재생`} onClick={() => handleKeyClick(name)}>{activeKey === name && isPlaying ? <Pause size={15}/> : <Play size={15}/>}</button>
+              <span className="stem-label">{STEM_LABELS[name]}{processedStems[name] && <span className="small-badge">처리됨</span>}</span>
+              <Waveform peaks={stemPeaks[name] || []} playedFraction={playedFraction} variant={processedStems[name] ? 'processed' : undefined}/>
+              <Button variant="outline" size="sm" onClick={() => setEditingStem(name)}><SlidersHorizontal size={14}/>후처리</Button>
+            </div>)}
+          </div>
+          <div className="stem-combined">
+            <div className={rowClass('combined-original', 'dry', 'pp-waveform-row')}>
+              <button type="button" className="pp-waveform-label" title="원본 합본" aria-label={activeKey === 'combined-original' && isPlaying ? '원본 합본 일시정지' : '원본 합본 재생'} onClick={() => handleKeyClick('combined-original')}>{activeKey === 'combined-original' && isPlaying ? <Pause size={15}/> : <AudioLines size={15}/>}</button>
+              <Waveform peaks={combinedPeaks} playedFraction={playedFraction}/>
+            </div>
+            <div className={rowClass('combined-preview', 'wet', 'pp-waveform-row')}>
+              <button type="button" className="pp-waveform-label" title="현재 미리듣기" aria-label={activeKey === 'combined-preview' && isPlaying ? '미리듣기 일시정지' : '미리듣기 재생'} onClick={() => handleKeyClick('combined-preview')}>{activeKey === 'combined-preview' && isPlaying ? <Pause size={15}/> : <Combine size={15}/>}</button>
+              <Waveform peaks={previewPeaks} playedFraction={playedFraction} variant="processed"/>
+            </div>
+          </div>
+          <div className="pp-seek-row">
+            <span className="pp-seek-time">{formatSeekTime(positionSeconds)}</span>
+            <input className="pp-seek-bar" type="range" aria-label="재생 위치" min={0} max={activeBuffer?.duration || 0} step={0.01} value={Math.min(positionSeconds, activeBuffer?.duration || 0)} onChange={event => seekTo(Number(event.target.value))} disabled={!activeBuffer}/>
+            <span className="pp-seek-time">{formatSeekTime(activeBuffer?.duration || 0)}</span>
+          </div>
+        </>}
+        {errorText && !loading && <p className="field-hint warning">{errorText}</p>}
+        <div className="dialog-actions pp-dialog-actions">
+          <div className="pp-transport">
+            <Button variant="ghost" size="icon" aria-label="5초 뒤로" onClick={() => seekBy(-5)} disabled={loading}><Rewind size={15}/></Button>
+            <Button variant="ghost" size="icon" aria-label={isPlaying ? '일시정지' : '재생'} onClick={() => handleKeyClick(activeKey || 'combined-original')} disabled={loading}>{isPlaying ? <Pause size={15}/> : <Play size={15}/>}</Button>
+            <Button variant="ghost" size="icon" aria-label="5초 앞으로" onClick={() => seekBy(5)} disabled={loading}><FastForward size={15}/></Button>
+            <button type="button" className="speed-btn" aria-label="재생 속도" onClick={cycleSpeed} disabled={loading}>{playbackRate}x</button>
+            <Volume2 size={14} className="pp-volume-icon"/>
+            <input className="abc-player-volume" type="range" aria-label="미리듣기 볼륨" min={0} max={2} step={0.1} value={previewVolume} onChange={event => applyPreviewVolume(Number(event.target.value))} disabled={loading}/>
+          </div>
+          <div className="pp-dialog-actions-right">
+            <Button variant="outline" onClick={() => void handleMerge()} disabled={loading || !!errorText || merging}>{merging ? <LoaderCircle className="spin"/> : <Combine size={15}/>}합치기</Button>
+            <Button variant="outline" onClick={() => { stopPlayback(); onClose(); }} disabled={saving}>취소</Button>
+            <Button onClick={() => void handleSave()} disabled={!merged || saving}>{saving ? <LoaderCircle className="spin"/> : <Save size={15}/>}저장</Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>}
+    {editingStem && <PostProcessDialog
+      key={editingStem}
+      project={project}
+      onClose={() => setEditingStem(null)}
+      notify={notify}
+      visualizerEnabled={visualizerEnabled} visualizerRingCount={visualizerRingCount} visualizerHue={visualizerHue} visualizerLineWidth={visualizerLineWidth} visualizerTrail={visualizerTrail} visualizerSpiral={visualizerSpiral} visualizerRingMode={visualizerRingMode} visualizerTimeStep={visualizerTimeStep} visualizerTimeSkew={visualizerTimeSkew} visualizerRingStep={visualizerRingStep} visualizerAmplitude={visualizerAmplitude}
+      titleOverride={STEM_LABELS[editingStem]}
+      sourceOverride={{ buffer: currentBuffersRef.current[editingStem]!, params: stemParamsRef.current[editingStem] || PP_DEFAULT_PARAMS }}
+      onSaveOverride={(buffer, params) => handleStemSaved(editingStem, buffer, params)}
+    />}
+  </>;
+}
+
 export default function Studio() {
   const [page, setPage] = useState<Page>('create');
   const [draft, setDraft] = useState<Draft>(emptyDraft);
@@ -932,6 +1226,7 @@ export default function Studio() {
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
   const [coverPendingProject, setCoverPendingProject] = useState<Project | null>(null);
   const [postProcessTarget, setPostProcessTarget] = useState<Project | null>(null);
+  const [stemTarget, setStemTarget] = useState<{ project: Project; mode: StemMode } | null>(null);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [activePlaylistId, setActivePlaylistId] = useState<string | null>(null);
   const [downloadTarget, setDownloadTarget] = useState<Project | null>(null);
@@ -1521,7 +1816,7 @@ export default function Studio() {
   const installed = (item: typeof models[number]) => inventory?.repositories?.some(repo => (item.id !== 'yue2-original' || repo.id === 'm-a-p/YuE2-3B') && repo.files?.some(file => file.path.endsWith(item.file) && file.state === 'complete'));
   function projectList() { return <>
     <div className="collection-toolbar"><div className="collection-tabs" aria-label="작업 필터">{([['all', '전체'], ['projects', '프로젝트'], ['audio', '완성된 곡'], ['favorites', '좋아요']] as const).map(([value, label]) => <button key={value} aria-pressed={tab === value} className={tab === value ? 'active' : ''} onClick={() => setTab(value)}>{label}{value === 'all' && <span>{projects.length}</span>}</button>)}</div><div className="collection-actions"><div className="search-field"><Search size={15}/><input aria-label="곡 검색" placeholder="곡 검색" value={query} onChange={event => setQuery(event.target.value)}/></div><select className="sort-select" aria-label="정렬 방식" value={sortOption} onChange={event => setSortOption(event.target.value as typeof sortOption)}><option value="date-desc">최신순</option><option value="date-asc">오래된순</option><option value="title-asc">이름 A-Z</option><option value="title-desc">이름 Z-A</option></select><Button variant="ghost" size="icon" aria-label={settings.viewMode === 'card' ? '목록 보기' : '카드 보기'} onClick={() => void setViewMode(settings.viewMode === 'card' ? 'list' : 'card')}>{settings.viewMode === 'card' ? <ListMusic/> : <LayoutGrid/>}</Button></div></div>
-    {visibleProjects.length ? <div className={`project-list ${settings.viewMode === 'card' ? 'card-view' : ''}`}>{visibleProjects.map(item => <article className={`song-card ${item.status === 'completed' ? 'status-done' : 'status-draft'}${nowPlaying?.id === item.id && isPlaying ? ' now-playing' : ''}`} key={item.id}><button className={`song-symbol ${item.status === 'completed' ? 'status-done' : 'status-draft'}`} aria-label={item.status === 'completed' ? `${item.title} 재생` : `${item.title} 설정 불러오기`} onClick={() => item.status === 'completed' ? playQueue(visibleProjects, visibleProjects.indexOf(item)) : loadProject(item)}>{item.coverPath ? <img className="song-cover" src={coverUrl(item)} alt=""/> : item.status === 'completed' ? <AudioLines size={24}/> : <FileText size={24}/>}</button><button className="song-info" onClick={() => item.status === 'completed' ? (setSelected(item), setNotes(item.notes || '')) : loadProject(item)}><strong>{item.title}</strong><p>{item.style}</p><div><span className="small-badge">{item.status === 'completed' ? '완성' : '초안'}</span><span>{models.find(m => m.id === item.modelId)?.name || item.modelId}</span><span>{new Date(item.createdAt).toLocaleDateString('ko-KR')}</span></div></button><Button variant="ghost" size="icon" aria-label={item.favorite ? `${item.title} 좋아요 취소` : `${item.title} 좋아요`} onClick={() => void favorite(item)} className={item.favorite ? 'hearted' : ''}><Heart fill={item.favorite ? 'currentColor' : 'none'}/></Button><Button variant="ghost" size="icon" aria-label={`${item.title} 설정 불러오기`} onClick={() => loadProject(item)}><ArrowRight/></Button><Popover><PopoverTrigger render={<Button variant="ghost" size="icon" aria-label={`${item.title} 더보기`}/>}><MoreVertical/></PopoverTrigger><PopoverContent className="song-menu" align="end">{item.status === 'completed' ? <><button className="song-menu-item" onClick={() => loadProject(item)}><RefreshCw size={15}/>리믹스(설정 재사용)</button><button className="song-menu-item" onClick={() => coverFromProject(item)}><Disc3 size={15}/>커버</button><button className="song-menu-item" onClick={() => renameProject(item)}><Pencil size={15}/>이름 변경</button><button className="song-menu-item" onClick={() => openDownload(item)}><Download size={15}/>다운로드</button><button className="song-menu-item" onClick={() => setPostProcessTarget(item)}><SlidersHorizontal size={15}/>후처리 / EQ</button><button className="song-menu-item" onClick={() => setPlaylistPickerTarget(item)}><ListPlus size={15}/>재생목록에 추가</button><button className="song-menu-item" onClick={() => openCoverPicker(item)}><ImageIcon size={15}/>커버 {item.coverPath ? '변경' : '등록'}</button>{item.coverPath && <button className="song-menu-item" onClick={() => void deleteCover(item)}><X size={15}/>커버 삭제</button>}<button className="song-menu-item" onClick={() => { setSelected(item); setNotes(item.notes || ''); }}><CircleHelp size={15}/>상세 정보</button></> : <><button className="song-menu-item" onClick={() => renameProject(item)}><Pencil size={15}/>이름 변경</button><button className="song-menu-item" onClick={() => void addAsExample(item)}><Sparkles size={15}/>예시로 추가하기</button><button className="song-menu-item" onClick={() => openCoverPicker(item)}><ImageIcon size={15}/>커버 {item.coverPath ? '변경' : '등록'}</button></>}<button className="song-menu-item danger" onClick={() => setDeleteTarget(item)}><Trash2 size={15}/>삭제</button></PopoverContent></Popover>{item.status === 'completed' && item.durationMs ? <span className="song-duration">{formatTime(item.durationMs / 1000)}</span> : null}</article>)}</div> : <div className="empty-library"><div className="empty-icon"><AudioLines size={42} strokeWidth={1.25}/></div><h2>{query ? '검색 결과가 없어요' : tab === 'audio' ? '완성된 노래가 아직 없어요' : page === 'favorites' || tab === 'favorites' ? '마음에 드는 곡을 모아 보세요' : '첫 번째 노래를 기다리고 있어요'}</h2><p>{query ? '다른 제목이나 스타일로 검색해 보세요.' : tab === 'audio' ? '노래 만들기로 곡을 생성하면 이곳에서 결과를 들을 수 있어요.' : page === 'favorites' || tab === 'favorites' ? '저장한 곡의 하트를 누르면 이곳에 나타나요.' : <>가사 한 줄, 떠오르는 분위기에서 시작해 보세요.<br/>저장한 초안과 완성된 곡이 이곳에 모입니다.</>}</p>{!query && tab === 'all' && page !== 'favorites' && <Button variant="outline" className="soft-button" onClick={() => setPresetOpen(true)}><Sparkles/>예시로 시작하기<ArrowRight/></Button>}</div>}
+    {visibleProjects.length ? <div className={`project-list ${settings.viewMode === 'card' ? 'card-view' : ''}`}>{visibleProjects.map(item => <article className={`song-card ${item.status === 'completed' ? 'status-done' : 'status-draft'}${nowPlaying?.id === item.id && isPlaying ? ' now-playing' : ''}`} key={item.id}><button className={`song-symbol ${item.status === 'completed' ? 'status-done' : 'status-draft'}`} aria-label={item.status === 'completed' ? `${item.title} 재생` : `${item.title} 설정 불러오기`} onClick={() => item.status === 'completed' ? playQueue(visibleProjects, visibleProjects.indexOf(item)) : loadProject(item)}>{item.coverPath ? <img className="song-cover" src={coverUrl(item)} alt=""/> : item.status === 'completed' ? <AudioLines size={24}/> : <FileText size={24}/>}</button><button className="song-info" onClick={() => item.status === 'completed' ? (setSelected(item), setNotes(item.notes || '')) : loadProject(item)}><strong>{item.title}</strong><p>{item.style}</p><div><span className="small-badge">{item.status === 'completed' ? '완성' : '초안'}</span><span>{models.find(m => m.id === item.modelId)?.name || item.modelId}</span><span>{new Date(item.createdAt).toLocaleDateString('ko-KR')}</span></div></button><Button variant="ghost" size="icon" aria-label={item.favorite ? `${item.title} 좋아요 취소` : `${item.title} 좋아요`} onClick={() => void favorite(item)} className={item.favorite ? 'hearted' : ''}><Heart fill={item.favorite ? 'currentColor' : 'none'}/></Button><Button variant="ghost" size="icon" aria-label={`${item.title} 설정 불러오기`} onClick={() => loadProject(item)}><ArrowRight/></Button><Popover><PopoverTrigger render={<Button variant="ghost" size="icon" aria-label={`${item.title} 더보기`}/>}><MoreVertical/></PopoverTrigger><PopoverContent className="song-menu" align="end">{item.status === 'completed' ? <><button className="song-menu-item" onClick={() => loadProject(item)}><RefreshCw size={15}/>리믹스(설정 재사용)</button><button className="song-menu-item" onClick={() => coverFromProject(item)}><Disc3 size={15}/>커버</button><button className="song-menu-item" onClick={() => renameProject(item)}><Pencil size={15}/>이름 변경</button><button className="song-menu-item" onClick={() => openDownload(item)}><Download size={15}/>다운로드</button><button className="song-menu-item" onClick={() => setPostProcessTarget(item)}><SlidersHorizontal size={15}/>후처리 / EQ</button><button className="song-menu-item" onClick={() => setStemTarget({ project: item, mode: 'vocal' })}><Layers size={15}/><span className="stem-menu-item-text">STEM 분리<small>{STEM_MODE_CONFIG.vocal.menuSub}</small></span></button><button className="song-menu-item" onClick={() => setStemTarget({ project: item, mode: 'full' })}><Layers size={15}/><span className="stem-menu-item-text">STEM 분리<small>{STEM_MODE_CONFIG.full.menuSub}</small></span></button><button className="song-menu-item" onClick={() => setPlaylistPickerTarget(item)}><ListPlus size={15}/>재생목록에 추가</button><button className="song-menu-item" onClick={() => openCoverPicker(item)}><ImageIcon size={15}/>커버 {item.coverPath ? '변경' : '등록'}</button>{item.coverPath && <button className="song-menu-item" onClick={() => void deleteCover(item)}><X size={15}/>커버 삭제</button>}<button className="song-menu-item" onClick={() => { setSelected(item); setNotes(item.notes || ''); }}><CircleHelp size={15}/>상세 정보</button></> : <><button className="song-menu-item" onClick={() => renameProject(item)}><Pencil size={15}/>이름 변경</button><button className="song-menu-item" onClick={() => void addAsExample(item)}><Sparkles size={15}/>예시로 추가하기</button><button className="song-menu-item" onClick={() => openCoverPicker(item)}><ImageIcon size={15}/>커버 {item.coverPath ? '변경' : '등록'}</button></>}<button className="song-menu-item danger" onClick={() => setDeleteTarget(item)}><Trash2 size={15}/>삭제</button></PopoverContent></Popover>{item.status === 'completed' && item.durationMs ? <span className="song-duration">{formatTime(item.durationMs / 1000)}</span> : null}</article>)}</div> : <div className="empty-library"><div className="empty-icon"><AudioLines size={42} strokeWidth={1.25}/></div><h2>{query ? '검색 결과가 없어요' : tab === 'audio' ? '완성된 노래가 아직 없어요' : page === 'favorites' || tab === 'favorites' ? '마음에 드는 곡을 모아 보세요' : '첫 번째 노래를 기다리고 있어요'}</h2><p>{query ? '다른 제목이나 스타일로 검색해 보세요.' : tab === 'audio' ? '노래 만들기로 곡을 생성하면 이곳에서 결과를 들을 수 있어요.' : page === 'favorites' || tab === 'favorites' ? '저장한 곡의 하트를 누르면 이곳에 나타나요.' : <>가사 한 줄, 떠오르는 분위기에서 시작해 보세요.<br/>저장한 초안과 완성된 곡이 이곳에 모입니다.</>}</p>{!query && tab === 'all' && page !== 'favorites' && <Button variant="outline" className="soft-button" onClick={() => setPresetOpen(true)}><Sparkles/>예시로 시작하기<ArrowRight/></Button>}</div>}
   </>; }
   function playlistPage() {
     if (activePlaylist) return <section className="library-page page-scroll"><div className="page-heading library-heading"><div><button className="playlist-back" onClick={() => setActivePlaylistId(null)}><ChevronLeft size={15}/>재생목록</button><h1>{activePlaylist.name}</h1><p>{playlistSongs.length}곡</p></div><div className="playlist-detail-actions"><Button variant="ghost" size="icon" aria-label={settings.viewMode === 'card' ? '목록 보기' : '카드 보기'} onClick={() => void setViewMode(settings.viewMode === 'card' ? 'list' : 'card')}>{settings.viewMode === 'card' ? <ListMusic/> : <LayoutGrid/>}</Button><Button onClick={() => playQueue(playlistSongs, 0)} disabled={!playlistSongs.some(item => item.status === 'completed')}><Play/>전체 재생</Button></div></div>{playlistSongs.length ? <div className={`project-list ${settings.viewMode === 'card' ? 'card-view' : ''}`}>{playlistSongs.map(item => <article className={`song-card ${item.status === 'completed' ? 'status-done' : 'status-draft'}${nowPlaying?.id === item.id && isPlaying ? ' now-playing' : ''}`} key={item.id}><button className={`song-symbol ${item.status === 'completed' ? 'status-done' : 'status-draft'}`} aria-label={`${item.title} 재생`} onClick={() => playQueue(playlistSongs, playlistSongs.indexOf(item))}>{item.coverPath ? <img className="song-cover" src={coverUrl(item)} alt=""/> : item.status === 'completed' ? <AudioLines size={24}/> : <FileText size={24}/>}</button><button className="song-info" onClick={() => { setSelected(item); setNotes(item.notes || ''); }}><strong>{item.title}</strong><p>{item.style}</p></button><Button variant="ghost" size="icon" aria-label={`${item.title} 재생목록에서 제거`} onClick={() => void removeFromPlaylist(activePlaylist, item.id)}><X/></Button></article>)}</div> : <div className="empty-library"><div className="empty-icon"><ListPlus size={42} strokeWidth={1.25}/></div><h2>아직 곡이 없어요</h2><p>노래의 &quot;...&quot; 메뉴에서 이 재생목록에 곡을 추가해 보세요.</p></div>}</section>;
@@ -1567,5 +1862,6 @@ export default function Studio() {
     <AlertDialog open={pythonWarningOpen} onOpenChange={setPythonWarningOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>원본(Python) 모델로 생성할까요?</AlertDialogTitle><AlertDialogDescription>이 모델은 공식적으로 24GB급 VRAM을 권장합니다. {gpuVramMb !== null ? `이 PC에서 감지된 GPU 메모리는 약 ${(gpuVramMb / 1024).toFixed(0)}GB입니다.` : 'GPU 사양을 확인하지 못했습니다.'} 설정의 메모리 예산을 낮추면 짧은 곡은 더 적은 VRAM에서도 만들어질 수 있지만, 길거나 복잡한 곡은 여전히 실패할 수 있어요. 그래도 진행하시겠어요?</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>취소</AlertDialogCancel><AlertDialogAction onClick={() => { setPythonWarningOpen(false); void saveDraft(true); }}>그래도 진행</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
     <Dialog open={!!suggestion} onOpenChange={open => { if (!open) { setSuggestion(null); setEditingSuggestion(false); } }}><DialogContent className="studio-dialog detail-dialog"><DialogTitle>{suggestion?.task === 'lyrics' ? '가사 제안' : '스타일 제안'}</DialogTitle><DialogDescription>내용을 확인한 뒤 적용하세요. 필요하면 편집한 뒤 적용할 수 있어요.</DialogDescription><div className="dialog-scroll">{editingSuggestion ? <Textarea className="detail-lyrics suggestion-textarea" value={suggestion?.text || ''} onChange={event => { if (suggestion) setSuggestion({ ...suggestion, text: event.target.value }); }}/> : <pre className="detail-lyrics">{suggestion?.text}</pre>}</div><div className="dialog-actions"><Button variant="outline" onClick={() => setEditingSuggestion(!editingSuggestion)}><Pencil size={14}/>{editingSuggestion ? '편집 완료' : '편집'}</Button><Button variant="outline" onClick={() => { setSuggestion(null); setEditingSuggestion(false); }}>취소</Button><Button onClick={() => { if (suggestion) update({ [suggestion.task]: suggestion.text }); setSuggestion(null); setEditingSuggestion(false); }}>편집기에 적용</Button></div></DialogContent></Dialog>
     {postProcessTarget && <PostProcessDialog project={postProcessTarget} onClose={() => setPostProcessTarget(null)} notify={notify} visualizerEnabled={settings.visualizerEnabled} visualizerRingCount={settings.visualizerRingCount} visualizerHue={settings.visualizerHue} visualizerLineWidth={settings.visualizerLineWidth} visualizerTrail={settings.visualizerTrail} visualizerSpiral={settings.visualizerSpiral} visualizerRingMode={settings.visualizerRingMode} visualizerTimeStep={settings.visualizerTimeStep} visualizerTimeSkew={settings.visualizerTimeSkew} visualizerRingStep={settings.visualizerRingStep} visualizerAmplitude={settings.visualizerAmplitude}/>}
+    {stemTarget && <StemDialog project={stemTarget.project} mode={stemTarget.mode} onClose={() => setStemTarget(null)} notify={notify} visualizerEnabled={settings.visualizerEnabled} visualizerRingCount={settings.visualizerRingCount} visualizerHue={settings.visualizerHue} visualizerLineWidth={settings.visualizerLineWidth} visualizerTrail={settings.visualizerTrail} visualizerSpiral={settings.visualizerSpiral} visualizerRingMode={settings.visualizerRingMode} visualizerTimeStep={settings.visualizerTimeStep} visualizerTimeSkew={settings.visualizerTimeSkew} visualizerRingStep={settings.visualizerRingStep} visualizerAmplitude={settings.visualizerAmplitude}/>}
   </div>;
 }

@@ -178,6 +178,7 @@ function makeFakeSpawn() {
   const calls = [];
   let next = { exitCode: 0, delayMs: 0, metrics: 'metrics.audio_duration_ms=1234\nmetrics.rtf=0.42\n', writeOutput: true };
   let ffmpeg = { exitCode: 0, delayMs: 0, writeOutput: true };
+  let sep = { exitCode: 0, delayMs: 0, writeOutput: true };
   const spawnImpl = (engine, args) => {
     calls.push({ engine, args });
     const emitter = new EventEmitter();
@@ -194,6 +195,19 @@ function makeFakeSpawn() {
       })();
       return emitter;
     }
+    if (args.includes('sep')) {
+      const behavior = sep;
+      const outDir = args[args.indexOf('--out-dir') + 1];
+      const names = args.includes('mel_band_roformer') ? ['vocals', 'instrumental'] : ['vocals', 'drums', 'bass', 'other'];
+      (async () => {
+        await new Promise(resolve => setTimeout(resolve, behavior.delayMs || 0));
+        if (behavior.writeOutput && behavior.exitCode === 0) {
+          for (const name of names) await writeFile(path.join(outDir, `${name}.wav`), Buffer.from(`fake-${name}-bytes`));
+        }
+        emitter.emit('close', behavior.exitCode, null);
+      })();
+      return emitter;
+    }
     const behavior = next;
     const outPath = args[args.indexOf('--out') + 1];
     (async () => {
@@ -204,7 +218,7 @@ function makeFakeSpawn() {
     })();
     return emitter;
   };
-  return { spawnImpl, calls, set: (behavior) => { next = { ...next, ...behavior }; }, setFfmpeg: (behavior) => { ffmpeg = { ...ffmpeg, ...behavior }; } };
+  return { spawnImpl, calls, set: (behavior) => { next = { ...next, ...behavior }; }, setFfmpeg: (behavior) => { ffmpeg = { ...ffmpeg, ...behavior }; }, setSep: (behavior) => { sep = { ...sep, ...behavior }; } };
 }
 
 function makeFakePythonSpawn(scriptPath) {
@@ -260,9 +274,15 @@ async function setUpEngine(root) {
   await mkdir(path.join(modelRoot, 'sidecars'), { recursive: true });
   for (const name of ['yue2-3b-q4_0.gguf', 'yue2-vae-f16.gguf']) await writeFile(path.join(modelRoot, name), 'stub');
   for (const name of ['yue2-model-config.json', 'yue2-generation-config.json', 'yue2-qwen.tiktoken', 'yue2-vae-config.json']) await writeFile(path.join(modelRoot, 'sidecars', name), 'stub');
+  const htdemucsModel = path.join(root, 'models', 'audio-cpp', 'audio.cpp-gguf', 'HTDemucs-GGUF', 'htdemucs-q8_0.gguf');
+  await mkdir(path.dirname(htdemucsModel), { recursive: true });
+  await writeFile(htdemucsModel, 'stub');
+  const melBandRoformerModel = path.join(root, 'models', 'audio-cpp', 'audio.cpp-gguf', 'Mel-Band-RoFormer-GGUF', 'mel-band-roformer-f16.gguf');
+  await mkdir(path.dirname(melBandRoformerModel), { recursive: true });
+  await writeFile(melBandRoformerModel, 'stub');
   const enginePath = path.join(root, 'fake-audiocpp_cli.exe');
   await writeFile(enginePath, 'stub');
-  return { modelRoot, enginePath };
+  return { modelRoot, enginePath, htdemucsModel, melBandRoformerModel };
 }
 
 test('audio.cpp generation copies the song into library/music, leaving the source project untouched', async t => {
@@ -432,6 +452,69 @@ test('audio.cpp (GGUF) generation accepts an external ABC score for cover/instru
   assert.ok(instrumentalAbcOption, 'expected --request-option abc_file=<path> for GGUF instrumental generation');
   // the persisted draft keeps the user's original cot; only the generation call was adjusted
   assert.equal((await callJson(`/api/projects/${instrumentalDraft.id}`)).data.cot, 'off');
+});
+
+test('STEM separation (HTDemucs) splits a completed song into vocals/drums/bass/other, serves each, and cleans up on delete', async t => {
+  resetEnv();
+  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-stems-'));
+  const { enginePath } = await setUpEngine(root);
+  const fakeSpawn = makeFakeSpawn();
+  const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}), spawnImpl: fakeSpawn.spawnImpl });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const call = async (route, method = 'GET', payload) => fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) });
+  const callJson = async (route, method, payload) => { const response = await call(route, method, payload); return { status: response.status, data: await response.json() }; };
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+
+  await callJson('/api/settings', 'PUT', { enginePath });
+
+  const draft = (await callJson('/api/projects', 'POST', { title: '스템 테스트', lyrics: '가사', style: '스타일', modelId: 'yue2-q4' })).data;
+  const generated = await callJson('/api/generate', 'POST', { projectId: draft.id });
+  assert.equal(generated.status, 200);
+  const songId = generated.data.id;
+
+  // no STEM files yet: fetching one 404s
+  assert.equal((await call(`/api/projects/${songId}/stems/vocals`)).status, 404);
+
+  const started = await callJson(`/api/projects/${songId}/stems`, 'POST', {});
+  assert.equal(started.status, 200);
+  assert.deepEqual(started.data.stems, ['vocals', 'drums', 'bass', 'other']);
+  const sepCall = fakeSpawn.calls.find(c => c.args.includes('sep'));
+  assert.ok(sepCall, 'expected a --task sep invocation');
+  assert.ok(sepCall.args.includes('htdemucs'));
+  assert.ok(fakeSpawn.calls.some(c => c.engine === 'ffmpeg'), 'expected ffmpeg to convert the source to 44.1kHz first');
+
+  for (const name of ['vocals', 'drums', 'bass', 'other']) {
+    const response = await call(`/api/projects/${songId}/stems/${name}`);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'audio/wav');
+    assert.equal(await response.text(), `fake-${name}-bytes`);
+  }
+  assert.equal((await call(`/api/projects/${songId}/stems/nonsense`)).status, 404);
+
+  assert.equal((await callJson(`/api/projects/${songId}/stems`, 'DELETE', {})).status, 200);
+  assert.equal((await call(`/api/projects/${songId}/stems/vocals`)).status, 404);
+
+  // mode: "vocal" uses mel_band_roformer for a cleaner 2-way vocals/instrumental split instead of htdemucs's 4-way
+  const vocalMode = await callJson(`/api/projects/${songId}/stems`, 'POST', { mode: 'vocal' });
+  assert.equal(vocalMode.status, 200);
+  assert.deepEqual(vocalMode.data.stems, ['vocals', 'instrumental']);
+  const roformerCall = fakeSpawn.calls.find(c => c.args.includes('mel_band_roformer'));
+  assert.ok(roformerCall, 'expected a --family mel_band_roformer invocation');
+  assert.equal((await call(`/api/projects/${songId}/stems/instrumental`)).status, 200);
+  assert.equal((await call(`/api/projects/${songId}/stems/drums`)).status, 404, 'vocal mode never produced a drums stem');
+  assert.equal((await callJson(`/api/projects/${songId}/stems`, 'DELETE', {})).status, 200);
+
+  // engine failure surfaces as 502, and no stem files are left behind
+  fakeSpawn.setSep({ exitCode: 1, writeOutput: false });
+  const failed = await callJson(`/api/projects/${songId}/stems`, 'POST', {});
+  assert.equal(failed.status, 502);
+  assert.equal((await call(`/api/projects/${songId}/stems/vocals`)).status, 404);
+
+  // missing HTDemucs model is a clear 400, not a crash
+  await rm(path.join(root, 'models', 'audio-cpp', 'audio.cpp-gguf'), { recursive: true, force: true });
+  const noModel = await callJson(`/api/projects/${songId}/stems`, 'POST', {});
+  assert.equal(noModel.status, 400);
 });
 
 test('save format controls what gets written into a custom, relative music folder', async t => {

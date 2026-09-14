@@ -11,6 +11,7 @@
 - **심볼릭 작곡(ABC 악보)**: 멜로디/코드 계획 생성·검사·AI 지시 편집·오디오 재생(현재 음표 하이라이트), 오디오에서 멜로디 추출해 커버 만들기(SheetSage2, 실제 오디오로 종단 검증 완료), `.abc` 파일 기반 라이브러리(가져오기/저장/삭제) — ABC 악보 기반 생성(심볼릭 작곡/커버 포함)은 원본 Python 모델과 GGUF 모두에서 동작
 - **완성곡 "커버" 원클릭**: 완성곡 메뉴의 "리믹스" 아래 "커버"를 누르면 그 곡의 오디오에서 멜로디/코드를 추출해 작곡 화면에 바로 채워 넣음(가사·스타일이 이미 있으면 유지할지 그 곡 설정으로 바꿀지 확인). 단, 실제 보컬 음색/톤까지 가져오는 기능은 아님 — 멜로디·코드와 성별 힌트만 전달됨
 - **후처리 / EQ 스튜디오**: 완성곡을 브라우저에서 실시간으로 미리 들으며 10밴드 EQ(프리셋 포함)·FxSound 노브(선명도/공간감/서라운드/다이내믹부스트/베이스부스트)·리버브·에코를 조절하고, 원본 파일은 그대로 둔 채 처리된 사본을 원래 파일 형식으로 저장. 재생 중인 트랙을 실시간 원형 비주얼라이저로 표시
+- **STEM 분리**: 완성곡을 두 모드 중 골라 분리 — 보컬+악기 2갈래(audio.cpp Mel-Band RoFormer, 보컬 누출이 더 적음) 또는 보컬+드럼+베이스+기타 4갈래(audio.cpp HTDemucs, 매우 빠름). 각 스템에 위 EQ/FxSound/리버브·에코를 따로 적용한 뒤 다시 하나로 합쳐 저장. 분리한 스템 파일은 임시 파일이라 창을 닫으면 사라지고 원본은 바뀌지 않음
 - 라이브러리(완성곡) / 프로젝트(초안·설정) 완전 분리 — 하나를 지워도 다른 하나는 그대로 유지
 - 재생목록 생성 및 PC에서 연속 재생, 앨범 커버 등록
 - wav / flac / mp3 / mp4 다중 포맷 다운로드
@@ -28,15 +29,15 @@
 | Python 3(64비트) | 필수 | `scripts/download_models.py`(표준 라이브러리만 사용, 별도 pip 설치 불필요) 실행에 필요 |
 | git | 필수 | audio.cpp/YuE2 소스를 받는 데 필요 |
 | Visual Studio 2022 C++ workload, CUDA Toolkit, [uv](https://docs.astral.sh/uv/) | 엔진별 선택 | 아래 "설치" 3단계 참고 — 최소 하나는 있어야 실제 곡 생성이 됩니다 |
-| ffmpeg (PATH 등록) | 선택 | wav 이외 형식(flac/mp3/mp4) 저장·다운로드, SheetSage2 커버 기능에 필요 |
-| 디스크 여유 공간 | 넉넉히 | 모델 가중치만 약 23.3GB(항상 전부 다운로드, 선택 불가), 엔진 빌드/가상환경은 별도로 각 15~20GB. 아래 표 참고 |
+| ffmpeg (PATH 등록) | 선택 | wav 이외 형식(flac/mp3/mp4) 저장·다운로드, SheetSage2 커버 기능, STEM 분리(입력을 44.1kHz로 변환)에 필요 |
+| 디스크 여유 공간 | 넉넉히 | 모델 가중치만 약 23.55GB(항상 전부 다운로드, 선택 불가), 엔진 빌드/가상환경은 별도로 각 15~20GB. 아래 표 참고 |
 
 **디스크/네트워크 용량 요약** (자세한 내용은 [docs/models.md](docs/models.md), [docs/audiocpp-setup.md](docs/audiocpp-setup.md), [docs/python-engine-setup.md](docs/python-engine-setup.md)):
 
 | 구성 요소 | 용량 | 필요한 경우 |
 |---|---|---|
-| `scripts/download_models.py` 전체 다운로드 | 약 23.3GB | **선택 옵션이 없어 항상 4개 저장소 전부를 받습니다** — GGUF만 쓸 계획이어도 원본 모델(7.79GB)이 함께 받아짐 |
-| audio.cpp 소스 빌드(engine/) | 소스는 작지만 CUDA Toolkit·VS Build Tools 자체가 수 GB | GGUF 모델(Q4/Q8/BF16) 사용 시 |
+| `scripts/download_models.py` 전체 다운로드 | 약 23.83GB | **선택 옵션이 없어 항상 5개 저장소(전체 스냅샷 4개 + HTDemucs/Mel-Band RoFormer 단일 파일 2개)를 받습니다** — GGUF만 쓸 계획이어도 원본 모델(7.79GB)이 함께 받아짐 |
+| audio.cpp 소스 빌드(engine/) | 소스는 작지만 CUDA Toolkit·VS Build Tools 자체가 수 GB | GGUF 모델(Q4/Q8/BF16), STEM 분리 사용 시 |
 | YuE2 원본 Python venv(test/YuE2-source/.venv) | 약 15~20GB(torch+CUDA 휠 포함, `.uv-cache` 삭제 전 기준) | "YuE2 - 원본" 모델 사용 시 |
 | SheetSage2 전용 venv(test/YuE2-source/.venv-sheetsage2) + 모델 | 약 2GB(venv) + 2GB(모델, 첫 전사 시) | "커버"/"오디오에서 추출" 기능 사용 시 |
 
@@ -106,13 +107,14 @@ cp .env.sample .env
 python scripts/download_models.py
 ```
 
-이 한 번의 실행으로 ①②가 쓸 모델(GGUF + 원본 Python 본체/VAE, 약 23.3GB)이 전부 받아집니다. 선택적으로 일부만 받는 옵션은 없습니다(GGUF만 쓸 계획이어도 원본 모델이 함께 받아짐). 시간이 오래 걸리며, 중단 후 재실행하면 이어받기/해시 검증을 하므로 다시 실행해도 안전합니다. ③ SheetSage2의 전사 모델은 이 스크립트가 아니라 별도로 받습니다(아래 참고). 완료되면 `model-download-status.json`의 각 저장소 `state`가 `"complete"`인지 확인하세요.
+이 한 번의 실행으로 ①②④가 쓸 모델(GGUF + 원본 Python 본체/VAE + STEM 분리용 HTDemucs/Mel-Band RoFormer, 약 23.83GB)이 전부 받아집니다. 선택적으로 일부만 받는 옵션은 없습니다(GGUF만 쓸 계획이어도 원본 모델이 함께 받아짐). 시간이 오래 걸리며, 중단 후 재실행하면 이어받기/해시 검증을 하므로 다시 실행해도 안전합니다. ③ SheetSage2의 전사 모델은 이 스크립트가 아니라 별도로 받습니다(아래 참고). 완료되면 `model-download-status.json`의 각 저장소 `state`가 `"complete"`인지 확인하세요.
 
 이제 아래 중 하나 이상을 골라 그 문서를 **처음부터 끝까지** 따라가세요(각 문서에 자체 "0단계 사전 준비"가 있습니다).
 
 - **① audio.cpp (GGUF, 가장 가볍고 권장 시작점)**: Q4/Q8/BF16 GGUF 모델로 빠르게 생성합니다. Visual Studio 2022 C++ workload + CUDA Toolkit으로 소스에서 직접 빌드해야 합니다(사전 빌드 바이너리 없음 — yue2 지원이 아직 dev 브랜치 전용). → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)**
 - **② 원본 Python 파이프라인 ("YuE2 - 원본" 모델)**: 24GB급 VRAM을 권장하는 공식 모델(12GB급도 메모리 예산을 낮추면 짧은 곡은 동작 확인됨). 공식 YuE2 저장소를 받아 `uv`로 전용 가상환경을 구성해야 합니다. → **[docs/python-engine-setup.md](docs/python-engine-setup.md)**
 - **③ SheetSage2 (선택, "커버"/"오디오에서 추출" 기능 전용)**: 완성곡이나 업로드한 오디오에서 멜로디/코드를 ABC 악보로 추출합니다. ②와는 완전히 별도의 Python 가상환경이 필요합니다(버전 충돌 방지). `ffmpeg`도 PATH에 있어야 합니다. → **[docs/python-engine-setup.md](docs/python-engine-setup.md)의 SheetSage2 절**
+- **④ STEM 분리 (선택, 완성곡의 "STEM 분리" 기능 전용)**: 완성곡을 보컬/악기 2갈래(mel_band_roformer) 또는 보컬/드럼/베이스/기타 4갈래(htdemucs)로 분리합니다. ①과 같은 `audiocpp_cli.exe`를 쓰므로, ①을 빌드할 때 `-Models yue2,htdemucs,bs_roformer`로 함께 빌드하면 별도 작업이 필요 없습니다(`bs_roformer`와 `mel_band_roformer`는 같은 CMake 모듈의 별칭이라 하나만 적어도 둘 다 빌드됨). → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)의 STEM 분리 절**
 
 > "심볼릭 작곡"·"악기만"·ABC 기반 커버는 최종 생성에 ①이나 ②를 쓰더라도, ABC 악보 준비(계획 생성/보컬 성부 뮤트) 자체는 항상 ②의 Python 엔진(`abc_tools.py`)을 거칩니다. 즉 GGUF만 쓰더라도 이 기능들을 쓰려면 ②의 Python 환경 구성이 필요합니다.
 

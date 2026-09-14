@@ -15,6 +15,17 @@ REPOS = {
     "m-a-p/YuE2-Vae": "9a94e1d0ea9f8087e98f77fa88df4a4068104d2a",
     "m-a-p/YuE2-Vae-legacy": "5ddd12f79acb90d24b3a672dcd2ebf88da7c92a9",
     "audio-cpp/Yue2-3B-GGUF": "9c31f1c64f73d36799693aa89295b410c76928c3",
+    # audio.cpp-gguf hosts 60+ unrelated model families in one repo; "prefixes" keeps
+    # this to just the packages SongYUE2's stem-separation feature uses (HTDemucs for
+    # the 4-way vocals/drums/bass/other split, Mel-Band RoFormer for the cleaner 2-way
+    # vocals/instrumental split), instead of pulling everything in the repo.
+    "audio-cpp/audio.cpp-gguf": {
+        "revision": "6d5436fc85f7a20c2e9f4e472b7f3a532f686444",
+        "prefixes": [
+            "HTDemucs-GGUF/htdemucs-q8_0.gguf",
+            "Mel-Band-RoFormer-GGUF/mel-band-roformer-f16.gguf",
+        ],
+    },
 }
 LOCK = threading.RLock()
 manifest = {}
@@ -104,13 +115,16 @@ def download(repo, entry):
 def main():
     global manifest
     repositories = []
-    for repo_id, revision in REPOS.items():
+    for repo_id, spec in REPOS.items():
+        revision, prefixes = (spec, None) if isinstance(spec, str) else (spec["revision"], spec.get("prefixes"))
         with urllib.request.urlopen(f"https://huggingface.co/api/models/{repo_id}/revision/{revision}?blobs=true", timeout=60) as response:
             metadata = json.load(response)
         files = []
         for item in metadata["siblings"]:
             name = item["rfilename"]
             if name.startswith("assets/") or name.lower().endswith((".wav", ".mp3", ".mp4")) or "0.1.3-py3" in name:
+                continue
+            if prefixes and not any(name.startswith(prefix) for prefix in prefixes):
                 continue
             files.append({"path": name, "size": item["size"], "sha256": item.get("lfs", {}).get("sha256"), "state": "pending", "completedBytes": 0})
         repositories.append({"id": repo_id, "revision": revision, "path": "models/" + repo_id, "state": "pending", "totalBytes": sum(f["size"] for f in files), "completedBytes": 0, "files": files})

@@ -80,6 +80,9 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 | GET `/api/generate/status` | 생성 진행 상황 폴링용. `{active:false,elapsedMs:0,expectedMs:0}` 또는 `{active:true,projectId,elapsedMs,expectedMs}` |
 | GET `/api/projects/:id/audio` | 완성된 오디오를 실제 확장자에 맞는 Content-Type(wav/flac/mp3/mp4)으로 스트리밍. 아직 생성되지 않았거나 파일이 없으면 404 |
 | POST `/api/projects/:id/post-process` | `{dataUrl}`(`audio/wav`, base64, 최대 150MB) → 브라우저에서 Web Audio로 EQ/FX/리버브·에코 처리된 오디오를 원본과 같은 파일 형식(mp4는 원본 비디오+새 오디오 트랙 합성)으로 재인코딩해 바이너리로 응답(다운로드). 원본 프로젝트 파일 자체는 바뀌지 않음. `ffmpeg`가 없거나 실패하면 502 |
+| POST `/api/projects/:id/stems` | `{mode?:"full"\|"vocal"}`(기본 `"full"`) → 완성곡을 `audiocpp_cli --task sep`로 분리해 `runs/:id/stems/`에 저장(먼저 `ffmpeg`로 44.1kHz WAV 변환). `full`은 `--family htdemucs`로 보컬/드럼/베이스/기타 4갈래(`{stems:["vocals","drums","bass","other"]}`), `vocal`은 `--family mel_band_roformer`로 보컬/악기 2갈래(`{stems:["vocals","instrumental"]}`) 반환. 해당 모델/엔진이 없으면 400, 분리 실패 시 502. 생성과 동시 실행 차단(`generating` 플래그 공유) |
+| GET `/api/projects/:id/stems/:stem` | 분리된 스템 하나를 `audio/wav`로 스트리밍. 먼저 STEM 분리를 실행해야 함(없으면 404) |
+| DELETE `/api/projects/:id/stems` | `runs/:id/stems/`를 통째로 삭제(임시 파일 정리). 프론트엔드는 STEM 분리 다이얼로그를 닫을 때(합치기 완료 포함) 항상 호출 |
 
 ### 심볼릭 작곡 (ABC notation)
 
@@ -133,6 +136,19 @@ YuE2는 범용 악보 리더가 아니라, `V: Vocal`/`V: Ins` 두 성부를 각
 ### ABC 악보(심볼릭 작곡/커버)도 GGUF에서 동작함 — `--request-option abc_file=`
 
 `audiocpp_cli`는 전용 `--abc-file` 플래그는 없지만, 범용 `--request-option key=value` 메커니즘으로 `abc`(텍스트) 또는 `abc_file`(경로)을 받습니다(`cot=melody`/`full`일 때만 허용 — `engine/audio.cpp/src/models/yue2/request.cpp`의 `abc_from_options()`). `runAudioCpp()`는 `project.abc`가 있으면(또는 `instrumental:true`로 위 mute-voice를 거치면) 이를 `runs/<project>/input.abc`에 쓰고 `--request-option abc_file=<path>`로 넘깁니다. 이전에는 이 메커니즘을 놓치고 "GGUF는 ABC를 지원하지 않는다"고 잘못 판단해 프론트엔드에서 두 버튼을 막고 `/api/generate`에서 GGUF+abc 조합을 거부했으나(2026-09-13), 실제로는 동작함을 CLI로 직접 검증(`yue2.plan.abc_tokens` 로그로 토큰화 확인)한 뒤 그 제약을 제거했습니다(2026-09-14). "심볼릭 작곡"(`/api/plan`)과 SheetSage2 "오디오에서 추출"(`/api/cover-transcribe`)은 어느 모델을 선택했든 동일하게 쓸 수 있습니다.
+
+## STEM 분리 (audio.cpp HTDemucs / Mel-Band RoFormer)
+
+완성곡 메뉴의 "STEM 분리"에는 두 모드가 있고 `separateStems()`가 `mode`에 따라 다른 `--family`로 `audiocpp_cli --task sep`를 호출합니다:
+
+- **보컬+드럼+베이스+기타** (`mode:"full"`, 기본값): `--family htdemucs --model models/audio-cpp/audio.cpp-gguf/HTDemucs-GGUF/htdemucs-q8_0.gguf` → 4갈래 WAV. 매우 빠름(RTX 5070 2분짜리 곡 기준 약 5~7초, RTF ≈ 0.037)이지만 엔진이 고품질 앙상블("bag") 체크포인트를 지원하지 않아 보컬 누출이 상대적으로 있을 수 있음.
+- **보컬+악기** (`mode:"vocal"`): `--family mel_band_roformer --model models/audio-cpp/audio.cpp-gguf/Mel-Band-RoFormer-GGUF/mel-band-roformer-f16.gguf` → 2갈래 WAV. 다른 아키텍처라 보컬 누출이 더 적음(RTX 5070 기준 약 10초, RTF ≈ 0.076). 처음엔 BS-RoFormer(ep368)를 썼다가 사용자가 직접 듣고 mel_band_roformer가 더 낫다고 판단해 교체했습니다 — 자세한 비교 경위는 [models.md](models.md)와 [audiocpp-setup.md](audiocpp-setup.md#stem-분리-보컬드럼베이스기타-악기) 참고.
+
+두 패밀리 모두 audio.cpp 빌드 시 기본으로 포함되지 않으므로 `-Models yue2,htdemucs,bs_roformer`로 함께 빌드해야 하며(`bs_roformer` 별칭이 `mel_band_roformer` 로더도 같이 빌드함), 안 되어 있으면 400으로 명확히 실패합니다(자세한 빌드는 [audiocpp-setup.md](audiocpp-setup.md) 참고).
+
+분리 결과는 `runs/:id/stems/`에 임시로 저장되고 **프로젝트 라이브러리에는 들어가지 않습니다** — 프론트엔드가 STEM 분리 다이얼로그를 열 때마다 `POST .../stems`로 새로 분리하고, 닫을 때(취소·합치기 완료 모두) `DELETE .../stems`로 지웁니다. 두 모드 다 10초 안팎이라 매번 새로 분리해도 부담이 적다고 판단해 캐싱하지 않았습니다.
+
+각 STEM의 개별 후처리는 새 다이얼로그를 만들지 않고 기존 `PostProcessDialog`를 `sourceOverride`(스템 오디오 버퍼 + 이전 설정)와 `onSaveOverride`(저장 시 서버 대신 부모 컴포넌트로 결과를 돌려줌) props로 재사용합니다. "합치기"는 스템별로 처리된(또는 미처리 원본) 버퍼들을 `OfflineAudioContext`에서 동시에 재생해 자연스럽게 합산한 뒤, 기존 `/api/projects/:id/post-process`(원본 곡 후처리와 같은 엔드포인트)로 저장합니다 — STEM 분리 전용 저장 엔드포인트는 따로 없습니다.
 
 ## SheetSage2
 

@@ -67,11 +67,11 @@ nvcc --version
 git clone -b dev --depth 1 https://github.com/0xShug0/audio.cpp.git engine/audio.cpp
 cd engine/audio.cpp
 .\scripts\build_windows.ps1 -Preset windows-cuda-release -Target audiocpp_cli `
-  -ModelSet custom -Models yue2 -CudaArchitectures 120a-real -Jobs 18
+  -ModelSet custom -Models yue2,htdemucs,bs_roformer -CudaArchitectures 120a-real -Jobs 18
 ```
 
 - `engine/`은 프로젝트 루트 기준 권장 위치이며 `.gitignore`에 등록되어 있습니다 (대용량 서드파티 소스 트리는 커밋하지 않음).
-- `-ModelSet custom -Models yue2`: yue2만 빌드합니다. 기본값 `full`은 60개 이상 모델 패밀리를 전부 빌드해 훨씬 오래 걸립니다.
+- `-ModelSet custom -Models yue2,htdemucs,bs_roformer`: 음악 생성(yue2)과 완성곡 메뉴의 STEM 분리 두 모드(htdemucs=보컬/드럼/베이스/기타 4갈래, mel_band_roformer=보컬/악기 2갈래, 보컬 누출이 더 적음)만 빌드합니다. `bs_roformer`와 `mel_band_roformer`는 같은 CMake 모듈(`roformer`)의 별칭이라 `bs_roformer`를 적어도 두 로더가 함께 빌드됩니다 — 실제로 쓰는 건 mel_band_roformer뿐입니다. `yue2`만 필요하면 `-Models yue2`로 줄여도 되지만(STEM 분리 기능은 빠짐), 기본값 `full`은 60개 이상 모델 패밀리를 전부 빌드해 훨씬 오래 걸립니다.
 - `-CudaArchitectures 120a-real`: RTX 50시리즈(Blackwell, sm_120) 전용 아키텍처를 명시합니다. 다른 GPU라면 `-CudaArchitectures auto`(로컬 GPU 자동 감지)를 사용하세요.
 - 결과물: `engine/audio.cpp/build/windows-cuda-release/bin/audiocpp_cli.exe`
 
@@ -80,13 +80,13 @@ cd engine/audio.cpp
 ## 확인
 
 ```powershell
-.\build\windows-cuda-release\bin\audiocpp_cli.exe --list-loaders   # "yue2: gen (offline)" 확인
+.\build\windows-cuda-release\bin\audiocpp_cli.exe --list-loaders   # "yue2: gen (offline)"와 "htdemucs: sep (offline)" 둘 다 확인
 .\build\windows-cuda-release\bin\audiocpp_cli.exe --list-devices   # CUDA GPU 인식 확인
 ```
 
 ## 모델 파일
 
-`scripts/download_models.py`로 이미 받아둔 `models/audio-cpp/Yue2-3B-GGUF` 폴더를 그대로 사용합니다. `model_specs/yue2.json`의 `target_directory: "Yue2-3B-GGUF"` 레이아웃(`sidecars/*` + `.gguf` 파일들)과 정확히 일치하므로 재다운로드가 필요 없습니다.
+`scripts/download_models.py`로 이미 받아둔 `models/audio-cpp/Yue2-3B-GGUF` 폴더를 그대로 사용합니다. `model_specs/yue2.json`의 `target_directory: "Yue2-3B-GGUF"` 레이아웃(`sidecars/*` + `.gguf` 파일들)과 정확히 일치하므로 재다운로드가 필요 없습니다. STEM 분리용 HTDemucs 모델(`models/audio-cpp/audio.cpp-gguf/HTDemucs-GGUF/htdemucs-q8_0.gguf`, 약 59MB)과 Mel-Band RoFormer 모델(`models/audio-cpp/audio.cpp-gguf/Mel-Band-RoFormer-GGUF/mel-band-roformer-f16.gguf`, 약 435MB)도 같은 스크립트가 함께 받습니다.
 
 ## 실행 (SongYUE2 없이 CLI 직접 테스트)
 
@@ -116,6 +116,21 @@ RTX 5070(12GB) 기준 Q4_0 + F16 VAE 조합으로 58초 분량 음악을 22.9초
 
 모델 선택(Q4/Q8/BF16)에 따라 자동으로 맞는 GGUF 본체+VAE 조합이 선택됩니다. 자세한 API 동작은 [local-api.md](local-api.md)를 참고하세요.
 
+## STEM 분리 (보컬/드럼/베이스/기타 악기)
+
+완성곡 메뉴에 STEM 분리 모드가 2개 있습니다. 둘 다 같은 `audiocpp_cli.exe`를 쓰고, 소스 오디오만 먼저 `ffmpeg`로 44.1kHz로 변환합니다.
+
+| 메뉴 항목 | `--family` | 모델 파일 | 결과 | 특징 |
+|---|---|---|---|---|
+| STEM 분리 (보컬+악기) | `mel_band_roformer` | `models/audio-cpp/audio.cpp-gguf/Mel-Band-RoFormer-GGUF/mel-band-roformer-f16.gguf` | `vocals`, `instrumental` (2갈래) | 다른 아키텍처라 보컬 누출이 더 적음. 매우 빠름(RTX 5070에서 2분 12초 곡 기준 약 10초, RTF 0.076) |
+| STEM 분리 (보컬+드럼+베이스+기타) | `htdemucs` | `models/audio-cpp/audio.cpp-gguf/HTDemucs-GGUF/htdemucs-q8_0.gguf` | `vocals`, `drums`, `bass`, `other` (4갈래) | 악기별로 더 세분화되지만, 엔진이 고품질 앙상블("bag"/ft) 모델은 지원 안 해서(`"HTDemucs package-spec loader currently supports only single-model manifests"`) 단일 체크포인트만 사용 — 보컬 누출이 상대적으로 더 있을 수 있음. 매우 빠름(같은 곡 기준 약 5~7초, RTF 0.037) |
+
+**2026-09-14: bs_roformer(ep368) → mel_band_roformer(F16)로 교체.** 처음엔 bs_roformer를 "보컬+악기" 모드로 썼는데, 사용자가 실제로 들어보고 "보컬이 너무 많이 짤린다"고 지적했습니다. `num_overlap`을 4→8로 올려 실측 비교했지만 코사인 유사도 0.9996, 무음 구간 개수도 거의 동일해 overlap은 원인이 아님을 확인(자세한 수치는 [revision.md](../revision.md) 참고). `model_specs/`를 전체 확인해보니 audio.cpp가 sep 작업을 지원하는 RoFormer 계열 패밀리가 `bs_roformer` 외에 `mel_band_roformer`도 있었고(같은 코드 경로, 다른 체크포인트), F16 GGUF를 받아 같은 곡으로 비교한 결과(코사인 0.97 — 실제로 다른 결과) 사용자가 직접 듣고 mel_band 쪽을 선호해서 교체했습니다. 참고로 `mel_band_roformer.json`에는 3번째 패키지(`mlx-community/mel-roformer-mlx`, safetensors)도 있지만 메타데이터가 없어 검증하지 않았습니다.
+
+위 빌드 명령에 두 모델을 포함하지 않았다면 해당 메뉴를 눌렀을 때 "STEM 분리 모델(HTDemucs)이 없습니다"/"STEM 분리 모델(Mel-Band RoFormer)이 없습니다" 오류가 납니다 — `-Models yue2,htdemucs,bs_roformer`로 다시 빌드하세요(`bs_roformer` 별칭이 `mel_band_roformer` 로더도 같이 빌드합니다). bs_roformer의 GGUF는 "legacy model spec"을 내장하고 있어 `model_specs/bs_roformer.json`으로 보충해야 했는데(mel_band_roformer GGUF는 이 문제가 없음), 백엔드가 `audiocpp_cli.exe`를 audio.cpp 소스 루트(`engine/audio.cpp`)를 작업 디렉터리로 실행해 이 조회가 항상 되도록 일괄 처리합니다(직접 CLI 테스트할 땐 `engine/audio.cpp` 안에서 실행해야 함).
+
+분리된 STEM은 곡당 몇 초~수십 초 안에 만들어지는 임시 파일이며, STEM 분리 창을 닫으면 자동으로 지워지고 원본 완성곡은 바뀌지 않습니다.
+
 ## "악기만"/ABC 커버를 GGUF에서 쓰려면 Python도 필요
 
 GGUF 모델로 최종 오디오를 생성하는 데는 이 문서만으로 충분하지만, "악기만" 생성이나 ABC 악보 기반 커버/심볼릭 작곡을 쓰려면 ABC 준비 단계(계획 생성, 보컬 성부 뮤트)가 항상 공식 Python 엔진(`abc_tools.py`)을 거칩니다. 이 기능들까지 쓰려면 [python-engine-setup.md](python-engine-setup.md)의 Python 환경 구성도 함께 해야 합니다.
@@ -127,7 +142,7 @@ GGUF 모델로 최종 오디오를 생성하는 데는 이 문서만으로 충�
 | `'cl' is not recognized`, MSVC 컴파일러를 못 찾음 | C++ workload 없이 Build Tools만 설치됨 — 0-2번의 winget 명령을 다시 실행하거나, Visual Studio Installer를 열어 workload를 추가 |
 | CMake가 CUDA 컴파일러를 못 찾음 | CUDA Toolkit 설치 후 새 PowerShell 창을 열지 않음 — 터미널 재시작(그래도 안 되면 재부팅) |
 | `no kernel image is available for execution`, 또는 빌드는 되는데 실행 시 GPU 인식 실패 | `-CudaArchitectures`가 내 GPU와 안 맞음 — `120a-real`(RTX 50시리즈 전용) 대신 `auto`로 다시 빌드 |
-| 빌드가 너무 오래 걸림 | `-ModelSet full`로 잘못 실행했을 가능성 — `-ModelSet custom -Models yue2`인지 확인 |
+| 빌드가 너무 오래 걸림 | `-ModelSet full`로 잘못 실행했을 가능성 — `-ModelSet custom -Models yue2,htdemucs,bs_roformer`인지 확인 |
 | `--list-loaders`에 `yue2`가 안 보임 | `dev` 브랜치가 아니라 `main`을 클론했을 가능성 — `git branch`로 확인(`-b dev`로 다시 클론) |
 | 모델 파일이 없다는 오류 | `scripts/download_models.py`를 아직 안 돌렸거나 중간에 중단됨 — 다시 실행하면 이어받기 |
 | VRAM 부족(OOM) | 더 작은 양자화(BF16→Q8→Q4) 또는 F16 VAE 조합으로 모델 선택 변경 |

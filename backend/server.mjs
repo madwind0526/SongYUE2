@@ -23,6 +23,13 @@ const UNSUPPORTED_MODEL_MESSAGES = {
   'yue2-int8-convrot': 'INT8 ConvRot 파일은 현재 ComfyUI 형식 safetensors입니다. SongYUE2의 직접 생성 엔진에는 아직 연결되지 않았습니다. ComfyUI 어댑터를 추가한 뒤 사용할 수 있어요.',
 };
 const AUDIOCPP_SIDECARS = ['sidecars/yue2-model-config.json', 'sidecars/yue2-generation-config.json', 'sidecars/yue2-qwen.tiktoken', 'sidecars/yue2-vae-config.json'];
+const HTDEMUCS_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf', 'HTDemucs-GGUF', 'htdemucs-q8_0.gguf');
+const MEL_BAND_ROFORMER_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf', 'Mel-Band-RoFormer-GGUF', 'mel-band-roformer-f16.gguf');
+const STEM_MODES = {
+  full: { family: 'htdemucs', modelPath: HTDEMUCS_MODEL_PATH, stems: ['vocals', 'drums', 'bass', 'other'], missingModel: 'STEM 분리 모델(HTDemucs)이 없습니다. scripts/download_models.py를 실행해 주세요.' },
+  vocal: { family: 'mel_band_roformer', modelPath: MEL_BAND_ROFORMER_MODEL_PATH, stems: ['vocals', 'instrumental'], missingModel: 'STEM 분리 모델(Mel-Band RoFormer)이 없습니다. scripts/download_models.py를 실행해 주세요.' },
+};
+const STEM_NAMES = [...new Set(Object.values(STEM_MODES).flatMap((mode) => mode.stems))];
 const EXAMPLE_COLORS = ['sage', 'blue', 'sand'];
 const DEFAULT_EXAMPLES = [
   { title: '늦은 밤의 어쿠스틱', genre: '어쿠스틱 팝', caption: '따뜻한 기타와 담백한 목소리', color: 'sage', style: 'Korean, acoustic pop, intimate warm vocal, fingerpicked guitar, soft drums, gentle evening mood, 82 BPM', lyrics: '[Verse]\n창가에 남은 작은 불빛\n하루의 끝에 너를 생각해\n말없이 건넨 따뜻한 마음\n오늘도 나를 쉬게 해\n\n[Chorus]\n조금 느리게 걸어도 좋아\n우리의 밤은 아직 길어\n너의 목소리 곁에 머물면\n여기가 나의 집이 돼' },
@@ -199,6 +206,11 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   const postprocessSettingsDir = () => path.join(root, 'Setting', 'PostProcess');
   const resolveConfigPath = (value, defaultRelative) => path.resolve(root, (value || '').trim() || defaultRelative);
   const resolveOptionalConfigPath = (value) => { const trimmed = (value || '').trim(); return trimmed ? path.resolve(root, trimmed) : ''; };
+  // audiocpp_cli resolves model_specs/*.json relative to its working directory for GGUF
+  // packages that embed a "legacy" spec (observed previously with bs_roformer; yue2/htdemucs/
+  // mel_band_roformer GGUFs happened not to need it) -- run it from the audio.cpp source root
+  // (4 levels up from .../build/<preset>/bin/audiocpp_cli.exe) so lookup succeeds regardless of package.
+  const audioCppCwd = (engine) => path.dirname(path.dirname(path.dirname(path.dirname(engine))));
   const playlistsDirPath = path.join(root, 'library', 'playlists');
   await mkdir(settingDir(), { recursive: true });
   await mkdir(musicDir(), { recursive: true });
@@ -350,7 +362,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       '--out', audioFile, '--log', '--metrics',
     ];
     const log = await new Promise((resolve, reject) => {
-      const child = spawnImpl(engine, args, { windowsHide: true });
+      const child = spawnImpl(engine, args, { windowsHide: true, cwd: audioCppCwd(engine) });
       const chunks = [];
       let size = 0;
       const collect = (data) => { size += data.length; if (size < 512 * 1024) chunks.push(data); };
@@ -369,6 +381,46 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       durationMs: durationMatch ? Math.round(Number(durationMatch[1])) : null,
       rtf: rtfMatch ? Number(rtfMatch[1]) : null,
     });
+  }
+  function stemsDir(projectId) {
+    return path.join(outputDirectory, projectId, 'stems');
+  }
+  async function separateStems(entry, modeKey) {
+    const mode = STEM_MODES[modeKey];
+    if (!mode) throw fail(400, '알 수 없는 STEM 분리 방식입니다.');
+    const engine = resolveConfigPath(settings.enginePath, DEFAULT_ENGINE_PATH);
+    if (!(await exists(engine))) throw fail(400, `audio.cpp 실행 파일을 찾을 수 없습니다: ${path.relative(root, engine)}. 설정에서 경로를 확인해 주세요.`);
+    const modelPath = path.join(root, mode.modelPath);
+    if (!(await exists(modelPath))) throw fail(400, mode.missingModel);
+    if (!entry.project.audioPath) throw fail(404, '완성된 음원을 찾을 수 없습니다.');
+    const sourceFile = path.join(path.dirname(entry.file), entry.project.audioPath);
+    if (!(await exists(sourceFile))) throw fail(404, '음원 파일을 찾을 수 없습니다.');
+    const dir = stemsDir(entry.project.id);
+    await rm(dir, { recursive: true, force: true });
+    await mkdir(dir, { recursive: true });
+    const sourceWav = path.join(dir, 'source-44k.wav');
+    await new Promise((resolve, reject) => {
+      const child = spawnImpl('ffmpeg', ['-y', '-i', sourceFile, '-ar', '44100', '-ac', '2', sourceWav], { windowsHide: true });
+      child.once('error', reject);
+      child.once('close', (code) => code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`)));
+    }).catch(() => { throw fail(502, 'STEM 분리를 위한 오디오 변환에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
+    const args = ['--task', 'sep', '--family', mode.family, '--model', modelPath, '--backend', 'cuda', '--audio', sourceWav, '--out-dir', dir];
+    const log = await new Promise((resolve, reject) => {
+      const child = spawnImpl(engine, args, { windowsHide: true, cwd: audioCppCwd(engine) });
+      const chunks = [];
+      let size = 0;
+      const collect = (data) => { size += data.length; if (size < 512 * 1024) chunks.push(data); };
+      child.stdout.on('data', collect);
+      child.stderr.on('data', collect);
+      const timer = setTimeout(() => child.kill(), GENERATE_TIMEOUT_MS);
+      child.once('error', (error) => { clearTimeout(timer); reject(error); });
+      child.once('close', (code, signal) => { clearTimeout(timer); resolve({ text: Buffer.concat(chunks).toString('utf8'), code, signal }); });
+    }).catch(() => { throw fail(502, 'STEM 분리 엔진을 실행할 수 없습니다.'); });
+    if (log.signal) throw fail(502, 'STEM 분리가 제한 시간을 넘어 중단되었습니다.');
+    const missing = [];
+    for (const name of mode.stems) { if (!(await exists(path.join(dir, `${name}.wav`)))) missing.push(name); }
+    if (log.code !== 0 || missing.length) throw fail(502, `STEM 분리에 실패했습니다 (종료 코드 ${log.code}). ${log.text.trim().slice(0, 500) || '알 수 없는 오류'}`);
+    return { stems: mode.stems };
   }
   let gpuInfoCache = null;
   async function detectGpu() {
@@ -1187,6 +1239,35 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         const data = await readFile(audioFile);
         const disposition = requestUrl.searchParams.get('download') ? `attachment; filename="${encodeURIComponent(path.basename(audioFile))}"` : 'inline';
         res.writeHead(200, { 'Content-Type': AUDIO_MIME_TYPES[path.extname(audioFile)] || 'application/octet-stream', 'Content-Length': String(data.length), 'Content-Disposition': disposition, 'Cache-Control': 'no-store' });
+        return res.end(data);
+      }
+      const stemsMatch = pathname.match(/^\/api\/projects\/([^/]+)\/stems$/);
+      if (stemsMatch && req.method === 'POST') {
+        const input = await body(req);
+        const modeKey = STEM_MODES[input.mode] ? input.mode : 'full';
+        const entry = await findEntry(stemsMatch[1]);
+        if (!entry || entry.project.status !== 'completed') throw fail(404, '완성된 음원을 찾을 수 없습니다.');
+        if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
+        generating = true;
+        try { return send(200, await separateStems(entry, modeKey)); }
+        finally { generating = false; }
+      }
+      if (stemsMatch && req.method === 'DELETE') {
+        await body(req);
+        const entry = await findEntry(stemsMatch[1]);
+        if (!entry) throw fail(404, '프로젝트를 찾을 수 없습니다.');
+        await rm(stemsDir(entry.project.id), { recursive: true, force: true });
+        return send(200, { ok: true });
+      }
+      const stemAudioMatch = pathname.match(/^\/api\/projects\/([^/]+)\/stems\/([a-z]+)$/);
+      if (stemAudioMatch && req.method === 'GET') {
+        if (!STEM_NAMES.includes(stemAudioMatch[2])) throw fail(404, '알 수 없는 STEM입니다.');
+        const entry = await findEntry(stemAudioMatch[1]);
+        if (!entry) throw fail(404, '프로젝트를 찾을 수 없습니다.');
+        const stemFile = path.join(stemsDir(entry.project.id), `${stemAudioMatch[2]}.wav`);
+        if (!(await exists(stemFile))) throw fail(404, 'STEM 파일을 찾을 수 없습니다. 먼저 STEM 분리를 실행해 주세요.');
+        const data = await readFile(stemFile);
+        res.writeHead(200, { 'Content-Type': 'audio/wav', 'Content-Length': String(data.length), 'Cache-Control': 'no-store' });
         return res.end(data);
       }
       const postProcessMatch = pathname.match(/^\/api\/projects\/([^/]+)\/post-process$/);

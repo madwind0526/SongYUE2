@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-09-11T18:41:57Z",
+  "updatedAt": "2026-09-14T15:00:19Z",
   "state": "complete",
-  "totalBytes": 23314925299,
-  "completedBytes": 23314925299,
+  "totalBytes": 23833380883,
+  "completedBytes": 23833380883,
   "repositories": [
     {
       "id": "m-a-p/YuE2-3B",
@@ -364,6 +364,30 @@
           "sha256": "cf3b71c6ef13b8b7970f8c1013b899e4af6ff9756c93bda45bef542dd6e10546",
           "state": "complete",
           "completedBytes": 530537760
+        }
+      ]
+    },
+    {
+      "id": "audio-cpp/audio.cpp-gguf",
+      "revision": "6d5436fc85f7a20c2e9f4e472b7f3a532f686444",
+      "path": "models/audio-cpp/audio.cpp-gguf",
+      "state": "complete",
+      "totalBytes": 518455584,
+      "completedBytes": 518455584,
+      "files": [
+        {
+          "path": "HTDemucs-GGUF/htdemucs-q8_0.gguf",
+          "size": 61940768,
+          "sha256": "b0f532ac6e5f373aeb11fa0df73253251e133832d9c8b9942dc58f50bc5b4388",
+          "state": "complete",
+          "completedBytes": 61940768
+        },
+        {
+          "path": "Mel-Band-RoFormer-GGUF/mel-band-roformer-f16.gguf",
+          "size": 456514816,
+          "sha256": "cbdf174dc716615dcd304678f67fc1d2ac6286fbc647e72837b5a6d447a07add",
+          "state": "complete",
+          "completedBytes": 456514816
         }
       ]
     }
