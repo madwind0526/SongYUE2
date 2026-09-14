@@ -832,11 +832,11 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
               </div>
             </div>
             <div className="pp-knob-grid">
-              <Knob label="선명도" value={params.clarity} min={0} max={100} onChange={value => updateParam('clarity', value)} variant="fx"/>
+              <Knob label="선명도" value={params.clarity} min={-100} max={100} onChange={value => updateParam('clarity', value)} variant="fx"/>
               <Knob label="공간감" value={params.spaciousness} min={0} max={100} onChange={value => updateParam('spaciousness', value)} variant="fx"/>
-              <Knob label="서라운드 사운드" value={params.surround} min={0} max={100} onChange={value => updateParam('surround', value)} variant="fx"/>
+              <Knob label="서라운드 사운드" value={params.surround} min={-100} max={100} onChange={value => updateParam('surround', value)} variant="fx"/>
               <Knob label="다이내믹 부스트" value={params.dynamicBoost} min={0} max={100} onChange={value => updateParam('dynamicBoost', value)} variant="fx"/>
-              <Knob label="베이스 부스트" value={params.bassBoost} min={0} max={100} onChange={value => updateParam('bassBoost', value)} variant="fx"/>
+              <Knob label="베이스 부스트" value={params.bassBoost} min={-100} max={100} onChange={value => updateParam('bassBoost', value)} variant="fx"/>
               <Knob label="리버브 양" value={params.reverbAmount} min={0} max={100} onChange={value => updateParam('reverbAmount', value)} variant="reverb"/>
               <Knob label="리버브 잔향 길이" value={params.reverbLength} min={0} max={100} onChange={value => updateParam('reverbLength', value)} variant="reverb"/>
               <Knob label="에코 양" value={params.echoAmount} min={0} max={100} onChange={value => updateParam('echoAmount', value)} variant="reverb"/>
