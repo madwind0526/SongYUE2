@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
+import { comfyUiAlive, execute as executeComfyUi } from './comfyui.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const providers = new Set(['none', 'ollama', 'claude', 'chatgpt', 'gemini']);
@@ -19,8 +20,9 @@ const AUDIOCPP_MODELS = {
 const PYTHON_MODELS = {
   'yue2-original': { modelDir: path.join('models', 'm-a-p', 'YuE2-3B'), vaeDir: path.join('models', 'm-a-p', 'YuE2-Vae') },
 };
-const UNSUPPORTED_MODEL_MESSAGES = {
-  'yue2-int8-convrot': 'INT8 ConvRot 파일은 현재 ComfyUI 형식 safetensors입니다. SongYUE2의 직접 생성 엔진에는 아직 연결되지 않았습니다. ComfyUI 어댑터를 추가한 뒤 사용할 수 있어요.',
+const UNSUPPORTED_MODEL_MESSAGES = {};
+const COMFYUI_MODELS = {
+  'yue2-int8-convrot': { checkpoint: 'yue2_3b_int8_convrot.safetensors' },
 };
 const AUDIOCPP_SIDECARS = ['sidecars/yue2-model-config.json', 'sidecars/yue2-generation-config.json', 'sidecars/yue2-qwen.tiktoken', 'sidecars/yue2-vae-config.json'];
 const HTDEMUCS_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf', 'HTDemucs-GGUF', 'htdemucs-q8_0.gguf');
@@ -55,6 +57,13 @@ const FFMPEG_ARGS = {
 };
 const VIEW_MODES = new Set(['list', 'card']);
 const DEFAULT_ENGINE_PATH = path.join('engine', 'audio.cpp', 'build', 'windows-cuda-release', 'bin', 'audiocpp_cli.exe');
+const DEFAULT_COMFYUI_ENDPOINT = 'http://127.0.0.1:8189';
+// Reuses the sibling AudioAuK project's already-installed, already-YuE2-capable ComfyUI instead
+// of a second install -- absolute path is intentional (unlike the other DEFAULT_*_PATH constants,
+// which are relative to this project's own root).
+const DEFAULT_COMFYUI_ENGINE_PATH = 'C:\\Claude\\AudioAuK\\engine\\ComfyUI';
+const COMFYUI_GENERATE_DEADLINE_MS = GENERATE_TIMEOUT_MS;
+const COMFYUI_MAX_DURATION_SECONDS = 240;
 const VOCAL_GENDERS = new Set(['', 'male', 'female', 'duet']);
 const DEFAULT_STYLE_PRESETS = 'Acoustic\nCity Pop\nBallad\nLo-fi\nJazz';
 const DEFAULT_VISUALIZER_ENABLED = true;
@@ -172,6 +181,8 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     pythonEnginePath: text(stored.pythonEnginePath, 2048) || text(process.env.PYTHON_ENGINE_PATH, 2048),
     pythonScriptPath: text(stored.pythonScriptPath, 2048) || text(process.env.PYTHON_SCRIPT_PATH, 2048),
     sheetSagePythonPath: text(stored.sheetSagePythonPath, 2048) || text(process.env.SHEETSAGE_PYTHON_PATH, 2048),
+    comfyUiEndpoint: text(stored.comfyUiEndpoint, 2048) || text(process.env.COMFYUI_ENDPOINT, 2048),
+    comfyUiEnginePath: text(stored.comfyUiEnginePath, 2048) || text(process.env.COMFYUI_ENGINE_PATH, 2048),
     settingPath: text(stored.settingPath, 2048) || text(process.env.SETTING_PATH, 2048),
     musicPath: text(stored.musicPath, 2048) || text(process.env.MUSIC_PATH, 2048),
     examplesPath: text(stored.examplesPath, 2048) || text(process.env.EXAMPLES_PATH, 2048),
@@ -552,6 +563,75 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     }
     return finalizeToMusic(project, file, audioFile, { truncated, durationMs });
   }
+  async function ensureComfyUiRunning() {
+    const endpoint = settings.comfyUiEndpoint || DEFAULT_COMFYUI_ENDPOINT;
+    if (await comfyUiAlive(fetchImpl, endpoint)) return endpoint;
+    const enginePath = resolveConfigPath(settings.comfyUiEnginePath, DEFAULT_COMFYUI_ENGINE_PATH);
+    const python = path.join(enginePath, '.venv', 'Scripts', 'python.exe');
+    if (!(await exists(python))) throw fail(400, `ComfyUI 실행 파일을 찾을 수 없습니다: ${path.relative(root, python) || python}. 설정에서 ComfyUI 설치 경로를 확인해 주세요.`);
+    let url;
+    try { url = new URL(endpoint); } catch { throw fail(400, 'ComfyUI 연결 주소가 올바르지 않습니다. 설정에서 확인해 주세요.'); }
+    // ComfyUI is a long-running server, not a spawn-per-request CLI like audio.cpp/Python --
+    // detached + unref so it outlives this request and is reused by later generations.
+    const child = spawnImpl(python, ['main.py', '--listen', url.hostname, '--port', url.port || '8188', '--disable-auto-launch'], { cwd: enginePath, windowsHide: true, detached: true, stdio: 'ignore' });
+    if (typeof child.unref === 'function') child.unref();
+    const deadline = Date.now() + 60000;
+    while (Date.now() < deadline) {
+      if (await comfyUiAlive(fetchImpl, endpoint)) return endpoint;
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+    throw fail(502, 'ComfyUI 엔진이 60초 안에 시작되지 않았습니다. 직접 실행되어 있는지 확인한 뒤 다시 시도해 주세요.');
+  }
+  async function runComfyUi(project, file) {
+    const preset = COMFYUI_MODELS[project.modelId];
+    if (!preset) throw fail(400, '이 모델은 ComfyUI로 생성할 수 없습니다.');
+    if (!project.lyrics.trim() || !project.style.trim()) throw fail(400, '가사와 음악 스타일이 필요합니다.');
+    if (project.abc && project.abc.trim() && project.cot === 'off') throw fail(400, '악보를 사용하려면 작곡 계획을 "멜로디 계획" 또는 "멜로디와 코드 계획"으로 설정해 주세요.');
+    const projectRuns = path.join(outputDirectory, project.id);
+    await mkdir(projectRuns, { recursive: true });
+    // YuE2GenerateMusic ignores `mode` and forces internal "off" behavior whenever `abc` is
+    // empty (see comfyui.mjs), so cot='full'/'melody' without a user-supplied score needs an
+    // explicit planning pass first to match audio.cpp/Python's auto-plan-then-generate behavior.
+    let effectiveAbc = '';
+    let effectiveMode = project.cot === 'melody' ? 'melody' : 'full';
+    if (project.instrumental) {
+      let sourceAbc = project.abc && project.abc.trim() ? project.abc : null;
+      if (!sourceAbc) {
+        const planProject = { ...project, cot: project.cot === 'off' ? 'full' : project.cot };
+        const { outDir: planOutDir } = await runPythonAction('plan', planProject, [], 20000);
+        const planAbcFile = path.join(planOutDir, 'score.abc');
+        if (!(await exists(planAbcFile))) throw fail(502, '악기만 생성을 위한 심볼릭 작곡에 실패했습니다.');
+        sourceAbc = await readFile(planAbcFile, 'utf8');
+      }
+      effectiveAbc = await stripVocalVoice(sourceAbc, projectRuns);
+    } else if (project.abc && project.abc.trim()) {
+      effectiveAbc = project.abc;
+    } else if (project.cot !== 'off') {
+      const { outDir: planOutDir } = await runPythonAction('plan', project, [], 20000);
+      const planAbcFile = path.join(planOutDir, 'score.abc');
+      if (await exists(planAbcFile)) effectiveAbc = await readFile(planAbcFile, 'utf8');
+    }
+    const endpoint = await ensureComfyUiRunning();
+    let result;
+    try {
+      result = await executeComfyUi(fetchImpl, endpoint, {
+        checkpoint: preset.checkpoint,
+        style: `${project.style}${styleHint(project)}`,
+        lyrics: project.lyrics,
+        abc: effectiveAbc,
+        seed: project.seed,
+        mode: effectiveMode,
+        maxDuration: COMFYUI_MAX_DURATION_SECONDS,
+        steps: project.steps,
+        filenamePrefix: `songyue2/${project.id}`,
+        clientId: `songyue2-${project.id}`,
+        deadlineMs: COMFYUI_GENERATE_DEADLINE_MS,
+      });
+    } catch (error) { throw fail(502, `ComfyUI 음악 생성에 실패했습니다: ${error.message}`); }
+    const audioFile = path.join(projectRuns, `audio${path.extname(result.filename) || '.flac'}`);
+    await writeFile(audioFile, result.bytes);
+    return finalizeToMusic(project, file, audioFile, {});
+  }
   function sheetSagePythonOrFail() {
     const python = resolveOptionalConfigPath(settings.sheetSagePythonPath);
     const script = resolveOptionalConfigPath(settings.pythonScriptPath);
@@ -707,6 +787,8 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           if (input.pythonScriptPath !== undefined) next.pythonScriptPath = text(input.pythonScriptPath, 2048);
           if (input.pythonMemoryBudgetGib !== undefined) next.pythonMemoryBudgetGib = Math.max(1, Math.min(64, Number(input.pythonMemoryBudgetGib) || 11));
           if (input.sheetSagePythonPath !== undefined) next.sheetSagePythonPath = text(input.sheetSagePythonPath, 2048);
+          if (input.comfyUiEndpoint !== undefined) next.comfyUiEndpoint = text(input.comfyUiEndpoint, 2048);
+          if (input.comfyUiEnginePath !== undefined) next.comfyUiEnginePath = text(input.comfyUiEnginePath, 2048);
           if (input.settingPath !== undefined) next.settingPath = text(input.settingPath, 2048);
           if (input.musicPath !== undefined) next.musicPath = text(input.musicPath, 2048);
           if (input.examplesPath !== undefined) next.examplesPath = text(input.examplesPath, 2048);
@@ -726,7 +808,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           if (input.visualizerAmplitude !== undefined) next.visualizerAmplitude = Math.max(0.1, Math.min(10, Number.isFinite(Number(input.visualizerAmplitude)) ? Number(input.visualizerAmplitude) : DEFAULT_VISUALIZER_AMPLITUDE));
           if (input.saveFormat !== undefined) next.saveFormat = input.saveFormat;
           if (input.viewMode !== undefined) next.viewMode = input.viewMode;
-          await saveJson(settingsFile, { provider: next.provider, enginePath: next.enginePath, pythonEnginePath: next.pythonEnginePath, pythonScriptPath: next.pythonScriptPath, pythonMemoryBudgetGib: next.pythonMemoryBudgetGib, sheetSagePythonPath: next.sheetSagePythonPath, settingPath: next.settingPath, musicPath: next.musicPath, examplesPath: next.examplesPath, coversPath: next.coversPath, abcNotesPath: next.abcNotesPath, stylePresets: next.stylePresets, visualizerEnabled: next.visualizerEnabled, visualizerRingCount: next.visualizerRingCount, visualizerHue: next.visualizerHue, visualizerLineWidth: next.visualizerLineWidth, visualizerTrail: next.visualizerTrail, visualizerSpiral: next.visualizerSpiral, visualizerRingMode: next.visualizerRingMode, visualizerTimeStep: next.visualizerTimeStep, visualizerTimeSkew: next.visualizerTimeSkew, visualizerRingStep: next.visualizerRingStep, visualizerAmplitude: next.visualizerAmplitude, saveFormat: next.saveFormat, viewMode: next.viewMode });
+          await saveJson(settingsFile, { provider: next.provider, enginePath: next.enginePath, pythonEnginePath: next.pythonEnginePath, pythonScriptPath: next.pythonScriptPath, pythonMemoryBudgetGib: next.pythonMemoryBudgetGib, sheetSagePythonPath: next.sheetSagePythonPath, comfyUiEndpoint: next.comfyUiEndpoint, comfyUiEnginePath: next.comfyUiEnginePath, settingPath: next.settingPath, musicPath: next.musicPath, examplesPath: next.examplesPath, coversPath: next.coversPath, abcNotesPath: next.abcNotesPath, stylePresets: next.stylePresets, visualizerEnabled: next.visualizerEnabled, visualizerRingCount: next.visualizerRingCount, visualizerHue: next.visualizerHue, visualizerLineWidth: next.visualizerLineWidth, visualizerTrail: next.visualizerTrail, visualizerSpiral: next.visualizerSpiral, visualizerRingMode: next.visualizerRingMode, visualizerTimeStep: next.visualizerTimeStep, visualizerTimeSkew: next.visualizerTimeSkew, visualizerRingStep: next.visualizerRingStep, visualizerAmplitude: next.visualizerAmplitude, saveFormat: next.saveFormat, viewMode: next.viewMode });
           settings = next;
           if (input.settingPath !== undefined) await mkdir(settingDir(), { recursive: true });
           if (input.musicPath !== undefined) await mkdir(musicDir(), { recursive: true });
@@ -908,10 +990,11 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         if (!entry) throw fail(404, '프로젝트를 찾을 수 없습니다.');
         if (UNSUPPORTED_MODEL_MESSAGES[entry.project.modelId]) throw fail(400, UNSUPPORTED_MODEL_MESSAGES[entry.project.modelId]);
         const isPython = Boolean(PYTHON_MODELS[entry.project.modelId]);
+        const isComfy = Boolean(COMFYUI_MODELS[entry.project.modelId]);
         if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
         generating = true;
-        const runner = isPython ? runPythonYue2 : runAudioCpp;
-        const expectedMs = isPython ? 240000 : Math.round(60000 * (Math.max(1, entry.project.steps) / 8));
+        const runner = isPython ? runPythonYue2 : isComfy ? runComfyUi : runAudioCpp;
+        const expectedMs = isPython ? 240000 : isComfy ? 60000 : Math.round(60000 * (Math.max(1, entry.project.steps) / 8));
         generationStatus = { projectId: entry.project.id, startedAt: Date.now(), expectedMs };
         try { return send(200, await runner(entry.project, entry.file)); }
         finally { generating = false; generationStatus = null; }

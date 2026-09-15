@@ -305,10 +305,15 @@ test('audio.cpp generation copies the song into library/music, leaving the sourc
   const original = (await callJson('/api/projects', 'POST', { title: '원본', lyrics: '가사', style: '스타일', modelId: 'yue2-original' })).data;
   assert.equal((await callJson('/api/generate', 'POST', { projectId: original.id })).status, 400);
 
+  // Default cot is 'full' (see /api/projects), so runComfyUi first needs a symbolic-planning
+  // pass (the same Python engine the other two runners already depend on for this) before it
+  // ever reaches ComfyUI -- and this section never configures pythonEnginePath/pythonScriptPath.
+  // The full ComfyUI success/failure path (with cot: 'off', no planning needed) is covered
+  // separately below.
   const convrot = (await callJson('/api/projects', 'POST', { title: 'ConvRot', lyrics: '가사', style: '스타일', modelId: 'yue2-int8-convrot' })).data;
   const convrotResult = await callJson('/api/generate', 'POST', { projectId: convrot.id });
   assert.equal(convrotResult.status, 400);
-  assert.match(convrotResult.data.error, /ComfyUI/);
+  assert.match(convrotResult.data.error, /Python/);
 
   const q8Project = (await callJson('/api/projects', 'POST', { title: 'Q8 미보유', lyrics: '가사', style: '스타일', modelId: 'yue2-q8' })).data;
   assert.equal((await callJson('/api/generate', 'POST', { projectId: q8Project.id })).status, 400);
@@ -795,4 +800,40 @@ test('symbolic planning, ABC score generation option, and the ABC-note library',
   assert.equal((await callJson(`/api/abc-notes/${edited.data.id}`, 'PATCH', { abc: '' })).status, 400);
   assert.equal((await callJson(`/api/abc-notes/${edited.data.id}`, 'DELETE', {})).status, 200);
   assert.equal((await callJson('/api/abc-notes')).data.length, 0);
+});
+
+test('yue2-int8-convrot routes to the ComfyUI runner (mocked ComfyUI HTTP API) and produces a completed song', async t => {
+  resetEnv();
+  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-comfyui-'));
+  const fakeSpawn = makeFakeSpawn();
+  const requests = [];
+  const fetchImpl = async (url, options) => {
+    const href = String(url);
+    requests.push({ url: href, body: options?.body ? JSON.parse(options.body) : null });
+    if (href.includes('/system_stats')) return Response.json({ system: { os: 'win32' } });
+    if (href.includes('/prompt')) return Response.json({ prompt_id: 'test-prompt-1', number: 0, node_errors: {} });
+    if (href.includes('/history/test-prompt-1')) return Response.json({ 'test-prompt-1': { status: { status_str: 'success', completed: true }, outputs: { '7': { audio: [{ filename: 'smoke.flac', subfolder: 'songyue2-test', type: 'output' }] } } } });
+    if (href.includes('/view')) return new Response(Buffer.from('fake-comfyui-flac-bytes'), { status: 200 });
+    if (href.includes('/free')) return Response.json({});
+    return Response.json({});
+  };
+  const server = await createStudioServer({ root, fetchImpl, spawnImpl: fakeSpawn.spawnImpl });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const call = async (route, method = 'GET', payload) => fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) });
+  const callJson = async (route, method, payload) => { const response = await call(route, method, payload); return { status: response.status, data: await response.json() }; };
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+
+  const project = (await callJson('/api/projects', 'POST', { title: 'ComfyUI 테스트', lyrics: '[Verse]\n가사', style: 'Korean pop', modelId: 'yue2-int8-convrot', seed: 42, steps: 20, cot: 'off' })).data;
+  const generated = await callJson('/api/generate', 'POST', { projectId: project.id });
+  assert.equal(generated.status, 200);
+  assert.equal(generated.data.status, 'completed');
+  assert.ok(generated.data.audioPath.endsWith('.wav')); // default saveFormat; ComfyUI returns flac, so this also exercises the ffmpeg conversion path
+  assert.equal(await readFile(path.join(root, 'library', 'music', generated.data.audioPath), 'utf8'), 'fake-transcoded-bytes');
+  assert.ok(fakeSpawn.calls.some(call => call.engine === 'ffmpeg'));
+
+  const promptRequest = requests.find(r => r.url.includes('/prompt'));
+  assert.ok(promptRequest.body.prompt['1'].inputs.ckpt_name === 'yue2_3b_int8_convrot.safetensors');
+  assert.equal(promptRequest.body.prompt['2'].inputs.style.startsWith('Korean pop'), true);
+  assert.equal(promptRequest.body.prompt['2'].inputs.abc, ''); // cot: 'off' with no user-supplied ABC -> no planning pass, empty abc
 });

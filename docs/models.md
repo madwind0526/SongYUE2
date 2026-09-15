@@ -28,7 +28,11 @@ GGUF 폴더에는 BF16, Q8_0, Q4_0 본체와 F16/F32 VAE 및 `sidecars/`가 있�
 
 ## 직접 추가한 safetensors 파일
 
-사용자가 직접 받은 `yue2_3b_int8_convrot.safetensors`는 `models/comfy-org/YuE2/checkpoints/yue2_3b_int8_convrot.safetensors` 위치에 두었습니다. 이 파일은 헤더 기준 `convrot_int8` 양자화와 `model.diffusion_model.*` 텐서 구조를 가진 ComfyUI 계열 형식입니다. 현재 SongYUE2의 직접 생성 경로(audio.cpp GGUF, 공식 Python YuE2)는 이 형식을 바로 실행하지 않으므로, 앱의 모델 선택 메뉴에는 표시하되 생성에는 ComfyUI 어댑터가 추가로 필요합니다.
+사용자가 직접 받은 `yue2_3b_int8_convrot.safetensors`는 `models/comfy-org/YuE2/checkpoints/yue2_3b_int8_convrot.safetensors` 위치에 두었습니다. 이 파일은 헤더 기준 `convrot_int8` 양자화와 `model.diffusion_model.*` 텐서 구조를 가진 ComfyUI 전용 형식이라, SongYUE2의 직접 생성 경로(audio.cpp GGUF, 공식 Python YuE2)로는 바로 실행되지 않습니다.
+
+**2026-09-15: ComfyUI 어댑터 구현 및 실제 생성 검증 완료.** ComfyUI 공식(Comfy-Org)이 v0.35.0부터 YuE2를 네이티브 지원(`comfy_extras/nodes_yue2.py`: `YuE2GenerateABC`/`YuE2GenerateMusic`/`EmptyYuE2LatentAudio`, 체크포인트는 표준 `CheckpointLoaderSimple`)하는 것을 확인하고, 이 워크플로우를 `backend/comfyui.mjs`(그래프: `CheckpointLoaderSimple → YuE2GenerateMusic → ConditioningZeroOut(negative) → EmptyYuE2LatentAudio → KSampler(cfg=1.0) → VAEDecodeAudio → SaveAudio`)로 이식했습니다. ComfyUI 자체는 새로 설치하지 않고 자매 프로젝트 `C:\Claude\AudioAuK\engine\ComfyUI`(이미 YuE2 지원 버전으로 설치되어 있음)를 재사용하며, 체크포인트 파일은 그 폴더의 `models/checkpoints/`에 하드링크로 연결했습니다(같은 드라이브라 디스크 중복 없음). `backend/server.mjs`의 `runComfyUi()`가 ComfyUI 미기동 시 `settings.comfyUiEnginePath`(기본값 `C:\Claude\AudioAuK\engine\ComfyUI`)에서 온디맨드로 기동합니다.
+
+실제 생성으로 4가지를 모두 확인했습니다: ①일반 노래 생성(가사+스타일, 자동 심볼릭 작곡 후 렌더링, 40초 분량 정상 오디오) ②"악기만"(기존 mute-voice 메커니즘 재사용, 정상 오디오) ③ABC 악보(심볼릭 작곡)는 모델과 무관하게 항상 Python 엔진으로 동작(`/api/plan`에 modelId 없음) — 이 모델도 정상 사용 가능 ④커버(SheetSage2로 원곡 전사 → 새 가사/스타일로 같은 멜로디 재생성) 성공. **주의:** INT8 ConvRot은 로드 시 BF16로 복원되어 VRAM을 절약하지 않으며(RTX 5070 12GB에서 BF16과 동일 사용), ComfyUI는 audio.cpp/Python과 달리 생성 후에도 모델을 VRAM에 유지하므로 어댑터가 매 생성 후 `POST /free`로 명시적으로 해제합니다. 또한 기본 작곡 계획(cot=full)은 Python 엔진의 심볼릭 작곡 단계를 거치므로, ComfyUI 모델도 여전히 `pythonEnginePath`/`pythonScriptPath` 설정이 필요합니다(cot=off로 계획 없이 생성할 때만 예외).
 
 사용자가 직접 받은 `sheetsage2_bf16.safetensors`는 `models/m-a-p/SheetSage2/model.safetensors` 위치에 두었고, 이후 Hugging Face `m-a-p/SheetSage2` 스냅샷의 `config.json`과 나머지 코드·자산 파일(`modeling_sheetsage2.py`, `pipeline_sheetsage2.py`, `notation_sheetsage2.py`, `requirements.txt` 등 전체)도 같은 폴더에 받아 두어, `AutoModel.from_pretrained(..., trust_remote_code=True)`로 로드 가능한 상태입니다. 앱의 `GET /api/models`/`POST /api/cover-transcribe`는 `config.json`+`model.safetensors` 존재 여부로 로컬 모델 사용 가능 여부를 판단하므로, 이 조건은 이미 충족됩니다.
 

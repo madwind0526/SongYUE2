@@ -38,6 +38,12 @@
 **이유:** W3C HTMLMediaElement 스펙과 실제 브라우저 구현 모두 순방향 디코딩 파이프라인만 보장한다. 진짜 역재생 오디오가 필요하면 Web Audio API로 버퍼 전체를 디코드한 뒤 `Float32Array`를 직접 뒤집어 재생하는 방식으로 가야 하며, 이는 스트리밍이 아닌 전체 파일 사전 로드가 필요해 구현 비용이 훨씬 크다.
 **적용 시점:** 오디오 플레이어에 "역재생"/"스크래치" 같은 기능을 요청받을 때, 구현 전에 이 제약을 먼저 사용자에게 알릴 것.
 
+## ComfyUI 어댑터(`yue2-int8-convrot`)는 자매 프로젝트의 ComfyUI를 재사용, 새로 설치하지 않는다
+
+**규칙:** `models/comfy-org/YuE2/checkpoints/yue2_3b_int8_convrot.safetensors`는 ComfyUI 공식(Comfy-Org) INT8 ConvRot 형식이며 v0.35.0+ 네이티브 YuE2 지원(`comfy_extras/nodes_yue2.py`)으로만 실행 가능하다. SongYUE2는 자체 ComfyUI를 설치하지 않고 `C:\Claude\AudioAuK\engine\ComfyUI`(이미 YuE2 지원 버전 설치됨, 포트 8189)를 재사용한다 — 체크포인트는 그 폴더의 `models/checkpoints/`에 하드링크(같은 드라이브, `New-Item -ItemType HardLink`, 심볼릭 링크는 관리자 권한 필요해서 실패함)로 연결했다. `backend/comfyui.mjs`의 워크플로우 그래프: `CheckpointLoaderSimple → YuE2GenerateMusic(clip, style, lyrics, abc, seed, mode, max_duration) → ConditioningZeroOut(→negative) → EmptyYuE2LatentAudio(seconds) → KSampler(cfg=1.0, sampler=euler, scheduler=simple) → VAEDecodeAudio → SaveAudio`. cfg=1.0이라 negative는 실질적으로 무시됨(YuE2는 별도 negative prompt가 없음). `backend/server.mjs`의 `runComfyUi()`는 ComfyUI가 `settings.comfyUiEndpoint`(기본 `http://127.0.0.1:8189`)에서 응답 없으면 `settings.comfyUiEnginePath`(기본 `C:\Claude\AudioAuK\engine\ComfyUI`)의 `.venv\Scripts\python.exe main.py`를 온디맨드로 spawn한다(detached, `--disable-auto-launch`). 생성 완료 후 `POST /free {unload_models:true, free_memory:true}`로 VRAM을 명시적으로 해제한다(ComfyUI는 audio.cpp/Python과 달리 프로세스가 계속 떠 있어 모델을 VRAM에 남겨두므로, 안 해주면 이후 yue2-bf16/yue2-original 전환 시 RTX 5070 12GB에서 부족해질 수 있음). `YuE2GenerateMusic`은 `abc`가 빈 문자열이면 내부적으로 `mode`를 무시하고 "off"로 처리하므로, cot=full/melody인데 사용자가 ABC를 직접 안 넣은 일반 케이스는 `runComfyUi`가 먼저 `runPythonAction('plan', ...)`으로 심볼릭 작곡을 돌려 그 결과를 `abc`로 넘긴다 — 즉 **ComfyUI 모델도 cot≠off일 때는 여전히 Python 엔진(`pythonEnginePath`/`pythonScriptPath`) 설정이 필요**하다(cot=off로 계획 없이 생성할 때만 예외).
+**이유:** 사용자가 명시적으로 "이미 설치된 ComfyUI를 재사용, 새로 설치하지 말라"고 지시함(디스크/시간 절약). `/object_info`를 실제 ComfyUI에 curl로 조회해 정확한 노드 스키마를 확인한 뒤 그래프를 작성했다(추측 금지 — KSampler의 negative/cfg, VAEDecodeAudio/SaveAudio 등 소스 코드만으로는 확정 불가능한 부분이 있었음).
+**적용 시점:** `yue2-int8-convrot` 모델 관련 코드(`backend/comfyui.mjs`, `runComfyUi`)를 수정하거나, ComfyUI 연동이 필요한 새 모델을 추가할 때. AudioAuK의 ComfyUI 설치가 이동/삭제/업데이트되면 이 경로도 영향받는다는 점 주의.
+
 ## 음악 생성은 한 번에 하나만
 
 **규칙:** `/api/generate`는 서버 프로세스 내 불리언 플래그(`generating`)로 동시 실행을 막고, 이미 실행 중이면 409를 반환한다.

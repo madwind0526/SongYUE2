@@ -7,7 +7,7 @@ export type Project = Draft & { id: string; sourceProjectId?: string; createdAt:
 export type Playlist = { id: string; name: string; songIds: string[]; createdAt: string; updatedAt: string };
 export type AbcNote = { id: string; title: string; abc: string; coverPath?: string | null; createdAt: string; updatedAt?: string };
 export type ViewMode = 'list' | 'card';
-export type Settings = { provider: Provider; endpoint: string; llmModel: string; hasApiKey?: boolean; apiKey?: string | null; enginePath: string; pythonEnginePath: string; pythonScriptPath: string; pythonMemoryBudgetGib: number; sheetSagePythonPath: string; settingPath: string; musicPath: string; examplesPath: string; coversPath: string; abcNotesPath: string; stylePresets: string; visualizerEnabled: boolean; visualizerRingCount: number; visualizerHue: number; visualizerLineWidth: number; visualizerTrail: number; visualizerSpiral: number; visualizerRingMode: 'radial' | 'time'; visualizerTimeStep: number; visualizerTimeSkew: number; visualizerRingStep: number; visualizerAmplitude: number; saveFormat: SaveFormat; viewMode: ViewMode; outputDirectory: string };
+export type Settings = { provider: Provider; endpoint: string; llmModel: string; hasApiKey?: boolean; apiKey?: string | null; enginePath: string; pythonEnginePath: string; pythonScriptPath: string; pythonMemoryBudgetGib: number; sheetSagePythonPath: string; comfyUiEndpoint: string; comfyUiEnginePath: string; settingPath: string; musicPath: string; examplesPath: string; coversPath: string; abcNotesPath: string; stylePresets: string; visualizerEnabled: boolean; visualizerRingCount: number; visualizerHue: number; visualizerLineWidth: number; visualizerTrail: number; visualizerSpiral: number; visualizerRingMode: 'radial' | 'time'; visualizerTimeStep: number; visualizerTimeSkew: number; visualizerRingStep: number; visualizerAmplitude: number; saveFormat: SaveFormat; viewMode: ViewMode; outputDirectory: string };
 export const DEFAULT_STYLE_PRESETS = 'Acoustic\nCity Pop\nBallad\nLo-fi\nJazz';
 export const DEFAULT_VISUALIZER_ENABLED = true;
 export const DEFAULT_VISUALIZER_RING_COUNT = 18;
@@ -24,13 +24,15 @@ export type Inventory = { state: string; totalBytes: number; completedBytes: num
 export type SystemInfo = { vramMb: number | null };
 export const PYTHON_MODEL_MIN_VRAM_MB = 12 * 1024;
 export const emptyDraft: Draft = { title: '', lyrics: '', style: '', modelId: 'yue2-q4', seed: 42, steps: 8, cot: 'full', vocalGender: '', instrumental: false, abc: '', mode: 'custom' };
-export const initialSettings: Settings = { provider: 'none', endpoint: '', llmModel: '', apiKey: null, enginePath: '', pythonEnginePath: '', pythonScriptPath: '', pythonMemoryBudgetGib: 11, sheetSagePythonPath: '', settingPath: '', musicPath: '', examplesPath: '', coversPath: '', abcNotesPath: '', stylePresets: DEFAULT_STYLE_PRESETS, visualizerEnabled: DEFAULT_VISUALIZER_ENABLED, visualizerRingCount: DEFAULT_VISUALIZER_RING_COUNT, visualizerHue: DEFAULT_VISUALIZER_HUE, visualizerLineWidth: DEFAULT_VISUALIZER_LINE_WIDTH, visualizerTrail: DEFAULT_VISUALIZER_TRAIL, visualizerSpiral: DEFAULT_VISUALIZER_SPIRAL, visualizerRingMode: DEFAULT_VISUALIZER_RING_MODE, visualizerTimeStep: DEFAULT_VISUALIZER_TIME_STEP, visualizerTimeSkew: DEFAULT_VISUALIZER_TIME_SKEW, visualizerRingStep: DEFAULT_VISUALIZER_RING_STEP, visualizerAmplitude: DEFAULT_VISUALIZER_AMPLITUDE, saveFormat: 'wav', viewMode: 'list', outputDirectory: '' };
+export const initialSettings: Settings = { provider: 'none', endpoint: '', llmModel: '', apiKey: null, enginePath: '', pythonEnginePath: '', pythonScriptPath: '', pythonMemoryBudgetGib: 11, sheetSagePythonPath: '', comfyUiEndpoint: '', comfyUiEnginePath: '', settingPath: '', musicPath: '', examplesPath: '', coversPath: '', abcNotesPath: '', stylePresets: DEFAULT_STYLE_PRESETS, visualizerEnabled: DEFAULT_VISUALIZER_ENABLED, visualizerRingCount: DEFAULT_VISUALIZER_RING_COUNT, visualizerHue: DEFAULT_VISUALIZER_HUE, visualizerLineWidth: DEFAULT_VISUALIZER_LINE_WIDTH, visualizerTrail: DEFAULT_VISUALIZER_TRAIL, visualizerSpiral: DEFAULT_VISUALIZER_SPIRAL, visualizerRingMode: DEFAULT_VISUALIZER_RING_MODE, visualizerTimeStep: DEFAULT_VISUALIZER_TIME_STEP, visualizerTimeSkew: DEFAULT_VISUALIZER_TIME_SKEW, visualizerRingStep: DEFAULT_VISUALIZER_RING_STEP, visualizerAmplitude: DEFAULT_VISUALIZER_AMPLITUDE, saveFormat: 'wav', viewMode: 'list', outputDirectory: '' };
 export const DEFAULT_SETTING_PATH = 'Library\\Setting';
 export const DEFAULT_MUSIC_PATH = 'Library\\Music';
 export const DEFAULT_EXAMPLES_PATH = 'Library\\Examples';
 export const DEFAULT_COVERS_PATH = 'Library\\Cover';
 export const DEFAULT_ABC_NOTES_PATH = 'Library\\Abc-Note';
 export const DEFAULT_ENGINE_PATH = 'engine\\audio.cpp\\build\\windows-cuda-release\\bin\\audiocpp_cli.exe';
+export const DEFAULT_COMFYUI_ENDPOINT = 'http://127.0.0.1:8189';
+export const DEFAULT_COMFYUI_ENGINE_PATH = 'C:\\Claude\\AudioAuK\\engine\\ComfyUI';
 export const viewModes: { id: ViewMode; label: string }[] = [
   { id: 'list', label: '목록 보기' },
   { id: 'card', label: '카드 보기' },
@@ -41,11 +43,11 @@ export const saveFormats: { id: SaveFormat; label: string }[] = [
   { id: 'mp3', label: 'MP3 (320kbps)' },
   { id: 'mp4', label: 'MP4-video (커버 이미지 + 오디오)' },
 ];
-export const models = [
+export const models: { id: string; name: string; detail: string; size: string; engine: string; file: string; repo?: string; badge: string; selectable?: boolean }[] = [
   { id: 'yue2-q4', name: 'YuE2 - Q4 GGUF', detail: '가벼운 시작', size: '2.67 GB', engine: 'audio.cpp', file: 'yue2-3b-q4_0.gguf', badge: '이 PC 추천' },
   { id: 'yue2-q8', name: 'YuE2 - Q8 GGUF', detail: '정밀도 우선', size: '4.26 GB', engine: 'audio.cpp', file: 'yue2-3b-q8_0.gguf', badge: '실험적' },
   { id: 'yue2-bf16', name: 'YuE2 - BF16 GGUF', detail: '원본 본체를 GGUF로 변환한 BF16', size: '7.26 GB', engine: 'audio.cpp', file: 'yue2-3b-bf16.gguf', badge: '고용량 GPU' },
-  { id: 'yue2-int8-convrot', name: 'YuE2 - INT8 ConvRot', detail: 'ComfyUI 어댑터 필요', size: '3.96 GB', engine: 'ComfyUI', file: 'yue2_3b_int8_convrot.safetensors', repo: 'comfy-org/YuE2', badge: '연결 대기', selectable: false },
+  { id: 'yue2-int8-convrot', name: 'YuE2 - INT8 ConvRot', detail: 'ComfyUI로 생성 (VRAM 절약은 없음)', size: '3.96 GB', engine: 'ComfyUI', file: 'yue2_3b_int8_convrot.safetensors', repo: 'comfy-org/YuE2', badge: 'ComfyUI 연동' },
   { id: 'yue2-original', name: 'YuE2 - 원본', detail: '공식 Python safetensors 본체', size: '7.26 GB', engine: 'Python', file: 'model.safetensors', badge: '24 GB 환경 권장' },
 ];
 export const providers: { id: Provider; label: string; mark: string; description: string }[] = [
