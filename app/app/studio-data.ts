@@ -31,8 +31,8 @@ export const DEFAULT_EXAMPLES_PATH = 'Library\\Examples';
 export const DEFAULT_COVERS_PATH = 'Library\\Cover';
 export const DEFAULT_ABC_NOTES_PATH = 'Library\\Abc-Note';
 export const DEFAULT_ENGINE_PATH = 'engine\\audio.cpp\\build\\windows-cuda-release\\bin\\audiocpp_cli.exe';
-export const DEFAULT_COMFYUI_ENDPOINT = 'http://127.0.0.1:8189';
-export const DEFAULT_COMFYUI_ENGINE_PATH = 'C:\\Claude\\AudioAuK\\engine\\ComfyUI';
+export const DEFAULT_COMFYUI_ENDPOINT = 'http://127.0.0.1:8190';
+export const DEFAULT_COMFYUI_ENGINE_PATH = 'engine\\ComfyUI';
 export const viewModes: { id: ViewMode; label: string }[] = [
   { id: 'list', label: '목록 보기' },
   { id: 'card', label: '카드 보기' },

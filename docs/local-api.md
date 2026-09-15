@@ -123,7 +123,7 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 | `yue2-q8` | `yue2-3b-q8_0.gguf` | `yue2-vae-f16.gguf` |
 | `yue2-bf16` | `yue2-3b-bf16.gguf` | `yue2-vae-f32.gguf` |
 | `yue2-original` | audio.cpp 미사용. 공식 Python 파이프라인으로 실행 |
-| `yue2-int8-convrot` | ComfyUI 형식 safetensors. 현재 직접 생성 미지원, ComfyUI 어댑터 필요 |
+| `yue2-int8-convrot` | ComfyUI 형식 safetensors. ComfyUI 어댑터로 생성 지원(설치/설정은 [docs/comfyui-setup.md](comfyui-setup.md) 참고, VRAM 절약은 없음) |
 
 audio.cpp 자체의 설치/빌드 방법은 [audiocpp-setup.md](audiocpp-setup.md)를 참고하세요. 한 번에 한 곡만 생성합니다(서버 내부 플래그로 동시 실행 차단, GPU 하나를 공유하기 때문). `wav`가 아닌 형식을 선택했는데 `ffmpeg`가 PATH에 없으면 변환이 실패해도 생성 자체는 성공 처리하고 `wav`로 대신 저장하며, `saveError`에 이유를 남깁니다.
 

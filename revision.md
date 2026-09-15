@@ -2,6 +2,22 @@
 
 `git log`를 기준으로 정리한 커밋 단위 변경 이력입니다. 최신 항목이 위에 옵니다.
 
+## ComfyUI 어댑터를 AudioAuK 재사용 → SongYUE2 독립 설치로 전환 (2026-09-16)
+
+직전 커밋(`1f76797`)에서는 사용자 지시에 따라 ComfyUI를 새로 설치하지 않고 자매 프로젝트 `C:\Claude\AudioAuK\engine\ComfyUI`를 재사용했는데, 사용자가 다시 "독립적으로 설치하면 디스크가 얼마나 필요한지" 물어봐서 실제 AudioAuK 설치를 측정해 답했다(`.venv` 4.10GB, 체크포인트 3.96GB 하드링크면 추가 비용 약 4.2GB, 완전 별도면 약 8.5GB). 이어서 사용자가 실제로 독립 설치 + 문서 갱신 + 실제 생성 테스트 + 커밋/푸시까지 요청해서 진행했다.
+
+`engine/ComfyUI`(다른 엔진들과 같은 위치, `.gitignore` 대상)에 공식 ComfyUI를 클론하고 Python 3.12 venv를 새로 만들어 PyTorch 2.14.0+cu130 + `requirements.txt`(comfy-kitchen 0.2.34 포함 — INT8 ConvRot 양자화 커널)를 설치했다. AudioAuK의 ComfyUI(포트 8189)와 동시에 떠 있어도 충돌하지 않도록 포트를 **8190**으로 분리했고, `backend/server.mjs`/`app/app/studio-data.ts`의 `DEFAULT_COMFYUI_ENDPOINT`/`DEFAULT_COMFYUI_ENGINE_PATH`를 이 새 경로로 갱신했다 — 기본 경로도 다른 `DEFAULT_*_PATH` 상수들과 같은 관례대로 SongYUE2 루트 기준 상대경로(`engine\ComfyUI`)로 되돌렸다(AudioAuK 재사용 때는 절대경로였음). 체크포인트는 이번에도 하드링크로 연결해 3.96GB 중복 저장을 피했다.
+
+설치 직후 `/object_info`+`/prompt` curl 스모크 테스트로 이 새 설치에서도 실제 오디오가 나오는지 먼저 확인한 뒤, SongYUE2 백엔드를 재기동해 실제 곡("독립설치테스트-노래", 51초)을 끝까지 생성해 사용자에게 파일로 전달했다 — 무음/클리핑 없는 정상 오디오였다. `npm test`(11개 전부 통과)와 `npm run check`도 재확인했다. 문서는 `docs/comfyui-setup.md`를 재사용 절차 대신 독립 설치 절차 중심으로 전면 재작성(디스크 용량 표 포함)했고, `docs/models.md`/`progress.md`/memory-bank(`STATE.md`/`active-context.md`/`knowledge/RULES.md`)도 새 경로/포트를 반영해 갱신했다. 테스트에 쓴 프로젝트/곡은 라이브러리에서 삭제해 정리했다.
+
+## `1f76797` — Add ComfyUI adapter to run the INT8 ConvRot model, verified end-to-end (2026-09-15)
+
+`yue2_3b_int8_convrot.safetensors`는 ComfyUI 전용 형식이라 audio.cpp/공식 Python 어느 쪽으로도 실행되지 않아 그동안 명확한 한국어 오류로 생성을 차단만 해왔다. 조사해 보니 ComfyUI 공식(Comfy-Org)이 v0.35.0부터 YuE2를 네이티브로 지원(`comfy_extras/nodes_yue2.py`: `YuE2GenerateABC`/`YuE2GenerateMusic`/`EmptyYuE2LatentAudio`, 체크포인트는 표준 `CheckpointLoaderSimple`)하는 걸 확인해서, `backend/comfyui.mjs`를 새로 만들어 ComfyUI의 HTTP API(`/prompt` POST → `/history` 폴링 → `/view`로 결과 오디오 수신)로 연동했다. 워크플로우 그래프(`CheckpointLoaderSimple → YuE2GenerateMusic → ConditioningZeroOut(negative) → EmptyYuE2LatentAudio → KSampler(cfg=1.0, sampler=euler, scheduler=simple) → VAEDecodeAudio → SaveAudio`)는 소스 코드만으로는 KSampler의 negative/cfg나 디코드·저장 노드의 정확한 class_type을 확정할 수 없어서, 실제로 ComfyUI를 띄워 `/object_info`를 curl로 조회하고 최소 그래프를 직접 `/prompt`에 POST해 실제 오디오가 나오는 것까지 확인한 뒤에 코드를 작성했다.
+
+사용자가 "ComfyUI는 이미 설치되어 있으니 새로 설치하지 말고 그걸 쓰라"고 지시해서, 이 머신에 있던 ComfyUI 두 곳(`C:\ComfyUI-Portable\ComfyUI-Rev0`은 YuE2 PR 병합 이전 커밋이라 `nodes_yue2.py`가 없었고, 자매 프로젝트 `C:\Claude\AudioAuK\engine\ComfyUI`는 이미 YuE2 지원 버전이 설치되어 있었음)를 확인해 후자를 재사용하기로 했다. 체크포인트 파일은 그 폴더의 `models/checkpoints/`에 하드링크로 연결(같은 드라이브라 3.96GB 중복 저장 없음, 심볼릭 링크는 관리자 권한이 필요해 실패해서 하드링크로 전환). `backend/server.mjs`의 `runComfyUi()`는 ComfyUI가 설정된 엔드포인트(기본 `127.0.0.1:8189`)에서 응답이 없으면 `comfyUiEnginePath`(기본값이 바로 그 AudioAuK 경로)의 `.venv\Scripts\python.exe main.py`를 온디맨드로 띄우고, 생성 완료 후에는 `POST /free`로 VRAM을 명시적으로 해제한다 — ComfyUI는 audio.cpp/Python과 달리 프로세스가 계속 떠서 모델을 VRAM에 남겨두기 때문에, 안 해주면 이후 `yue2-bf16`/`yue2-original`로 전환할 때 RTX 5070 12GB가 부족해질 수 있다. `YuE2GenerateMusic`이 `abc`가 빈 문자열이면 `mode`를 무시하고 내부적으로 "off"로 처리하는 것도 확인해서, cot=full/melody인데 사용자가 ABC를 직접 안 넣은 일반 케이스는 `runComfyUi`가 먼저 기존 `runPythonAction('plan', ...)`으로 심볼릭 작곡을 돌려 그 결과를 넘기도록 했다(다른 두 엔진과 동일한 동작 유지) — 즉 이 모델도 cot≠off일 때는 여전히 Python 엔진 설정이 필요하다.
+
+실제 생성으로 4가지를 전부 확인했다: ①일반 노래 생성(40초 분량, 무음/클리핑 없는 정상 오디오) ②"악기만"(기존 mute-voice 메커니즘 그대로 재사용) ③ABC 심볼릭 작곡(이 기능은 애초에 모델과 무관하게 항상 Python 엔진으로 동작) ④커버(원곡 생성 → SheetSage2로 전사 → 새 가사/스타일로 같은 멜로디 재생성). 검증에 쓴 테스트 프로젝트/곡은 라이브러리에서 정리했다. `npm test`(새 mock 기반 테스트 포함 11개 전부 통과) + `npm run check` 확인. 문서(`README.md`, `docs/local-api.md`, `docs/models.md`, `AGENTS.md`, `progress.md`, 신규 `docs/comfyui-setup.md`) 및 memory-bank 갱신.
+
 ## Mastering-1의 masterVolume을 146→103으로 재보정 (2026-09-15)
 
 DistroKid-Like2(현재 Mastering-1)를 만들 때 masterVolume/dynamicBoost를 "메이크업 게인 공식(1+dynamicBoost/100*0.4)의 정적 수치"만으로 역산했는데, 이게 틀렸다. 먼저 이 값들을 검증하려고 ffmpeg `acompressor` 필터로 앱의 실제 처리를 흉내 내 오디오를 렌더링했는데, ffmpeg의 컴프레서가 Web Audio `DynamicsCompressorNode`와 전혀 다르게 동작해서(같은 파라미터인데도 마스터링인데 오히려 원곡보다 조용해짐, 최대 -8.5dB까지 떨어짐) 완전히 잘못된 비교 파일을 사용자에게 전달하는 실수를 했다.

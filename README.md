@@ -6,7 +6,7 @@
 
 ## 주요 기능
 
-- 가사 + 스타일 프롬프트 → 실제 음악 생성 (audio.cpp GGUF 3종 또는 원본 Python 모델)
+- 가사 + 스타일 프롬프트 → 실제 음악 생성 (audio.cpp GGUF 3종, 원본 Python 모델, 또는 ComfyUI로 실행하는 YuE2 INT8 ConvRot)
 - **진짜 "악기만" 생성**: ABC 악보의 보컬 성부를 화음 기호는 남긴 채 구조적으로 쉼표 처리(`abc_tools.py mute-voice`)해 확실하게 무보컬로 생성 — 원본 Python 모델과 GGUF(audio.cpp `--request-option abc_file=`) 모두 지원
 - **심볼릭 작곡(ABC 악보)**: 멜로디/코드 계획 생성·검사·AI 지시 편집·오디오 재생(현재 음표 하이라이트), 오디오에서 멜로디 추출해 커버 만들기(SheetSage2, 실제 오디오로 종단 검증 완료), `.abc` 파일 기반 라이브러리(가져오기/저장/삭제) — ABC 악보 기반 생성(심볼릭 작곡/커버 포함)은 원본 Python 모델과 GGUF 모두에서 동작
 - **완성곡 "커버" 원클릭**: 완성곡 메뉴의 "리믹스" 아래 "커버"를 누르면 그 곡의 오디오에서 멜로디/코드를 추출해 작곡 화면에 바로 채워 넣음(가사·스타일이 이미 있으면 유지할지 그 곡 설정으로 바꿀지 확인). 단, 실제 보컬 음색/톤까지 가져오는 기능은 아님 — 멜로디·코드와 성별 힌트만 전달됨
@@ -115,6 +115,7 @@ python scripts/download_models.py
 - **② 원본 Python 파이프라인 ("YuE2 - 원본" 모델)**: 24GB급 VRAM을 권장하는 공식 모델(12GB급도 메모리 예산을 낮추면 짧은 곡은 동작 확인됨). 공식 YuE2 저장소를 받아 `uv`로 전용 가상환경을 구성해야 합니다. → **[docs/python-engine-setup.md](docs/python-engine-setup.md)**
 - **③ SheetSage2 (선택, "커버"/"오디오에서 추출" 기능 전용)**: 완성곡이나 업로드한 오디오에서 멜로디/코드를 ABC 악보로 추출합니다. ②와는 완전히 별도의 Python 가상환경이 필요합니다(버전 충돌 방지). `ffmpeg`도 PATH에 있어야 합니다. → **[docs/python-engine-setup.md](docs/python-engine-setup.md)의 SheetSage2 절**
 - **④ STEM 분리 (선택, 완성곡의 "STEM 분리" 기능 전용)**: 완성곡을 보컬/악기 2갈래(mel_band_roformer) 또는 보컬/드럼/베이스/기타 4갈래(htdemucs)로 분리합니다. ①과 같은 `audiocpp_cli.exe`를 쓰므로, ①을 빌드할 때 `-Models yue2,htdemucs,bs_roformer`로 함께 빌드하면 별도 작업이 필요 없습니다(`bs_roformer`와 `mel_band_roformer`는 같은 CMake 모듈의 별칭이라 하나만 적어도 둘 다 빌드됨). → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)의 STEM 분리 절**
+- **⑤ ComfyUI (선택, "YuE2 - INT8 ConvRot" 모델 전용)**: ComfyUI(v0.35.0+, YuE2 네이티브 지원)를 `engine/ComfyUI`에 독립 설치해 HTTP API로 연동합니다(약 4.2GB — `.venv`+코드, 체크포인트는 하드링크). VRAM 절약 효과는 없고 다운로드 용량만 작습니다 — 저VRAM 환경에서 고를 실익은 적습니다. → **[docs/comfyui-setup.md](docs/comfyui-setup.md)**
 
 > "심볼릭 작곡"·"악기만"·ABC 기반 커버는 최종 생성에 ①이나 ②를 쓰더라도, ABC 악보 준비(계획 생성/보컬 성부 뮤트) 자체는 항상 ②의 Python 엔진(`abc_tools.py`)을 거칩니다. 즉 GGUF만 쓰더라도 이 기능들을 쓰려면 ②의 Python 환경 구성이 필요합니다.
 
@@ -164,6 +165,7 @@ npm run build   # 프론트엔드 빌드
 - [docs/local-api.md](docs/local-api.md) — 로컬 API 엔드포인트 목록
 - [docs/audiocpp-setup.md](docs/audiocpp-setup.md) — audio.cpp 빌드 및 연결 방법
 - [docs/python-engine-setup.md](docs/python-engine-setup.md) — 원본 Python 엔진 + SheetSage2(커버) 설치 방법
+- [docs/comfyui-setup.md](docs/comfyui-setup.md) — ComfyUI 연동(YuE2 INT8 ConvRot 모델) 설치 방법
 - [docs/models.md](docs/models.md) — 지원 모델 안내
 - [progress.md](progress.md) — 아직 남은 일 / 실제 환경 검증이 필요한 항목
 - [revision.md](revision.md) — 커밋 단위 변경 이력

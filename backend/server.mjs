@@ -57,11 +57,10 @@ const FFMPEG_ARGS = {
 };
 const VIEW_MODES = new Set(['list', 'card']);
 const DEFAULT_ENGINE_PATH = path.join('engine', 'audio.cpp', 'build', 'windows-cuda-release', 'bin', 'audiocpp_cli.exe');
-const DEFAULT_COMFYUI_ENDPOINT = 'http://127.0.0.1:8189';
-// Reuses the sibling AudioAuK project's already-installed, already-YuE2-capable ComfyUI instead
-// of a second install -- absolute path is intentional (unlike the other DEFAULT_*_PATH constants,
-// which are relative to this project's own root).
-const DEFAULT_COMFYUI_ENGINE_PATH = 'C:\\Claude\\AudioAuK\\engine\\ComfyUI';
+const DEFAULT_COMFYUI_ENDPOINT = 'http://127.0.0.1:8190';
+// Own install under engine/ (gitignored, same as engine/audio.cpp) -- kept on a different port
+// than the sibling AudioAuK project's ComfyUI (8189) so both can run independently/concurrently.
+const DEFAULT_COMFYUI_ENGINE_PATH = path.join('engine', 'ComfyUI');
 const COMFYUI_GENERATE_DEADLINE_MS = GENERATE_TIMEOUT_MS;
 const COMFYUI_MAX_DURATION_SECONDS = 240;
 const VOCAL_GENDERS = new Set(['', 'male', 'female', 'duet']);

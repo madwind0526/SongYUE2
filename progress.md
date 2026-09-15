@@ -1,6 +1,6 @@
 # SongYUE2 진행 상황 / 남은 일
 
-최종 업데이트: 2026-09-13
+최종 업데이트: 2026-09-16
 
 이 문서는 지금까지 구현이 끝난 것과 별개로, **아직 손대지 않았거나 실제 환경에서 검증되지 않은 부분**만 모아 둔 체크리스트입니다. 완료된 기능 전체 목록은 [README.md](README.md)를, 커밋 단위 변경 이력은 [revision.md](revision.md)를 참고하세요.
 
@@ -29,11 +29,17 @@
 - [x] 브라우저에서 종단 확인 완료(실제 "노래 만들기" 생성 직전까지): GGUF 선택 시 비활성화, 원본 선택 시 활성화(대상 곡의 원래 모델과 무관), 확인 대화상자 노출, "이 곡 설정 사용" 선택 시 가사·스타일·고급 설정과 실제 추출된 ABC 악보까지 정상 반영, 모델 선택은 원본으로 유지됨을 확인. "노래 만들기"로 실제 오디오까지 생성하는 마지막 단계는 별도 이슈(현재 실제 생성이 중간에 에러로 끊김)로 이번 검증 범위에서 제외했다.
 - **알려진 한계**: Suno류 서비스의 "커버"와 달리 **실제 보컬 음색/톤을 가져오지 않는다**. `run_yue2.py`의 CLI 인자를 확인한 결과 참조 오디오에서 화자 임베딩/음색을 추출해 넘기는 입력 경로 자체가 없다(`--abc-file`로 멜로디/코드만, `--request`로 가사·스타일·`vocalGender` 텍스트만 전달). "이 곡 설정 사용"을 선택하면 그 곡의 `vocalGender`(남/여/듀엣)라는 거친 카테고리 힌트만 함께 복사될 뿐, 실제 음색은 모델이 가사/스타일 프롬프트만으로 새로 만들어낸 목소리다.
 
+## INT8 ConvRot 모델 — ComfyUI 어댑터 구현 및 종단 검증 완료 (2026-09-15)
+
+- [x] `yue2_3b_int8_convrot.safetensors`는 ComfyUI 전용 형식이라 audio.cpp/공식 Python으로 실행 불가 — ComfyUI가 v0.35.0부터 YuE2를 네이티브 지원하는 것을 확인하고, `backend/comfyui.mjs`로 HTTP API(`/prompt`+`/history`+`/view`) 연동을 구현. 워크플로우 그래프(`CheckpointLoaderSimple → YuE2GenerateMusic → ConditioningZeroOut → EmptyYuE2LatentAudio → KSampler(cfg=1.0) → VAEDecodeAudio → SaveAudio`)는 실제 ComfyUI의 `/object_info`를 조회해 정확한 노드 스키마로 작성(추측 없음).
+- [x] 처음엔 자매 프로젝트 `C:\Claude\AudioAuK\engine\ComfyUI`(이미 YuE2 지원 버전)를 재사용했으나, 2026-09-16 SongYUE2 전용 독립 설치(`engine/ComfyUI`, 포트 8190, `.venv` 약 4.1GB, `.gitignore` 대상)로 전환 — 체크포인트는 여전히 하드링크로 연결(디스크 중복 없음). `backend/server.mjs`의 `runComfyUi()`가 ComfyUI 미기동 시 자동으로 띄우고, 생성 후 `POST /free`로 VRAM을 해제해 다른 모델로 전환할 때 RTX 5070 12GB에서도 여유가 있게 함. 설치 가이드: [docs/comfyui-setup.md](docs/comfyui-setup.md).
+- [x] 실제 생성으로 4가지 모두 확인: ①일반 노래 생성(자동 심볼릭 작곡 후 렌더링, 40초 분량) ②"악기만"(기존 mute-voice 메커니즘 재사용) ③ABC 심볼릭 작곡(모델과 무관하게 항상 Python 엔진 사용) ④커버(SheetSage2로 원곡 전사 → 새 가사/스타일로 같은 멜로디 재생성) — 전부 무음/클리핑 없는 정상 오디오로 완료됨.
+- **알아둘 점**: INT8 ConvRot은 로드 시 BF16으로 복원되어 VRAM을 절약하지 않음(다운로드 용량만 감소). 기본 작곡 계획(cot=full)에서는 이 모델도 Python 엔진(`pythonEnginePath`/`pythonScriptPath`) 설정이 필요함(cot=off일 때만 예외). 설치/설정 가이드: [docs/comfyui-setup.md](docs/comfyui-setup.md).
+
 ## 실제 환경에서 검증 필요 (코드는 준비됐지만 종단 테스트 못 함)
 
 - [ ] **"커버" 메뉴의 실제 생성까지 종단 검증**: ABC 추출과 설정 채우기까지는 확인했지만, 채워진 내용으로 실제 "노래 만들기"를 눌러 오디오까지 완성되는지는 아직 못 함(현재 실제 생성이 원인 불명 에러로 중간에 끊기는 별도 문제 있음).
 - [ ] **"악기만" mute-voice 전환의 실제 오디오 검증**: 코드 수정과 유닛 테스트(가짜 spawn)는 통과했지만, 실제 원본(공식 Python) 엔진으로 생성해 Vocal 화음 기호가 남은 ABC가 실제로 화성이 유지된 무보컬 오디오를 만드는지는 아직 실기 검증 전.
-- [ ] **INT8 ConvRot 모델**: 지금은 명확한 한국어 안내로 생성을 차단만 함. ComfyUI 어댑터를 실제로 붙여 생성 가능하게 만드는 작업은 시작 전.
 - [ ] **ABC "파일에서 가져오기"**: JSON의 `abc` 필드 추출 / 일반 텍스트 폴백 로직은 코드 리뷰로만 검증했고, 실제 파일 업로드로 브라우저에서 종단 테스트는 아직 안 함.
 - [ ] **File System Access API 미지원 브라우저**(Safari, Firefox 등)에서의 폴백 저장 경로 — 현재는 Chrome에서 `showSaveFilePicker`/`showOpenFilePicker`를 임시로 지워서 폴백을 강제 검증했을 뿐, 실제 비-Chromium 브라우저 테스트는 안 함.
 

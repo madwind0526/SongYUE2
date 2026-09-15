@@ -25,7 +25,7 @@ This project is for building a local YuE2/Yue2 music generation studio.
   - official Python YuE2 pipeline
   - cloud GPU runner
   - future lightweight YuE model
-  - future ComfyUI node/API runner
+  - ComfyUI node/API runner (implemented for yue2-int8-convrot; see docs/comfyui-setup.md)
 - Project data should be stored per song/version, with reproducible settings.
 
 ## UI Guidelines

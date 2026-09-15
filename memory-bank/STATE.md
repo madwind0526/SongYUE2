@@ -2,10 +2,10 @@
 
 ## Current Wave
 
-- **Wave:** 15
+- **Wave:** 16
 - **Status:** Done
 - **Cache Status:** CLEAN
-- **Last Checkpoint:** 2026-09-15 `yue2-int8-convrot`(ComfyUI 어댑터) 구현 완료 — `backend/comfyui.mjs` 신설, `backend/server.mjs`에 `runComfyUi()`/`ensureComfyUiRunning()`/`COMFYUI_MODELS`/`comfyUiEndpoint`·`comfyUiEnginePath` 설정 추가, 프론트 `selectable:false` 해제. ComfyUI는 새로 설치하지 않고 자매 프로젝트 `C:\Claude\AudioAuK\engine\ComfyUI`(이미 YuE2 v0.35.0+ 지원) 재사용 — 사용자가 명시적으로 지시. 워크플로우 그래프는 실제 ComfyUI `/object_info` curl 조회로 노드 스키마를 검증한 뒤 작성(추측 금지). 실제 생성으로 4가지 전부 검증: 일반 노래/악기만/ABC 심볼릭 작곡/커버. `npm test`(새 mock 테스트 포함 11개 전부 통과) + `npm run check` 통과. 문서(`docs/models.md`) 및 memory-bank(`knowledge/RULES.md`) 갱신.
+- **Last Checkpoint:** 2026-09-16 `yue2-int8-convrot`(ComfyUI 어댑터)를 독립 설치로 전환 완료 — Wave 15에서는 자매 프로젝트 AudioAuK의 ComfyUI를 재사용했으나, 사용자 요청으로 `engine/ComfyUI`(SongYUE2 전용, `.gitignore` 대상)에 새로 설치(`git clone` + `.venv` + PyTorch 2.14.0+cu130 + `requirements.txt`, comfy-kitchen 0.2.34 포함). 포트를 AudioAuK(8189)와 분리해 **8190**으로 설정, `backend/server.mjs`/`app/app/studio-data.ts`의 `DEFAULT_COMFYUI_ENDPOINT`/`DEFAULT_COMFYUI_ENGINE_PATH`를 이 경로로 갱신(상대경로로 원복). 체크포인트는 새 설치에도 하드링크로 재연결. 독립 설치로 실제 곡 생성 재검증(51초, 정상 오디오, 사용자에게 파일 전달). `npm test`(11개 전부 통과)+`npm run check` 재확인. 문서(`docs/comfyui-setup.md` 전면 재작성, `docs/models.md`, `progress.md`) 및 memory-bank(`knowledge/RULES.md`) 갱신.
 
 ## Wave History
 
@@ -26,12 +26,13 @@
 | 13 | SheetSage2 제로샷 커버 종단 검증 성공(venv 구축, config.json weights_format 버그 + 백엔드 디렉터리 충돌 버그 수정), 원형 비주얼라이저 설정 전면 확장, 후처리 재생 위치 슬라이더, GGUF "악기만" 완전 비활성화(3개 경로) | Done |
 | 14 | ABC 기반 생성(심볼릭 작곡/커버) GGUF 전면 차단, 재생 중 곡 카드 강조(전체 화면)+전역 재생바 선형 파형 비주얼라이저, 완성곡 메뉴에 "커버" 신설(활성화 조건을 대상곡 모델→현재 선택 모델로 사용자 지적 후 정정) | Done |
 | 15 | `yue2-int8-convrot` ComfyUI 어댑터 구현(`backend/comfyui.mjs`, `runComfyUi`) — 자매 프로젝트 AudioAuK의 기존 ComfyUI 설치 재사용(신규 설치 안 함), 체크포인트 하드링크, 워크플로우는 실제 `/object_info` 조회로 검증. 실제 생성으로 노래/악기만/ABC/커버 4종 전부 확인 | Done |
+| 16 | `yue2-int8-convrot`를 AudioAuK 재사용 → SongYUE2 전용 독립 설치(`engine/ComfyUI`, 포트 8190)로 전환. 디스크 비용 사전 실측(4.1GB venv) 후 클론+venv+torch cu130+requirements 설치, 체크포인트 재연결, 독립 설치로 실제 생성 재검증, `docs/comfyui-setup.md` 재작성 | Done |
 
 ## Session Notes
 
 - `models/m-a-p/SheetSage2/`에 `model.safetensors`+`config.json`+전체 코드 파일이 모두 설치 완료(2026-09-12 확인). 남은 준비물은 별도 Python venv뿐 — `test/YuE2-source/requirements-sheetsage2.txt`(torch==2.8.0/transformers==4.45.2 등)가 요구하는 버전이 YuE2 본체용 `.venv`에 이미 설치된 버전(torch 2.10/transformers 4.57)과 달라 같은 venv를 공유하면 충돌 위험 — 새 venv 만들어 설정의 `sheetSagePythonPath`에 지정해야 함.
 - `models/yue2_3b_int8_convrot.safetensors`는 `models/comfy-org/YuE2/checkpoints/yue2_3b_int8_convrot.safetensors`로 옮겨져 있음. YuE2 INT8 ConvRot은 ComfyUI 형식이라 SongYUE2의 직접 생성 경로(audio.cpp/공식 Python)로 바로 실행되지 않지만, **2026-09-15부터 ComfyUI 어댑터로 지원됨**(아래 참고) — SongYUE2 안에서 정상 선택/생성 가능.
-- **ComfyUI는 `C:\Claude\AudioAuK\engine\ComfyUI`를 재사용**(포트 8189, `.venv`에 이미 YuE2 v0.35.0+ 지원 버전 설치됨) — SongYUE2 자체 ComfyUI 설치는 없음. 체크포인트는 그 폴더의 `models/checkpoints/`에 하드링크로 연결되어 있으니, AudioAuK 쪽 ComfyUI 폴더를 지우거나 옮기면 SongYUE2의 ComfyUI 생성도 같이 깨진다. `runComfyUi()`가 온디맨드로 그 `.venv\Scripts\python.exe main.py`를 spawn하므로 사용자가 ComfyUI를 미리 띄울 필요는 없지만, 최초 1회는 부팅 지연(수십 초)이 있다.
+- **ComfyUI는 `engine/ComfyUI`에 SongYUE2 전용으로 독립 설치되어 있음**(포트 8190, `.gitignore` 대상이라 저장소엔 없음 — 다른 PC에서는 `docs/comfyui-setup.md`대로 다시 설치해야 함). `.venv`는 PyTorch 2.14.0+cu130, `comfy-kitchen` 포함(INT8 ConvRot 커널), 총 용량 약 4.1GB. 체크포인트는 `models/checkpoints/`에 하드링크로 연결됨. AudioAuK의 ComfyUI(포트 8189)와는 완전히 별개 프로세스라 서로 영향 없음. `runComfyUi()`가 온디맨드로 `.venv\Scripts\python.exe main.py`를 spawn하므로 사용자가 미리 띄울 필요는 없지만, 최초 1회는 부팅 지연(수십 초)이 있다.
 - `.abc` 형식 라이브러리 노트는 파일명 기반 id(`abcfile-<base64(파일명)>`)를 쓰므로, 제목을 바꾸면(rename) id도 바뀐다 — JSON 형식 노트(안정적 UUID id)와 다른 특성이니 새 UI를 짤 때 유의할 것.
 - `data/settings.json`은 백엔드가 메모리에 캐싱하므로, 프로세스가 떠 있는 동안 파일을 직접 고쳐도 다음 저장 시 덮어써진다 — 반드시 파일 수정 후 프로세스 재시작.
 - `C:\Claude\Club`의 Vite 개발서버가 5173 포트를 먼저 점유하고 있으면 SongYUE2가 뜨지 않을 수 있으니, SongYUE2 프런트엔드는 5173에 떠 있는지 확인할 것.
