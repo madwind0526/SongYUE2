@@ -1,0 +1,33 @@
+.audio-compare-dialog { --chart-left: 56px; --chart-right: 38px; width: 1080px !important; max-height: calc(100dvh - 32px); overflow: hidden; }
+.audio-compare-dialog .stem-list { min-height: 0; overflow-y: auto; flex: 1; padding: 3px; }
+.audio-compare-dialog .stem-row { display: flex; flex-direction: column; align-items: stretch; gap: 10px; padding: 14px 0; }
+.audio-compare-toolbar { display: flex; align-items: center; gap: 10px; min-width: 0; margin-left: var(--chart-left); margin-right: var(--chart-right); }
+.audio-compare-toolbar > button { flex-shrink: 0; }
+.audio-compare-toolbar .pp-waveform-label,
+.audio-compare-toolbar .audio-compare-load-btn { width: 30px; height: 30px; border-radius: 6px; }
+.audio-compare-dialog .audio-compare-label { display: flex; flex-direction: row; align-items: center; justify-content: flex-start; gap: 7px; flex: 1; width: auto; min-width: 0; }
+.audio-compare-label strong, .audio-compare-label .small-badge { flex-shrink: 0; white-space: nowrap; }
+.audio-compare-dialog .audio-compare-label small { min-width: 0; flex: 0 1 auto; font-size: 11px; font-weight: 600; color: #c5d1bb; line-height: 1.3; }
+.audio-compare-dialog .audio-compare-charts { order: 1; flex: 0 0 100%; width: 100%; gap: 8px; }
+.audio-compare-dialog .compare-waveform { display: block; padding: 0; height: 56px; margin-left: var(--chart-left); margin-right: var(--chart-right); }
+.compare-waveform svg { display: block; width: 100%; height: 100%; }
+.compare-spectrogram { display: flex; width: 100%; min-width: 0; color: #aab7a3; font-size: 11px; }
+.compare-frequency-axis { width: var(--chart-left); flex-shrink: 0; display: flex; flex-direction: column; justify-content: space-between; text-align: right; padding: 0 6px 20px 0; }
+.compare-spectrogram-body { flex: 1; min-width: 0; }
+.compare-spectrogram-plot { position: relative; height: 180px; background: #000; border: 1px solid #4b5846; overflow: hidden; }
+.compare-spectrogram-plot canvas { display: block; width: 100%; height: 100%; }
+.compare-playhead { position: absolute; top: 0; bottom: 0; width: 1px; background: #fff; transform: translateX(-1px); pointer-events: none; }
+.compare-chart-status { position: absolute; inset: 0; display: grid; place-items: center; background: #0005; }
+.compare-time-axis { display: flex; justify-content: space-between; height: 20px; padding-top: 3px; font-variant-numeric: tabular-nums; }
+.compare-db-axis { width: var(--chart-right); flex-shrink: 0; display: flex; flex-direction: column; align-items: center; font-size: 10px; }
+.compare-db-axis i { flex: 1; width: 8px; background: linear-gradient(#ffffaa, #ffa300, #f12810, #b50059, #55007e, #150041, #000); }
+.audio-compare-dialog .dialog-actions { flex-shrink: 0; gap: 10px; }
+.audio-compare-dialog .pp-seek-row { flex-shrink: 0; }
+@media (max-width: 600px) {
+  .audio-compare-dialog { --chart-left: 46px; padding: 16px !important; }
+  .compare-spectrogram-plot { height: 140px; }
+  .compare-frequency-axis { font-size: 10px; }
+  .audio-compare-toolbar { gap: 6px; }
+  .audio-compare-dialog .pp-transport { flex-wrap: wrap; }
+  .audio-compare-dialog .dialog-actions { justify-content: center; }
+}

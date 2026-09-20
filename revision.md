@@ -2,6 +2,84 @@
 
 `git log`를 기준으로 정리한 커밋 단위 변경 이력입니다. 최신 항목이 위에 옵니다.
 
+## "보컬 음색 변환"을 STEM1 스타일로 다시 원복 + 보컬 무음 버그 수정 (2026-09-16, 같은 날 세 번째 재설계)
+
+"원본 vs 결과" 단순화 버전을 배포한 뒤, RVC/Seed-VC 아키텍처(보컬/반주 분리→보컬만 변환→재합성)에 대한 설명을 듣던 사용자가 "내가 이해가 부족했네 그렇다면 이전 구조가 rvc의 플로우하고 맞았던거네 미안한데 이전구조로 원복하는게 좋겠어. 미안해"라며 STEM1 스타일(두 번째 재설계) 편집기로 되돌려달라고 요청했다. 같은 메시지에 실제 버그 제보도 함께 왔다 — "만들어진 것을 들으면 보컬이 아예 없어지고 악기만 남았어 rvc가 제대로 안된거 같은데."
+
+원복 자체는 이전에 이미 짜뒀던 STEM1 스타일 구현을 그대로 복원하는 작업이었다 — `VocalTimbreDialog`를 스템 리스트+개별 "후처리"(중첩 `PostProcessDialog`)+combined-original/preview 비교+합치기/저장 흐름으로, 백엔드도 `applyVocalTimbre()`/`finalizeVocalTimbre()`를 STEM 폴더의 `vocals.wav`를 덮어쓰는 방식으로, `GET /vocal-timbre/result` 라우트는 제거하고 `POST /vocal-timbre/save`는 다시 `{dataUrl, title}`을 받도록 되돌렸다.
+
+버그는 되돌리기와 별개로 원인부터 실측했다. `ffmpeg -af volumedetect`로 캐시된 실제 테스트 오디오를 측정한 결과: 원본(변환 전) 보컬 -26.4dB, Seed-VC 변환 후 보컬 -34.0dB, 반주 -24.1dB — 변환된 보컬이 원본보다 7.6dB나 조용해서 반주에 완전히 묻힌 것이 원인이었다. 모노/스테레오 채널 레이아웃 불일치는 합성 사인파(440Hz 모노+220Hz 스테레오)를 `amix`로 섞어보는 별도 테스트로 원인에서 배제했다.
+
+수정은 두 단계로 진행했다. 1차: `applyVocalTimbre()`에 `measureMeanVolumeDb()` 헬퍼(ffmpeg volumedetect 파싱)를 추가해 변환 전/후 음량 차이를 재고 `-6~+18dB`로 clamp한 값을 `ffmpeg -af volume=XdB`로 곱했다. 실제 캐시 오디오로 재검증했더니 mean_volume은 원본과 거의 일치했지만(-26.5dB), max_volume이 정확히 0.0dB — 원본 변환 출력이 이미 피크 -2.2dB 근처라 게인을 곱하는 순간 하드클리핑이 난 것이었다. 2차: 게인 필터 뒤에 `alimiter=limit=0.97:level=false`를 붙여(자동 레벨 보정을 꺼서 방금 넣은 게인을 되돌리지 않게 함) 피크만 부드럽게 눌렀다 — 최종적으로 mean -27.0dB, peak -0.3dB로 클리핑 없이 음량이 정상화됐다.
+
+백엔드 테스트를 STEM1 흐름(적용→`/stems/vocals`+`/stems/instrumental` 서빙 확인→재적용 시 분리 스킵→`volumedetect` 프로브 2회+게인·리미터 ffmpeg 호출 검증→저장은 dataUrl 업로드)에 맞춰 다시 썼고, `makeFakeSpawn()`에 `volumedetect`(마지막 인자가 `-`인 null 출력이라 기존 범용 ffmpeg 분기가 그대로 못 씀) 전용 분기와 `setVolumeProbe()`를 추가해 실측과 같은 음량 차이를 기본값으로 재현하게 했다. 14개 스위트 전부 통과, `npm run check` 클린.
+
+실제 2분 11초 완성곡으로 브라우저 종단 재검증했다 — 참조 음색 업로드→적용(보컬 분리+변환+음량 보정, 약 150초)→STEM1처럼 보컬/악기 트랙이 나타남 확인→합치기→저장→라이브러리에 새 곡 추가. 저장된 FLAC을 curl로 받아 ffprobe로 길이(2:11) 확인, `ffmpeg astats`로 피크 클리핑 없음(Peak count 801/6.3M 샘플, 정상 범위) 확인, 결과 파일(적용 직후 믹스+최종 저장본 둘 다)을 사용자에게 전달.
+
+## "보컬 음색 변환"을 "원본 vs 결과" 비교로 다시 단순화 (2026-09-16, 같은 날 두 번째 재설계)
+
+STEM1 스타일 편집기를 막 배포하고 나서, 사용자가 "약간 다르게 이해했네"라며 실제로 그렸던 그림을 구체적으로 설명했다 — 참조 음색을 넣고 적용하면 원본과 변경된 오디오가 바로 나타나고, 그걸 비교해서 들으면 되는 정도를 기대했다고 했다. STEM1처럼 보컬/악기를 나눠 보여주는 건 필요 없었고("STEM1처럼 악기 분리는 할 필요가 없었는데"), 개별 트랙 후처리도 "사실 라이브러리에 저장되면 후처리를 따로 할 수 있으니 그것까지 합해놓으면 복잡할 수도 있겠다"며 스스로 빼는 게 낫다고 판단했다. 요청한 최종 레이아웃은 명확했다 — 왼쪽에 있던 것(제목/참조 파일 선택/적용)을 상단으로, 후처리는 빼고, 위에 파일 탐색기+적용 버튼, 아래는 지금처럼 원본과 변경본 비교 듣기만.
+
+`VocalTimbreDialog`를 다시 크게 걷어냈다 — 스템 리스트, 각 트랙의 "후처리"(중첩 `PostProcessDialog`), `mixBuffers`로 클라이언트에서 합치던 로직, `audioBufferToWavBlob`으로 저장용 WAV를 굽던 로직을 전부 제거했다. 남은 건 상단 바(제목 입력+참조 음색 파일 선택+적용하기 버튼)뿐이고, 적용하면 "원본"(이 곡이 원래 갖고 있던 `/api/projects/:id/audio`를 그대로 디코드 — 별도로 재구성할 필요가 없다는 걸 깨달았다)과 "변경본"(서버가 다 끝내놓은 결과) 두 파형만 비교 재생한다.
+
+백엔드도 그만큼 가벼워졌다. `applyVocalTimbre()`가 이제 STEM 폴더의 `vocals.wav`를 프론트가 읽어갈 수 있게 덮어쓰는 대신, 변환된 보컬과 반주를 서버 안에서 ffmpeg `amix`로 곧장 합쳐 `result.wav`로 캐싱하고, 새 라우트 `GET /vocal-timbre/result`가 그걸 그대로 서빙한다. "저장"도 더는 브라우저가 두 트랙을 믹스해서 WAV를 통째로 업로드할 필요가 없어졌다 — `POST /vocal-timbre/save`가 제목만 받아서 서버에 이미 있는 `result.wav`를 그대로 `finalizeToMusic()`에 넘긴다(저장하면 그 캐시가 소비되므로, 재저장하려면 다시 적용해야 한다는 걸 백엔드 테스트로 명시).
+
+같은 2분 11초 완성곡으로 다시 종단 검증했다 — 새 레이아웃(상단 바만, 스템/후처리 없음) 확인 → 참조 음색 선택 → 적용하기(보컬 분리+변환+서버 재합성, 이번엔 서버 쪽 remix 단계가 추가돼 이전보다 살짝 더 걸림) → 원본/변경본 두 파형만 나타남을 확인 → 변경본 재생(0:04/2:11, 파형 하이라이트 정상) → 저장 → 라이브러리에 새 곡 추가(2:11 길이 정확히 일치, curl+ffprobe로 검증)까지 브라우저에서 실제로 확인했다. 백엔드 테스트도 새 흐름(적용→`/result` 200 확인→재적용은 STEM 분리 스킵→저장은 캐시를 소비하므로 재저장 시도는 400)에 맞춰 다시 썼고, 14개 스위트 전부 통과, `npm run check` 클린.
+
+## "보컬 음색 변환"을 STEM1 스타일 편집기로 재설계 (2026-09-16)
+
+방금 만든 원샷(파일 선택→바로 최종 저장) 방식을 배포한 직후, 사용자가 "RVC를 곡 만드는 단계에서 할건가? 만든이후에 후처리로 할껀가?"라고 아키텍처를 다시 물었다. YuE2 자체엔 참조 오디오 기반 화자 임베딩 입력이 없다는 걸 "커버" 기능 때 이미 확인해뒀어서(생성 단계에 ref를 못 먹임), 후처리일 수밖에 없다고 답했다. 이어서 STEM1의 EQ/FX는 브라우저 Web Audio로 즉시 재계산되는 순수 클라이언트 DSP인 반면 RVC/Seed-VC는 GPU 추론(RTF≈0.82)이라 "ref 바꾸면 즉시 바뀐다"는 STEM1 노브 수준의 실시간성은 안 되고 "다시 몇십 초 걸려서 바뀐다"는 것만 가능하다고 짚었다. 사용자가 그래도 "STEM1과 같은 UI"로 만들어달라며 구체적인 레이아웃(왼쪽에 참조 음색 선택+하단에 적용 버튼, 적용하면 원본/결과가 나오고 옆에 후처리, 아래에 원본과 후처리까지 된 결과)을 지정했다.
+
+STEM1(`StemDialog`, 'vocal' 모드)의 코드를 다시 읽어보니 이미 필요한 구조가 거의 다 있었다 — 마운트 시 STEM 분리 → 스템별 waveform+"후처리"(중첩 `PostProcessDialog`, `sourceOverride`/`onSaveOverride`로 편집한 버퍼를 되받음) → combined-original(초기 믹스, 고정)과 combined-preview(스템 편집 때마다 `refreshPreview()`로 갱신) 두 파형 비교 재생 → "합치기"로 미리듣기 확정 → "저장". 저장 흐름을 보니 STEM1은 `/api/projects/:id/post-process`로 파일을 **다운로드만** 하고 라이브러리엔 안 남긴다는 것도 코드로 확인했다 — 우리가 원하는 "새 완성곡으로 저장"과 다른 지점이라 AskUserQuestion으로 명시적으로 확인(다운로드-전용 vs 라이브러리 저장 중 사용자가 "라이브러리 저장"을 선택).
+
+이 골격을 그대로 가져와 `VocalTimbreDialog`를 다시 썼다. StemDialog와 다른 점은 딱 둘: ①마운트 시 바로 분리하지 않고, 왼쪽 사이드바(참조 음색 파일 선택+제목 입력+"적용" 버튼)에서 사용자가 먼저 참조 오디오를 고르고 "적용"을 눌러야 스템이 나타남. ②"저장"이 파일 다운로드 대신 새 완성곡으로 라이브러리에 저장됨(새 백엔드 라우트 `POST /vocal-timbre/save`). 백엔드도 원샷 `convertVocalTimbre()`를 둘로 쪼갰다 — `applyVocalTimbre()`(참조 음색으로 변환해 STEM 폴더의 `vocals.wav`를 덮어써서 기존 `GET /stems/vocals` 라우트를 그대로 재사용 가능하게 함, 분리된 "변환 전 원본 보컬"은 `vocals-original.wav`로 따로 캐싱해 참조를 바꿔 재적용할 때 STEM 분리를 다시 안 하고 보컬만 재변환하도록 함)와 `finalizeVocalTimbre()`(브라우저에서 합쳐진 WAV를 받아 `finalizeToMusic()`으로 새 곡 저장). 사이드 이펙트로 반주 트랙에 이미 적용한 후처리는 참조를 바꿔도 유지됨.
+
+실제 완성곡(2분 11초)으로 새 편집기를 종단 검증했다 — 참조 음색 업로드→적용(보컬 분리+Seed-VC 변환, 약 130초 소요)→보컬/악기 스템이 STEM1처럼 나타남→보컬의 "후처리" 버튼으로 중첩 EQ/FX 다이얼로그가 정상 오픈됨을 확인→재생/파형 하이라이트 정상 동작→"저장"으로 라이브러리에 새 곡 추가(2:11 길이 정확히 일치, curl+ffprobe로 검증)까지 전부 브라우저에서 실제로 눌러봤다. "재적용 시 STEM 분리를 건너뛴다"는 로직은 실제 대기 시간이 길어(2분씩) 브라우저에서 두 번 반복 검증하는 대신, 이미 정밀한 백엔드 유닛 테스트(가짜 spawn 호출 단위로 `mel_band_roformer`가 재적용 시 호출 안 되는 것)로 확인했다. `npm test`(14개)+`npm run check` 통과.
+
+## 보컬 음색 변환(Seed-VC) 기능 추가 (2026-09-16)
+
+"당초 하기로한 순서대로 진행해줘"라는 요청에 따라, AudioSR → MuScriptor 다음으로 정해뒀던 로드맵 3번째 항목(RVC/Seed-VC 보컬 음색 변환)에 착수했다. audio.cpp가 음색 변환을 두 갈래로 제공한다는 걸 확인했다 — RVC(`model_specs/rvc.json`, `"status": "experimental"`, 내장 음색 4개 중에서만 선택)와 Seed-VC(`model_specs/seed_vc.json`, `"status": "supported"`, 임의의 참조 오디오로 제로샷 변환, 노래 전용 `svc` 태스크 있음). AudioSR/MuScriptor 때 세운 기준(`status` 필드로 안정성 판단)을 그대로 적용해 Seed-VC를 택했다.
+
+audio.cpp를 `-Models "yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc"`로 재빌드했는데, 빌드 로그에서 `seed_vc`가 이전엔 전혀 컴파일된 적 없었다는 걸 확인했다(14개 새 오브젝트 파일). 모델(SeedVC-MLX Q8_0 GGUF, 2.90GB) 다운로드 중 흥미로운 문제를 만났다 — 기존 `scripts/download_models.py`의 `urllib` 기반 다운로드가 HuggingFace의 Xet 스토리지 백엔드에서 초당 4MB를 받은 뒤 완전히 멈췄다(같은 URL을 `curl`로 받으면 36MB/s로 정상 동작 — urllib 쪽 문제로 추정, 원인은 못 찾음). `curl`로 직접 받아 우회한 뒤 스크립트를 재실행해 sha256 검증만 통과시켰다.
+
+Seed-VC는 보컬 트랙 하나만 변환하는 모델이라, 곡 전체를 그대로 넣을 수 없다. 그래서 `convertVocalTimbre()`(`backend/server.mjs`)가 기존 STEM 분리 로직(`separateStems(entry, 'vocal')`, Mel-Band RoFormer)을 재사용해 보컬/반주를 먼저 나누고, 보컬만 Seed-VC SVC(`--task-route v1_svc`)로 변환한 뒤 ffmpeg `amix` 필터로 반주와 다시 합쳐 새 완성곡으로 저장하는 파이프라인을 짰다. 완성곡 메뉴에 "보컬 음색 변환"(`Mic` 아이콘) 버튼과 `VocalTimbreDialog`(참조 음색 파일 업로드+제목+진행률)를 추가했는데, AudioSR급으로 느려서(RTF ≈ 0.82, MuScriptor의 0.024보다 훨씬 느림) 음원 복원 때 쓴 진행률 폴링 UI 패턴을 그대로 재사용했다.
+
+Phase 0로 먼저 CLI를 직접 실행해 검증했다 — 실제 라이브러리 곡의 보컬을 추출해 다른 곡의 보컬을 참조 음색으로 40초 클립 변환(33초 소요, 유효한 오디오 확인)한 뒤, 실제 브라우저 UI로 2분 11초 완성곡을 끝까지 변환하는 종단 테스트까지 완료했다(파일 업로드 → 변환 → 라이브러리에 새 곡으로 저장, 임시 파일/STEM 폴더 정리까지 확인). 결과물을 사용자에게 전달했다. 백엔드 테스트 추가(가짜 spawn으로 STEM 분리→seed_vc→amix 순서와 누락 모델 400 검증, 14개 스위트 전부 통과), `npm run check` 통과. 문서(`docs/audiocpp-setup.md`에 "보컬 음색 변환" 절 신설, `docs/models.md`/`README.md`/`progress.md`) 및 memory-bank 갱신.
+
+## MIDI 편집기에 신디사이저 미리듣기 추가 + 프로젝트 목록 스캔 버그 수정 (2026-09-16)
+
+사용자가 "신디사이저 소리듣기는 모야? 그거도 넣으면 환상적일거 같은데"라며 이전에 범위 밖으로 뺐던 재생 기능을 요청해서 바로 이어서 구현했다. 외부 라이브러리나 사운드폰트 없이 Web Audio API의 `OscillatorNode`+`GainNode`만으로 만들었다 — 악기 태그별로 파형을 다르게 매핑(피아노류는 triangle, 현/기타류는 sawtooth, 베이스/보컬/플루트는 sine 등)하고, 클릭 노이즈를 막기 위해 각 음표마다 짧은 attack/release 램프가 있는 게인 엔벨로프를 걸었다. 재생은 현재 편집기에 있는(아직 저장하지 않은) 노트 상태를 그대로 스냅샷해서 스케줄링하므로, 편집 후 저장 전에도 바뀐 내용을 바로 들어볼 수 있다. 피아노롤 위로 재생 위치를 보여주는 세로선(플레이헤드)이 `requestAnimationFrame`으로 실시간 이동하고, 음표를 옮기거나 추가/삭제하면 재생 중이던 예약이 자동으로 멈춘다(그대로 두면 편집 전 상태의 소리가 남아있게 되므로).
+
+구현 중 실제 브라우저로 종단 검증을 하다가 진짜 버그를 하나 발견했다 — `.notes.json` 캐시 파일이 `.mid`와 같은 `library/music/` 폴더에 저장되는데, 프로젝트 목록을 만드는 `listEntries()`가 그 폴더의 `*.json` 전부를 프로젝트 파일로 취급해서 읽고 있었다. `.notes.json`은 `{title, id, ...}` 형태의 프로젝트가 아니라 평범한 노트 배열이라, 이게 "프로젝트"로 잘못 섞여 들어가면 `title`이 `undefined`가 되어 프론트의 정렬 로직(`b.title.localeCompare(a.title)`)이 런타임에 크래시했다(실제로 페이지가 하얗게 깨지는 걸 목격함). `listEntries()`의 `.json` 필터에 `!name.endsWith('.notes.json')`을 추가해 고쳤고, 고치기 전으로 되돌려서 새로 추가한 회귀 테스트가 실제로 이 문제를 잡아내는 것까지 확인한 뒤 다시 복구했다. `npm test`(13개 전부 통과)+`npm run check` 통과, 실제 라이브러리 곡으로 브라우저에서 재생/정지 버튼과 플레이헤드 애니메이션 동작 확인.
+
+## MIDI 편집기 팝업(음표 보기/수정/저장) 추가 (2026-09-16)
+
+"MIDI로 내보내기만 하면 미디가 어떻게 되었는지 확인이 불가능하다"는 사용자 지적에 따라, 메뉴를 눌렀을 때 바로 다운로드하는 대신 SVG 피아노롤 팝업을 띄우도록 바꿨다. 범위를 물어봤을 때 사용자가 "음표 추가까지는 이번에 같이 넣어줘"라고 답해서, 이동/리사이즈/삭제뿐 아니라 빈 공간 클릭으로 새 음표를 추가하는 것까지 이번 범위에 포함했다(재생/신디사이저 미리듣기는 제외).
+
+구현 전 확인해보니 MuScriptor CLI가 `--out result.mid`와 동시에 `--text-out result.json`을 한 번의 실행으로 같이 뽑을 수 있었다(실제 실행해서 JSON 형태 확인: `{"type":"start"|"end", "pitch", "start_time"|"end_time", "index", "start_event_index", "instrument"}` 쌍). 그런데 MuScriptor에도 audio.cpp 전체에도 "편집된 노트 목록 → 표준 MIDI 파일"로 되돌리는 인코더는 없어서, `backend/midi.mjs`에 SMF(포맷 0·단일 트랙) 인코더를 새로 작성했다 — 템포 메타 이벤트, 악기 이름→General MIDI Program Change 매핑, 초→틱 변환, 가변길이 델타타임 인코딩까지 직접 구현. `exportMidi()`를 확장해 `.mid`와 함께 `<파일명>.notes.json`(정리된 평평한 배열)을 같은 mtime 캐싱 규칙으로 저장하고, `GET /midi/notes`(조회)·`POST /midi`(편집 저장, `encodeMidiFile()`로 재인코딩해 캐시 덮어씀) 라우트를 추가했다.
+
+프론트는 기존 `EqBar`/`Knob`의 `setPointerCapture` 드래그 패턴을 참고해 `MidiEditorDialog`(`app/app/studio.tsx`)를 새로 작성했다 — SVG를 택한 이유는 음표별로 개별 `onPointerDown`을 붙이기 쉬워서(이 프로젝트의 기존 캔버스 시각화는 전부 읽기 전용이라 인터랙션엔 안 맞음). 몸통 드래그로 이동, 좌/우 가장자리 드래그로 리사이즈, 빈 배경 클릭으로 새 음표 추가(악기는 다이얼로그 상단 드롭다운, 기본값은 그 곡에서 가장 많이 쓰인 악기), 선택 후 삭제 버튼, 하단에 취소/저장/다운로드. 검증: `backend/midi.mjs`로 만든 `.mid`를 Python `mido`로 라운드트립 검증(타이밍·Program Change 정확함). 실제 라이브러리 곡("JR0001-1 내가 기다리는 것")으로 로컬 dev 서버를 열어 브라우저에서 종단 확인 — 실제 MuScriptor 추출 결과가 피아노롤에 정확히 렌더링, 클릭 선택/삭제/빈칸 클릭 추가 모두 동작, 저장 후 서버에서 다시 받은 노트와 재다운로드한 `.mid`(다시 `mido`로 검증)에 편집이 반영됨을 확인. 테스트에 notes GET/POST 라운드트립 케이스 추가(`backend/server.test.mjs`, 여전히 13개 스위트 전부 통과). `npm run check` 통과.
+
+## AudioSR 클릭 잡음 원인 확정(L/R 분리와 무관) + MIDI로 내보내기(MuScriptor) 기능 추가 (2026-09-16)
+
+사용자가 "음원 복원" 결과물에서 "쇠긁는 소리"를 보고해서, ffmpeg `showspectrumpic` 필터로 스펙트로그램을 뽑아 원인을 추적했다. 처음 보내준 파일(모노를 스테레오로 복제한 테스트 소스)의 좌/우 채널을 각각 스펙트로그램으로 봤더니 17.2초·18.8초에 전 대역(DC~24kHz)을 덮는 수직선(클릭의 전형적 신호)이 있었다. 다음을 실측으로 하나씩 배제했다: L/R 분리·재결합(null-test로 원본과 -91dB=사실상 동일, 완전히 깨끗함), 좌우 디코릴레이션(스테레오 폭 AudioSR 전후 거의 동일), seed 값(42→123으로 바꿔도 같은 위치에 재현), 청크 분할(30초로 통짜 처리해도 그대로). 사용자가 "L/R 분리하지 말고 AudioSR만 해보라"고 요청해서, `channelsplit`를 전혀 거치지 않은 순수 모노 다운믹스(`ffmpeg pan=mono`)를 AudioSR에 직접 돌려봤는데도 클릭이 똑같이 재현됐다 — SongYUE2가 추가한 어떤 코드와도 무관하게 audio.cpp의 AudioSR 구현 자체의 문제임을 최종 확정했다(다른 곡으로 테스트하니 클릭 2개가 아니라 훨씬 잦은 빈도로 나옴). `model_specs/audiosr.json`이 이미 `"status": "experimental"`로 표시해뒀던 것과 부합한다. 사용자 결정에 따라 기능은 유지하되 사이드바 메뉴와 페이지에 "(실험적)" 표시+경고문을 추가하고, 근본 원인(STFT/hop, VAE 디코드 경계 등 audio.cpp C++ 내부) 조사는 `progress.md`에 할 일로 남겨두고 보류했다. 사용자가 스펙트로그램을 마음에 들어해서 `showspectrumpic` 사용법과 그래프 읽는 법(시간/주파수/색상 축, 대역폭 컷오프, 클릭의 수직선 신호)도 설명했다.
+
+이어서 로드맵의 다음 항목인 MuScriptor(오디오→MIDI)를 구현했다. AudioSR과 같은 패턴으로 `scripts/download_models.py`에 `MuScriptor-Small-GGUF/muscriptor-small-f32.gguf`(412MB)를 추가해 받고, audio.cpp를 `-Models "yue2,htdemucs,bs_roformer,audiosr,muscriptor"`로 재빌드했다. `model_specs/muscriptor.json`이 `"status": "supported"`(AudioSR과 달리 실험적 아님)로 표시된 대로, 실측도 매우 안정적이었다 — RTX 5070에서 30초 클립을 0.7초에 처리(RTF ≈ 0.024, 실시간 42배), 유효한 Standard MIDI 파일과 음악적으로 합리적인 노트 이벤트(피치·타이밍·악기 태그)가 나왔다. 속도가 워낙 빨라서 AudioSR/음원 복원 때처럼 진행률 폴링 UI를 만들 필요 없이, 완성곡 메뉴에 "MIDI로 내보내기" 버튼 하나 추가(`Music2` 아이콘, 다운로드 버튼 바로 아래)로 충분했다 — 백엔드 `exportMidi()`가 원본 오디오와 같은 폴더에 `<파일명>.mid`로 결과를 캐시해서(mtime 비교), 재다운로드는 0.08초 만에 즉시 응답한다. 실제 라이브러리 곡으로 종단 검증(가짜 spawn 아님) 후 사용자에게 결과 .mid 파일을 전달했다. `npm test`(13개 전부 통과)/`npm run check` 확인. 문서(`docs/audiocpp-setup.md`에 "MIDI로 내보내기" 절 신설, `docs/models.md`/`README.md`/`progress.md`) 및 memory-bank 갱신.
+
+## 음원 복원(AudioSR) + 채널 분리 기능 추가 (2026-09-16)
+
+audio.cpp의 `model_specs/`를 전부 훑어 음악 관련 미사용 기능(RVC/Seed-VC 음색 변환, ACE-Step/Stable Audio 대체 생성 엔진, MuScriptor 오디오→MIDI, AudioSR 오디오 복원)을 사용자에게 정리해 보고했고, 사용자가 "다 넣어보고 싶다"며 순서를 정해 하나씩 만들자고 해서 AudioSR을 1순위로 확정했다. 처음엔 "완전 저질 오디오 복원+임포트용 별도 메뉴"로 요청했다가, AudioSR이 출력을 무조건 모노로 만드는 것(우회 옵션 없음, 예전에 YuE2 자체 출력에 시도했을 때도 확인했던 한계)을 다시 짚어주자 "L/R 채널을 나눠 각각 복원한 뒤 합치자"는 우회 방식을 사용자가 직접 제안해서 그대로 채택했다.
+
+구현 중간에 사용자가 "L/R 분리를 STEM 분리처럼 후처리 다이얼로그로 넘기고, "..." 메뉴에 STEM1 앞에 추가해봐"라고 해서, 처음엔 AudioSR 복원 자체를 STEM 다이얼로그 재사용 방식으로 재설계하려 했다. 하지만 되물어보니 실제로는 **두 개의 완전히 독립된 기능**이었다 — ①"음원 복원"(AudioSR)은 사이드바의 별도 업로드 페이지로, 내부적으로만 L/R 분리·복원·재결합을 하고 사용자에게는 "복원" 하나로만 보임. ②"채널 분리"는 AudioSR과 무관하게, 완성곡 메뉴에서 AI 모델 없이 순수 `ffmpeg channelsplit`로 왼쪽/오른쪽을 나눠 기존 STEM 분리 UI(각 파트 EQ/FX 후처리 후 합쳐서 저장)를 그대로 재사용하는 범용 도구. 처음에 하나로 오해할 뻔한 걸 사용자가 직접 정정해줬다.
+
+**음원 복원**: `backend/server.mjs`에 `restoreAudio()`/`runAudioSr()` 추가, 새 라우트 `POST /api/audiosr-restore`. 업로드된 파일을 ffmpeg로 48kHz WAV로 정규화 → ffprobe로 채널 수 확인 → 모노면 그대로, 스테레오면 `channelsplit`로 분리해 채널마다 `audiocpp_cli --task s2s --family audiosr`를 따로 돌리고 `join` 필터로 재결합 → project 없이 바로 `finalizeToMusic()`으로 새 완성곡 저장(pseudo-project `{id, title, coverPath:null}`만으로 충분함을 확인 — `file` 파라미터는 애초에 안 쓰임). 사이드바 좌측 하단에 "음원 복원" 메뉴 신설(`Page` 타입에 `'restore'` 추가, `restorePage()` 렌더 함수, 업로드 input은 기존 "오디오에서 추출" 커버 업로드와 같은 FileReader→dataUrl 패턴 재사용).
+
+**채널 분리**: `STEM_MODES`(백엔드)/`STEM_MODE_CONFIG`(프론트)에 `channel: { stems: ['left','right'] }` 모드만 추가 — `STEM_NAMES`가 자동 유도되는 구조 덕분에 `/api/projects/:id/stems/:name` 라우트는 수정 없이 그대로 동작했고, 프론트 `StemDialog` 컴포넌트도 하드코딩된 stem 이름이 없어 `STEM_MODE_CONFIG`/`STEM_LABELS`만 확장하면 됐다(제목/로딩 문구만 `dialogTitle` 필드로 모드별 분기 추가). `separateStems()`는 `modeKey === 'channel'`일 때 audio.cpp 엔진/모델 체크를 완전히 건너뛰고 ffprobe+ffmpeg만 쓰도록 분기.
+
+빌드 중 실제로 겪은 문제: `build_windows.ps1`의 `-Models` 파라미터가 `[string]` 타입인데 따옴표 없이 `-Models yue2,htdemucs,bs_roformer,audiosr`라고 쓰면 PowerShell이 쉼표를 배열 연산자로 해석해 `ParameterBindingArgumentTransformationException`이 남 — `-Models "yue2,htdemucs,bs_roformer,audiosr"`처럼 반드시 따옴표로 감싸야 함(기존 문서의 예시 명령도 따옴표가 없었어서 이번에 처음 발견하고 전부 수정). 테스트의 가짜 spawn에서도 `args.includes('channelsplit')`(정확히 일치 비교)가 실제로는 `args.some(arg => arg.includes('channelsplit'))`(부분 문자열 포함)여야 했던 버그를 초기 테스트 실행에서 잡아 수정.
+
+실기 검증: 11kHz 모노/24kbps mp3로 실제 열화시킨 20초 테스트 클립을 AudioSR로 복원해 6kHz 이상 고음 평균 에너지가 -59.5dB(열화)→-51.0dB(복원)로 실제 개선됨을 확인(무손실 원본은 -42.6dB — 완전 복원은 아니지만 방향은 명확히 원본 쪽). 실제 SongYUE2 백엔드(가짜 spawn 아님)로 `/api/audiosr-restore`와 채널 분리 API를 둘 다 실행해 라이브러리 저장·스테레오 유지까지 확인. `npm test`(mock 테스트 포함 12개 전부 통과)/`npm run check` 통과. 문서(`docs/audiocpp-setup.md`에 채널 분리/음원 복원 절 신설, `docs/models.md`/`README.md`/`progress.md` 갱신) 및 memory-bank 갱신.
+
 ## ComfyUI 어댑터를 AudioAuK 재사용 → SongYUE2 독립 설치로 전환 (2026-09-16)
 
 직전 커밋(`1f76797`)에서는 사용자 지시에 따라 ComfyUI를 새로 설치하지 않고 자매 프로젝트 `C:\Claude\AudioAuK\engine\ComfyUI`를 재사용했는데, 사용자가 다시 "독립적으로 설치하면 디스크가 얼마나 필요한지" 물어봐서 실제 AudioAuK 설치를 측정해 답했다(`.venv` 4.10GB, 체크포인트 3.96GB 하드링크면 추가 비용 약 4.2GB, 완전 별도면 약 8.5GB). 이어서 사용자가 실제로 독립 설치 + 문서 갱신 + 실제 생성 테스트 + 커밋/푸시까지 요청해서 진행했다.

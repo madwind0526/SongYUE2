@@ -12,6 +12,10 @@
 - **완성곡 "커버" 원클릭**: 완성곡 메뉴의 "리믹스" 아래 "커버"를 누르면 그 곡의 오디오에서 멜로디/코드를 추출해 작곡 화면에 바로 채워 넣음(가사·스타일이 이미 있으면 유지할지 그 곡 설정으로 바꿀지 확인). 단, 실제 보컬 음색/톤까지 가져오는 기능은 아님 — 멜로디·코드와 성별 힌트만 전달됨
 - **후처리 / EQ 스튜디오**: 완성곡을 브라우저에서 실시간으로 미리 들으며 10밴드 EQ(프리셋 포함)·FxSound 노브(선명도/공간감/서라운드/다이내믹부스트/베이스부스트)·리버브·에코를 조절하고, 원본 파일은 그대로 둔 채 처리된 사본을 원래 파일 형식으로 저장. 재생 중인 트랙을 실시간 원형 비주얼라이저로 표시
 - **STEM 분리**: 완성곡을 두 모드 중 골라 분리 — 보컬+악기 2갈래(audio.cpp Mel-Band RoFormer, 보컬 누출이 더 적음) 또는 보컬+드럼+베이스+기타 4갈래(audio.cpp HTDemucs, 매우 빠름). 각 스템에 위 EQ/FxSound/리버브·에코를 따로 적용한 뒤 다시 하나로 합쳐 저장. 분리한 스템 파일은 임시 파일이라 창을 닫으면 사라지고 원본은 바뀌지 않음
+- **채널 분리**: STEM 분리와 같은 UI를 AI 모델 없이 재사용 — 완성곡을 왼쪽/오른쪽 채널로 나눠 각각 EQ/FxSound를 적용한 뒤 다시 합쳐 저장(스테레오 곡만 가능)
+- **음원 복원 (실험적)**: 사이드바의 "음원 복원" 메뉴에서 저음질 외부 오디오 파일을 업로드하면 AudioSR로 복원해 새 완성곡으로 라이브러리에 추가. 스테레오는 왼쪽/오른쪽을 각각 복원한 뒤 합쳐서 스테레오를 유지(AudioSR 자체는 모노만 출력하는 모델 한계가 있음). 이미 무손실인 오디오에는 효과 없음 — 실제로 저음질인 소스 전용. **클릭/틱 잡음이 재현되는 것을 확인해 실험적 기능으로 표시했습니다**(`progress.md` 참고)
+- **MIDI로 내보내기**: 완성곡 메뉴에서 audio.cpp의 MuScriptor로 오디오를 표준 MIDI 파일(악기·음표·타이밍)로 변환. 바로 다운로드하지 않고 SVG 피아노롤 팝업으로 먼저 보여줘서 음표를 확인·이동·리사이즈·삭제·추가한 뒤 저장(또는 취소)할 수 있고, "미리듣기" 버튼으로 브라우저 안에서 간단한 신디사이저 소리로 편집 내용을 바로 들어볼 수 있음(Web Audio 오실레이터 기반). 매우 빠르고(RTX 5070에서 30초 곡 기준 약 0.7초) 결과는 곡별로 캐시됨
+- **보컬 음색 변환 (실험적)**: STEM 분리와 같은 UI 골격 재사용 — 사이드바에서 목표 음색의 짧은 참조 오디오를 고르고 "적용"을 누르면 audio.cpp의 Seed-VC(Singing Voice Conversion)로 완성곡을 보컬/반주로 먼저 분리한 뒤 보컬만 변환(변환 직후 원본과의 음량 차이를 자동 보정 — 음량 보정+피크 리미터), 보컬/악기 두 트랙이 나타나 각각 "후처리"(EQ/FX)도 가능. 아래엔 원본과 합친 미리듣기 비교. 다른 참조로 다시 적용하면 보컬만 재변환(반주 후처리는 유지). "합치기" 후 "저장"으로 새 완성곡을 라이브러리에 추가(원곡은 그대로 유지). 보컬 분리+음색 변환을 순서대로 거치므로 원곡보다 음질이 떨어질 수 있고, AudioSR만큼 느림(RTX 5070에서 RTF ≈ 0.82)
 - 라이브러리(완성곡) / 프로젝트(초안·설정) 완전 분리 — 하나를 지워도 다른 하나는 그대로 유지
 - 재생목록 생성 및 PC에서 연속 재생, 앨범 커버 등록
 - wav / flac / mp3 / mp4 다중 포맷 다운로드
@@ -30,13 +34,13 @@
 | git | 필수 | audio.cpp/YuE2 소스를 받는 데 필요 |
 | Visual Studio 2022 C++ workload, CUDA Toolkit, [uv](https://docs.astral.sh/uv/) | 엔진별 선택 | 아래 "설치" 3단계 참고 — 최소 하나는 있어야 실제 곡 생성이 됩니다 |
 | ffmpeg (PATH 등록) | 선택 | wav 이외 형식(flac/mp3/mp4) 저장·다운로드, SheetSage2 커버 기능, STEM 분리(입력을 44.1kHz로 변환)에 필요 |
-| 디스크 여유 공간 | 넉넉히 | 모델 가중치만 약 23.55GB(항상 전부 다운로드, 선택 불가), 엔진 빌드/가상환경은 별도로 각 15~20GB. 아래 표 참고 |
+| 디스크 여유 공간 | 넉넉히 | 모델 가중치만 약 33.54GB(항상 전부 다운로드, 선택 불가), 엔진 빌드/가상환경은 별도로 각 15~20GB. 아래 표 참고 |
 
 **디스크/네트워크 용량 요약** (자세한 내용은 [docs/models.md](docs/models.md), [docs/audiocpp-setup.md](docs/audiocpp-setup.md), [docs/python-engine-setup.md](docs/python-engine-setup.md)):
 
 | 구성 요소 | 용량 | 필요한 경우 |
 |---|---|---|
-| `scripts/download_models.py` 전체 다운로드 | 약 23.83GB | **선택 옵션이 없어 항상 5개 저장소(전체 스냅샷 4개 + HTDemucs/Mel-Band RoFormer 단일 파일 2개)를 받습니다** — GGUF만 쓸 계획이어도 원본 모델(7.79GB)이 함께 받아짐 |
+| `scripts/download_models.py` 전체 다운로드 | 약 33.54GB | **선택 옵션이 없어 항상 5개 저장소(전체 스냅샷 4개 + HTDemucs/Mel-Band RoFormer/AudioSR/MuScriptor/Seed-VC 단일 파일 5개)를 받습니다** — GGUF만 쓸 계획이어도 원본 모델(7.79GB)이 함께 받아짐 |
 | audio.cpp 소스 빌드(engine/) | 소스는 작지만 CUDA Toolkit·VS Build Tools 자체가 수 GB | GGUF 모델(Q4/Q8/BF16), STEM 분리 사용 시 |
 | YuE2 원본 Python venv(test/YuE2-source/.venv) | 약 15~20GB(torch+CUDA 휠 포함, `.uv-cache` 삭제 전 기준) | "YuE2 - 원본" 모델 사용 시 |
 | SheetSage2 전용 venv(test/YuE2-source/.venv-sheetsage2) + 모델 | 약 2GB(venv) + 2GB(모델, 첫 전사 시) | "커버"/"오디오에서 추출" 기능 사용 시 |
@@ -107,15 +111,18 @@ cp .env.sample .env
 python scripts/download_models.py
 ```
 
-이 한 번의 실행으로 ①②④가 쓸 모델(GGUF + 원본 Python 본체/VAE + STEM 분리용 HTDemucs/Mel-Band RoFormer, 약 23.83GB)이 전부 받아집니다. 선택적으로 일부만 받는 옵션은 없습니다(GGUF만 쓸 계획이어도 원본 모델이 함께 받아짐). 시간이 오래 걸리며, 중단 후 재실행하면 이어받기/해시 검증을 하므로 다시 실행해도 안전합니다. ③ SheetSage2의 전사 모델은 이 스크립트가 아니라 별도로 받습니다(아래 참고). 완료되면 `model-download-status.json`의 각 저장소 `state`가 `"complete"`인지 확인하세요.
+이 한 번의 실행으로 ①②④⑥⑦⑧이 쓸 모델(GGUF + 원본 Python 본체/VAE + STEM 분리용 HTDemucs/Mel-Band RoFormer + AudioSR + MuScriptor + Seed-VC, 약 33.54GB)이 전부 받아집니다. 선택적으로 일부만 받는 옵션은 없습니다(GGUF만 쓸 계획이어도 원본 모델이 함께 받아짐). 시간이 오래 걸리며, 중단 후 재실행하면 이어받기/해시 검증을 하므로 다시 실행해도 안전합니다. ③ SheetSage2의 전사 모델은 이 스크립트가 아니라 별도로 받습니다(아래 참고). 완료되면 `model-download-status.json`의 각 저장소 `state`가 `"complete"`인지 확인하세요.
 
 이제 아래 중 하나 이상을 골라 그 문서를 **처음부터 끝까지** 따라가세요(각 문서에 자체 "0단계 사전 준비"가 있습니다).
 
 - **① audio.cpp (GGUF, 가장 가볍고 권장 시작점)**: Q4/Q8/BF16 GGUF 모델로 빠르게 생성합니다. Visual Studio 2022 C++ workload + CUDA Toolkit으로 소스에서 직접 빌드해야 합니다(사전 빌드 바이너리 없음 — yue2 지원이 아직 dev 브랜치 전용). → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)**
 - **② 원본 Python 파이프라인 ("YuE2 - 원본" 모델)**: 24GB급 VRAM을 권장하는 공식 모델(12GB급도 메모리 예산을 낮추면 짧은 곡은 동작 확인됨). 공식 YuE2 저장소를 받아 `uv`로 전용 가상환경을 구성해야 합니다. → **[docs/python-engine-setup.md](docs/python-engine-setup.md)**
 - **③ SheetSage2 (선택, "커버"/"오디오에서 추출" 기능 전용)**: 완성곡이나 업로드한 오디오에서 멜로디/코드를 ABC 악보로 추출합니다. ②와는 완전히 별도의 Python 가상환경이 필요합니다(버전 충돌 방지). `ffmpeg`도 PATH에 있어야 합니다. → **[docs/python-engine-setup.md](docs/python-engine-setup.md)의 SheetSage2 절**
-- **④ STEM 분리 (선택, 완성곡의 "STEM 분리" 기능 전용)**: 완성곡을 보컬/악기 2갈래(mel_band_roformer) 또는 보컬/드럼/베이스/기타 4갈래(htdemucs)로 분리합니다. ①과 같은 `audiocpp_cli.exe`를 쓰므로, ①을 빌드할 때 `-Models yue2,htdemucs,bs_roformer`로 함께 빌드하면 별도 작업이 필요 없습니다(`bs_roformer`와 `mel_band_roformer`는 같은 CMake 모듈의 별칭이라 하나만 적어도 둘 다 빌드됨). → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)의 STEM 분리 절**
+- **④ STEM 분리 / 채널 분리 (선택, 완성곡의 해당 메뉴 전용)**: 완성곡을 보컬/악기 2갈래(mel_band_roformer) 또는 보컬/드럼/베이스/기타 4갈래(htdemucs)로 분리합니다. "채널 분리"(왼쪽/오른쪽)는 AI 모델이 필요 없어 별도 빌드/다운로드가 없습니다. ①과 같은 `audiocpp_cli.exe`를 쓰므로, ①을 빌드할 때 `-Models "yue2,htdemucs,bs_roformer"`로 함께 빌드하면 별도 작업이 필요 없습니다(`bs_roformer`와 `mel_band_roformer`는 같은 CMake 모듈의 별칭이라 하나만 적어도 둘 다 빌드됨. `-Models` 값은 항상 따옴표로 감싸야 합니다). → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)의 STEM 분리/채널 분리 절**
 - **⑤ ComfyUI (선택, "YuE2 - INT8 ConvRot" 모델 전용)**: ComfyUI(v0.35.0+, YuE2 네이티브 지원)를 `engine/ComfyUI`에 독립 설치해 HTTP API로 연동합니다(약 4.2GB — `.venv`+코드, 체크포인트는 하드링크). VRAM 절약 효과는 없고 다운로드 용량만 작습니다 — 저VRAM 환경에서 고를 실익은 적습니다. → **[docs/comfyui-setup.md](docs/comfyui-setup.md)**
+- **⑥ AudioSR (선택, "음원 복원" 메뉴 전용, 실험적)**: 저음질 오디오를 복원하는 audio.cpp의 AudioSR 모델(약 6.18GB, f32 단일 정밀도)입니다. ①을 빌드할 때 `-Models "yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc"`로 `audiosr`을 포함해야 합니다. **클릭/틱 잡음이 재현되는 것을 확인한 실험적 기능**입니다 — `progress.md` 참고. → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)의 음원 복원 절**
+- **⑦ MuScriptor (선택, "MIDI로 내보내기" 메뉴 전용)**: 완성곡을 표준 MIDI 파일로 변환하는 audio.cpp의 MuScriptor 모델(약 412MB). 매우 빠름(RTX 5070에서 30초 곡 기준 약 0.7초). ①을 빌드할 때 `-Models "yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc"`로 `muscriptor`를 포함해야 합니다. → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)의 MIDI로 내보내기 절**
+- **⑧ Seed-VC (선택, "보컬 음색 변환" 메뉴 전용, 실험적)**: 완성곡의 보컬 음색을 참조 오디오로 바꾸는 audio.cpp의 Seed-VC 모델(약 2.90GB, MLX Q8_0). ①을 빌드할 때 `-Models "yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc"`로 `seed_vc`를 포함해야 합니다. 보컬 분리(STEM)+음색 변환을 순서대로 거치는 다단계 파이프라인이라 원곡보다 음질이 떨어질 수 있고, AudioSR만큼 느립니다(RTX 5070에서 RTF ≈ 0.82). → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)의 보컬 음색 변환 절**
 
 > "심볼릭 작곡"·"악기만"·ABC 기반 커버는 최종 생성에 ①이나 ②를 쓰더라도, ABC 악보 준비(계획 생성/보컬 성부 뮤트) 자체는 항상 ②의 Python 엔진(`abc_tools.py`)을 거칩니다. 즉 GGUF만 쓰더라도 이 기능들을 쓰려면 ②의 Python 환경 구성이 필요합니다.
 
@@ -139,6 +146,8 @@ npm run dev
 | Python 실행 파일 (원본 모델용) | `test\YuE2-source\.venv\Scripts\python.exe` |
 | Python 스크립트 (run_yue2.py) | `test\YuE2-source\skills\yue2-music\scripts\run_yue2.py` |
 | SheetSage2 Python 실행 파일 | `test\YuE2-source\.venv-sheetsage2\Scripts\python.exe` |
+| ComfyUI 연결 주소 | `http://127.0.0.1:8190` (기본값, 비워두면 자동 사용) |
+| ComfyUI 설치 폴더 | `engine\ComfyUI` (기본값, 비워두면 자동 사용) |
 
 경로는 모두 SongYUE2 폴더 기준 상대 경로 또는 절대 경로를 쓸 수 있습니다.
 

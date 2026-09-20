@@ -110,3 +110,60 @@ function buildProcessingGraph(ctx: BaseAudioContext, source: AudioNode, params: 
 // 저장용 전체 렌더링: const offline = new OfflineAudioContext(...); buildProcessingGraph(offline, offlineSource, params).connect(offline.destination); await offline.startRendering();
 ```
 핵심은 함수 시그니처를 구체 타입(`AudioContext`)이 아니라 공통 상위 타입(`BaseAudioContext`)으로 받는 것 — `AudioContext`와 `OfflineAudioContext`는 노드 생성 API(`createBiquadFilter` 등)가 동일하므로 그래프 구성 로직이 완전히 재사용된다. 파라미터가 바뀔 때마다(디바운스 후) `OfflineAudioContext`로 전체를 다시 렌더링해 파형/저장용 버퍼를 갱신하고, 재생 버튼은 같은 함수로 만든 라이브 그래프를 쓰면 "화면에 보이는 처리 결과 파형"과 "실제로 저장되는 파일"이 항상 일치한다. 출처: `app/app/studio.tsx`의 `PostProcessDialog`/`buildProcessingGraph`, 실측 검증(EQ 밴드+FxSound 노브 드래그 → 처리 파형 디바운스 갱신 → 저장 → ffmpeg 재인코딩된 실제 파일 생성까지 chrome-devtools로 end-to-end 확인, 2026-09-12).
+
+## `PostProcessDialog`는 이미 "프로젝트 없이 임의의 AudioBuffer를 후처리"하는 모드(`sourceOverride`/`onSaveOverride`/`titleOverride`)를 지원함 — 새 EQ 편집기를 만들기 전에 먼저 확인할 것
+
+**사용 시점:** "이 오디오에도 EQ/FX/리버브·에코를 적용하고 싶다"는 요구가 프로젝트(라이브러리에 저장된 완성곡)가 아닌 임의의 클라이언트 측 버퍼(업로드 직후 파일, STEM 트랙, 두 오디오 비교 등)에 대해 나올 때, `PostProcessDialog`를 처음부터 다시 만들지 말 것.
+
+```tsx
+<PostProcessDialog
+  project={{ id: 'stable-unique-id', title: displayName } as unknown as Project} // .id/.title만 실제로 쓰임(마운트 이펙트 dep, 다이얼로그 설명문)
+  sourceOverride={{ buffer: myAudioBuffer, params: myCurrentParams }} // 있으면 project.id로 /api/projects/:id/audio를 fetch하지 않고 이 buffer를 그대로 씀
+  onSaveOverride={(processedBuffer, params) => { /* 네트워크 왕복 없이 바로 호출됨 -- saveProcessedBuffer()(다운로드 전용)는 건너뜀 */ }}
+  titleOverride={displayName} // 다이얼로그 제목/설명문에 사용, onSaveOverride가 있으면 project.title 대신 이걸 씀
+  onClose={...} notify={...}
+  visualizerEnabled={false} visualizerRingCount={1} visualizerHue={0} visualizerLineWidth={1} visualizerTrail={0} visualizerSpiral={0} visualizerRingMode="radial" visualizerTimeStep={0.1} visualizerTimeSkew={1} visualizerRingStep={1} visualizerAmplitude={1}
+/>
+```
+`project`는 타입상 필수지만 `sourceOverride`+`onSaveOverride`가 둘 다 있으면 `project.id`/`project.title`은 실질적으로 읽히지 않는다(마운트 이펙트의 fetch 분기와 다운로드 전용 저장 분기 둘 다 건너뜀) — 안정적인 더미 id(리마운트 방지를 위해 `key={행 구분자}`와 함께)만 넘기면 충분하다. 이 메커니즘은 `StemDialog`가 스템별 "후처리" 버튼에 이미 쓰고 있었다(`editingStem`+`handleStemSaved`) — "음원 비교"(두 임의 오디오를 각각 후처리해서 비교) 기능을 추가할 때 그대로 재사용해 새 EQ UI를 전혀 안 만들고 끝냈다(2026-09-18).
+**이유:** `PostProcessDialog`는 10밴드 EQ+FxSound 5노브+리버브/에코+프리셋+서클 비주얼라이저까지 갖춘 무거운 컴포넌트라 처음부터 다시 만들면 수백 줄이 중복된다. 이미 "프로젝트 종속성을 뺀" 우회 경로가 준비되어 있다는 걸 모르고 새로 만들면 이 모든 기능을 재구현하게 된다.
+
+## 오디오 재생 상태/전송 로직은 `useAudioTransport`(`app/app/studio.tsx`) 하나를 쓸 것 — 다이얼로그마다 직접 재구현하지 말 것
+
+**사용 시점:** 새 오디오 비교/변환/복원 다이얼로그에서 재생·seek·속도·볼륨·waveform peaks가 필요할 때.
+
+```tsx
+const t = useAudioTransport();
+// t.setBuffer(key, AudioBuffer|null) → peaks 자동 계산
+// t.bufferForKey(key), t.peaksForKey(key), t.handleKeyClick(key)
+// t.rowClass(key, base), t.activeKey/isPlaying/positionSeconds/playedFraction
+// t.seekTo/seekBy/cycleSpeed/applyPreviewVolume/stopPlayback/closeContext
+<SeekRow t={t}/> <TransportControls t={t}/>
+```
+
+`useAudioTransport`(1881쪽, `buffersRef`/`peaksMap`/AudioContext+playing-position 추적 전부 포함)는 현재 `TimbreTransformDialog`만 쓰지만, `AudioRestoreDialog`(2676~)·`AudioCompareDialog`(2921~)가 즐겨찾는 버그를 그대로 각자 ~150줄씩 재구현했다(전송 로직이 3벌 존재). 새 다이얼로그는 처음부터 `useAudioTransport`로 시작하고, 기존 2개는 후속 리팩터에서 통합할 것. 출처: `app/app/studio.tsx`, 2026-09-20 코드 감사.
+
+## 새 다이얼로그가 공용 `audio-compare-dialog` 클래스를 재사용하면 그 CSS가 전부 적용된다 (avatars: 레거시/비교 레이아웃 분리)
+
+**사용 시점:** 다른 목적으로 만든 다이얼로그(`TimbreTransformDialog`)에 차트 레이아웃(`CompareWaveform`/`CompareSpectrogram`)이 필요하다고 기존 다이얼로그 클래스(`audio-compare-dialog`)를 그대로 얹을 때.
+
+```css
+/* 공용 클래스를 재사용하되, 원래 용도(비교 차트)와 다른 뷰는 전용 클래스로 분리 */
+.timbre-transform-dialog .stem-list.timbre-legacy-list .stem-row {
+  display: flex; flex-direction: row; align-items: center; gap: 10px; padding: 7px 0;
+}
+```
+
+`audio-compare.css`의 `.audio-compare-dialog .stem-row{flex-direction:column}`은 비교 차트(툴바+스펙트로그램)용 세로 레이아웃이다. 이걸 `TimbreTransformDialog`에 물려받으면 Seed-VC/Vevo 레거시 행(아이콘+라벨+파형)까지 세로로 쌓이고, column flex에서 `.pp-waveform`의 `flex:1`(=flex-basis:0)이 **높이 축을 0으로 붕괴**시켜 파형이 안 보인다. 공용 클래스 안에서도 다른 레이아웃이 필요한 하위 뷰에는 전용 클래스를 새로 붙여 오버라이드할 것(명시도 0,1,0 → 0,4,0으로 이김). 상세: `memory-bank/knowledge/trouble-shooting.md`의 "레거시 파형 안 보임" 항목.
+
+## 설정 기본값에 사용자 머신의 절대 경로를 하드코딩하지 말 것
+
+**사용 시점:** `studio-data.ts`의 `DEFAULT_*` 상수나 `.env.sample`에 외부 도구(ComfyUI, AudioAuK, DDSP-SVC 등) 경로를 넣을 때.
+
+`DEFAULT_AUDIO_AUK_PATH='C:\Claude\AudioAuK'`처럼 사용자별 절대 경로를 기본값으로 넣으면, 다른 PC(혹은 폴더를 옮긴 같은 PC)에서는 깨지기 쉬운 설정이 된다. 기본값은 빈 문자열로 두고 첫 실행 시 경로 탐색/유도로 안내하고, 성공 중인 경로는 각자 `data/settings.json`에 저장되는 구조가 낫다(기존 `enginePath`류 설정과 동일 패턴).
+
+## 다이얼로그 폼은 label-control 연결을 명시할 것 (`role="group"` 남발 금지)
+
+**사용 시점:** `AudioToolsPage`/`TimbreTransformDialog`처럼 입력 필드+설명문 데이터 기반 폼을 그릴 때.
+
+`<label className="field-hint">...<Input/>`처럼 label로 감싸는 방식은 접근성 트리에서 인식되게 `htmlFor`+`id`로 연결하고, 단순 컨테이너에 `role="group"` 대신 의미론적 태그(필요 시 `aria-labelledby`)를 쓴다. `<audio>`/`<canvas>`에는 재생 상태를 알릴 `aria-label`/설명이 있어야 한다. 화면 낭독 대상이므로 키보드 포커스가 아니라 접근성 검사 상의 경고로 잡히는 항목들.

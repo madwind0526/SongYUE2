@@ -1,8 +1,10 @@
 'use client';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import './audio-compare.css';
+import './timbre-transform.css';
 import * as ABCJS from 'abcjs';
-import { AudioLines, ArrowDownToLine, ArrowRight, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Combine, Cpu, Dices, Disc3, Download, FastForward, FileText, Folder, FolderOpen, Guitar, Headphones, Heart, Home, Image as ImageIcon, Layers, LayoutGrid, ListMusic, ListPlus, LoaderCircle, Menu, Mic, MoreVertical, Music2, Pause, Pencil, Play, Plus, Power, RefreshCw, Rewind, RotateCcw, Save, Search, Settings2, ShieldCheck, SkipBack, SkipForward, SlidersHorizontal, Sparkles, Square, Trash2, Upload, Volume2, WandSparkles, X } from 'lucide-react';
+import { AudioLines, ArrowDownToLine, ArrowRight, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Combine, Cpu, Dices, Disc3, Download, FastForward, FileText, Folder, FolderOpen, GitCompare, Guitar, Headphones, Heart, Home, Image as ImageIcon, Layers, LayoutGrid, ListMusic, ListPlus, LoaderCircle, Menu, Mic, MoreVertical, Music2, Pause, Pencil, Play, Plus, Power, RefreshCw, Rewind, RotateCcw, Save, Search, Settings2, ShieldCheck, SkipBack, SkipForward, SlidersHorizontal, Sparkles, Square, Trash2, Upload, Volume2, WandSparkles, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -10,7 +12,7 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/compone
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogFooter, AlertDialogTitle, AlertDialogDescription, AlertDialogAction, AlertDialogCancel } from '@/components/ui/alert-dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Progress } from '@/components/ui/progress';
-import { api, emptyDraft, initialSettings, models, providers, saveFormats, viewModes, titles, gb, DEFAULT_SETTING_PATH, DEFAULT_MUSIC_PATH, DEFAULT_EXAMPLES_PATH, DEFAULT_COVERS_PATH, DEFAULT_ABC_NOTES_PATH, DEFAULT_STYLE_PRESETS, DEFAULT_VISUALIZER_RING_COUNT, DEFAULT_VISUALIZER_HUE, DEFAULT_VISUALIZER_LINE_WIDTH, DEFAULT_VISUALIZER_TRAIL, DEFAULT_VISUALIZER_SPIRAL, DEFAULT_VISUALIZER_RING_MODE, DEFAULT_VISUALIZER_TIME_STEP, DEFAULT_VISUALIZER_TIME_SKEW, DEFAULT_VISUALIZER_RING_STEP, DEFAULT_VISUALIZER_AMPLITUDE, DEFAULT_ENGINE_PATH, DEFAULT_COMFYUI_ENDPOINT, DEFAULT_COMFYUI_ENGINE_PATH, PYTHON_MODEL_MIN_VRAM_MB, type Page, type Draft, type Project, type Settings, type Inventory, type Example, type Playlist, type AbcNote, type SaveFormat, type SystemInfo } from './studio-data';
+import { api, emptyDraft, initialSettings, models, providers, saveFormats, viewModes, titles, gb, DEFAULT_SETTING_PATH, DEFAULT_MUSIC_PATH, DEFAULT_EXAMPLES_PATH, DEFAULT_COVERS_PATH, DEFAULT_ABC_NOTES_PATH, DEFAULT_MIDI_PATH, DEFAULT_STYLE_PRESETS, DEFAULT_VISUALIZER_RING_COUNT, DEFAULT_VISUALIZER_HUE, DEFAULT_VISUALIZER_LINE_WIDTH, DEFAULT_VISUALIZER_TRAIL, DEFAULT_VISUALIZER_SPIRAL, DEFAULT_VISUALIZER_RING_MODE, DEFAULT_VISUALIZER_TIME_STEP, DEFAULT_VISUALIZER_TIME_SKEW, DEFAULT_VISUALIZER_RING_STEP, DEFAULT_VISUALIZER_AMPLITUDE, DEFAULT_ENGINE_PATH, DEFAULT_COMFYUI_ENDPOINT, DEFAULT_COMFYUI_ENGINE_PATH, DEFAULT_AUDIO_AUK_ENDPOINT, DEFAULT_AUDIO_AUK_PATH, DEFAULT_DDSP_SVC_PATH, PYTHON_MODEL_MIN_VRAM_MB, type Page, type Draft, type Project, type Settings, type Inventory, type Example, type Playlist, type AbcNote, type SaveFormat, type SystemInfo } from './studio-data';
 
 type SaveFilePickerFn = (options?: { suggestedName?: string; types?: { description: string; accept: Record<string, string[]> }[] }) => Promise<{ name: string; createWritable: () => Promise<{ write: (data: string | Blob) => Promise<void>; close: () => Promise<void> }> }>;
 const RANDOMIZE_SEED_KEY = 'songyue2-randomize-seed';
@@ -351,6 +353,126 @@ function Waveform({ peaks, playedFraction, variant }: { peaks: number[]; playedF
   return <div className={variant ? `pp-waveform pp-waveform-${variant}` : 'pp-waveform'}>{peaks.map((peak, index) => <span key={index} className={playedFraction !== undefined && index / peaks.length <= playedFraction ? 'played' : ''} style={{ height: `${Math.max(4, peak * 100)}%` }}/>)}</div>;
 }
 
+// In-place iterative radix-2 Cooley-Tukey FFT. `real`/`imag` length must be a power of 2.
+function fft(real: Float32Array, imag: Float32Array) {
+  const n = real.length;
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      const tr = real[i]; real[i] = real[j]; real[j] = tr;
+      const ti = imag[i]; imag[i] = imag[j]; imag[j] = ti;
+    }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const ang = -2 * Math.PI / len;
+    const wr = Math.cos(ang), wi = Math.sin(ang);
+    for (let i = 0; i < n; i += len) {
+      let curWr = 1, curWi = 0;
+      for (let k = 0; k < len / 2; k++) {
+        const ur = real[i + k], ui = imag[i + k];
+        const vr = real[i + k + len / 2] * curWr - imag[i + k + len / 2] * curWi;
+        const vi = real[i + k + len / 2] * curWi + imag[i + k + len / 2] * curWr;
+        real[i + k] = ur + vr; imag[i + k] = ui + vi;
+        real[i + k + len / 2] = ur - vr; imag[i + k + len / 2] = ui - vi;
+        const nwr = curWr * wr - curWi * wi;
+        const nwi = curWr * wi + curWi * wr;
+        curWr = nwr; curWi = nwi;
+      }
+    }
+  }
+}
+
+
+function CompareWaveform({ peaks, fraction, processed }: { peaks: number[]; fraction: number; processed: boolean }) {
+  const progress = Math.max(0, Math.min(1, fraction));
+  return <div className={`pp-waveform compare-waveform${processed ? ' pp-waveform-processed' : ''}`}>
+    <svg viewBox="0 0 1000 100" preserveAspectRatio="none" role="img" aria-label={`전체 음원 파형, 재생 위치 ${Math.round(progress * 100)}%`}>
+      {peaks.map((peak, index) => {
+        const x = (index + 0.5) / peaks.length * 1000;
+        const height = Math.max(2, Math.min(1, peak) * 46);
+        return <line key={index} x1={x} x2={x} y1={50 - height} y2={50 + height} stroke={index / peaks.length < progress ? (processed ? '#f2c94c' : '#add7a5') : '#596552'} strokeWidth={1.5}/>;
+      })}
+      {!!peaks.length && <line x1={progress * 1000} x2={progress * 1000} y1={0} y2={100} stroke="#fff" strokeWidth={1} vectorEffect="non-scaling-stroke"/>}
+    </svg>
+  </div>;
+}
+
+function CompareSpectrogram({ buffer, fraction }: { buffer: AudioBuffer | null; fraction: number }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [rendering, setRendering] = useState(false);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (!buffer) { setRendering(false); return; }
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    setRendering(true);
+    const width = canvas.width, height = canvas.height, size = 2048;
+    const channels = Array.from({ length: buffer.numberOfChannels }, (_, i) => buffer.getChannelData(i));
+    const real = new Float32Array(size), imag = new Float32Array(size);
+    const power = new Float64Array(size / 2);
+    const window = Float32Array.from({ length: size }, (_, i) => 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (size - 1)));
+    const windowSum = window.reduce((a, b) => a + b, 0);
+    const pixels = ctx.createImageData(width, height);
+    const colors = [[0, 0, 0], [21, 0, 65], [85, 0, 126], [181, 0, 89], [241, 40, 16], [255, 163, 0], [255, 255, 170]];
+    let x = 0;
+    const drawChunk = () => {
+      if (cancelled) return;
+      const end = Math.min(width, x + 8);
+      for (; x < end; x++) {
+        power.fill(0);
+        const frames = Math.max(1, Math.ceil(buffer.length / width / (size / 2)));
+        // Cover each time bucket with overlapping windows, including long recordings.
+        // Average channel power so opposite-phase stereo content does not disappear.
+        for (let frame = 0; frame < frames; frame++) {
+          const start = Math.round((x + (frame + 0.5) / frames) / width * buffer.length - size / 2);
+          for (const channel of channels) {
+            for (let i = 0; i < size; i++) { real[i] = (channel[start + i] || 0) * window[i]; imag[i] = 0; }
+            fft(real, imag);
+            for (let k = 0; k < power.length; k++) power[k] += (real[k] ** 2 + imag[k] ** 2) / (channels.length * frames);
+          }
+        }
+        for (let y = 0; y < height; y++) {
+          const low = Math.floor((height - 1 - y) / height * power.length);
+          const high = Math.max(low + 1, Math.ceil((height - y) / height * power.length));
+          let peakPower = 0;
+          for (let k = low; k < Math.min(high, power.length); k++) peakPower = Math.max(peakPower, power[k]);
+          // Fixed full-scale reference and range are shared by both tracks.
+          const db = 10 * Math.log10(Math.max(1e-12, peakPower * 4 / (windowSum * windowSum)));
+          const value = Math.max(0, Math.min(1, (db + 100) / 100)) * (colors.length - 1);
+          const index = Math.min(colors.length - 2, Math.floor(value)), blend = value - index;
+          const offset = (y * width + x) * 4;
+          for (let c = 0; c < 3; c++) pixels.data[offset + c] = colors[index][c] * (1 - blend) + colors[index + 1][c] * blend;
+          pixels.data[offset + 3] = 255;
+        }
+      }
+      ctx.putImageData(pixels, 0, 0);
+      if (x < width) timer = setTimeout(drawChunk, 0);
+      else setRendering(false);
+    };
+    timer = setTimeout(drawChunk, 0);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [buffer]);
+  const ticks = [0, 0.25, 0.5, 0.75, 1];
+  return <div className="compare-spectrogram" aria-label="시간별 주파수 스펙트로그램" aria-busy={rendering}>
+    <div className="compare-frequency-axis">{[1, 0.75, 0.5, 0.25, 0].map(t => <span key={t}>{buffer ? (t ? `${(buffer.sampleRate / 2000 * t).toFixed(1)} kHz` : '0 Hz') : (t === 1 ? '주파수' : t === 0 ? '0 Hz' : '')}</span>)}</div>
+    <div className="compare-spectrogram-body">
+      <div className="compare-spectrogram-plot">
+        <canvas ref={canvasRef} width={768} height={256} role="img" aria-label="가로: 시간, 세로: 주파수, 밝은 색일수록 큰 음량"/>
+        {buffer && <i className="compare-playhead" style={{ left: `${Math.max(0, Math.min(1, fraction)) * 100}%` }}/>}
+        {(!buffer || rendering) && <span className="compare-chart-status">{buffer ? '스펙트로그램 계산 중…' : '음원을 불러오세요'}</span>}
+      </div>
+      <div className="compare-time-axis">{ticks.map(t => <span key={t}>{formatSeekTime((buffer?.duration || 0) * t)}</span>)}</div>
+    </div>
+    <div className="compare-db-axis"><span>0</span><i/><span>−100</span><small>dBFS</small></div>
+  </div>;
+}
+
 function snapTo5(value: number): number { return Math.round(value / 5) * 5; }
 
 function EqBar({ label, value, onChange }: { label: string; value: number; onChange: (next: number) => void }) {
@@ -430,6 +552,7 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
   const playOffsetRef = useRef(0);
   const rateRef = useRef(1);
   const debounceRef = useRef<number | null>(null);
+  const presetImportInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { void loadCustomEqPresets().then(setCustomPresets); void loadPostprocessPresets().then(setPostprocessPresets); }, []);
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
@@ -695,6 +818,60 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
       setPostprocessPreset('');
     } catch (error) { notify((error as Error).message, true); }
   }
+  async function exportPresetsFile() {
+    if (Object.keys(customPresets).length === 0 && Object.keys(postprocessPresets).length === 0) { notify('내보낼 저장된 프리셋이 없습니다.', true); return; }
+    const payload = JSON.stringify({ eqPresets: customPresets, postprocessPresets }, null, 2);
+    const picker = (window as unknown as { showSaveFilePicker?: SaveFilePickerFn }).showSaveFilePicker;
+    if (typeof picker === 'function') {
+      try {
+        const handle = await picker({ suggestedName: 'songyue2-presets.json', types: [{ description: 'SongYUE2 프리셋', accept: { 'application/json': ['.json'] } }] });
+        const writable = await handle.createWritable();
+        await writable.write(payload);
+        await writable.close();
+        notify(`"${handle.name}" 파일로 내보냈습니다.`);
+        return;
+      } catch (error) {
+        if ((error as { name?: string }).name === 'AbortError') return;
+      }
+    }
+    const blobUrl = URL.createObjectURL(new Blob([payload], { type: 'application/json' }));
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = 'songyue2-presets.json';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(blobUrl);
+    notify('프리셋 파일을 다운로드했습니다.');
+  }
+  async function handleImportPresetsFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    let parsed: { eqPresets?: Record<string, unknown>; postprocessPresets?: Record<string, unknown> };
+    try { parsed = JSON.parse(await file.text()); } catch { notify('올바른 JSON 파일이 아닙니다.', true); return; }
+    let eqImported = 0;
+    let postprocessImported = 0;
+    let skipped = 0;
+    for (const [name, eq] of Object.entries(parsed.eqPresets || {})) {
+      if (PP_EQ_PRESET_NAMES.includes(name) || !Array.isArray(eq) || eq.length !== 10 || !eq.every(value => typeof value === 'number' && Number.isFinite(value))) { skipped += 1; continue; }
+      try {
+        const saved = await api<{ name: string; eq: number[] }>('/eq-presets', 'POST', { name, eq });
+        setCustomPresets(previous => ({ ...previous, [saved.name]: saved.eq }));
+        eqImported += 1;
+      } catch { skipped += 1; }
+    }
+    for (const [name, params] of Object.entries(parsed.postprocessPresets || {})) {
+      if (!params || typeof params !== 'object' || Array.isArray(params)) { skipped += 1; continue; }
+      try {
+        const saved = await api<{ name: string; params: PostProcessParams }>('/postprocess-settings', 'POST', { name, params });
+        setPostprocessPresets(previous => ({ ...previous, [saved.name]: saved.params }));
+        postprocessImported += 1;
+      } catch { skipped += 1; }
+    }
+    if (eqImported === 0 && postprocessImported === 0) { notify('가져올 프리셋을 찾지 못했습니다.', true); return; }
+    notify(`EQ 프리셋 ${eqImported}개, 전체 설정 프리셋 ${postprocessImported}개를 가져왔습니다.${skipped ? ` (${skipped}개 건너뜀)` : ''}`);
+  }
 
   function bufferFor(track: 'original' | 'processed') { return track === 'original' ? decodedRef.current : processedRef.current; }
   function currentPosition(): number {
@@ -809,6 +986,9 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
           </select>
           <button type="button" className="pp-preset-btn" title="현재 전체 설정을 프리셋으로 저장" onClick={openSavePostprocessPresetDialog}><Save size={12}/></button>
           {postprocessPresets[postprocessPreset] && <button type="button" className="pp-preset-btn" title={`"${postprocessPreset}" 프리셋 삭제`} onClick={() => void deletePostprocessPreset(postprocessPreset)}><Trash2 size={12}/></button>}
+          <button type="button" className="pp-preset-btn" title="저장한 프리셋을 파일로 내보내기" onClick={() => void exportPresetsFile()}><Download size={12}/></button>
+          <button type="button" className="pp-preset-btn" title="파일에서 프리셋 가져오기" onClick={() => presetImportInputRef.current?.click()}><FolderOpen size={12}/></button>
+          <input ref={presetImportInputRef} type="file" accept=".json,application/json" hidden onChange={event => void handleImportPresetsFile(event)}/>
         </div>
       </div>
       {loading ? <p className="field-hint">오디오를 불러오는 중...</p> : <>
@@ -915,12 +1095,13 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
 }
 
 const STEM_MODE_CONFIG = {
-  full: { stems: ['vocals', 'drums', 'bass', 'other'] as const, menuSub: '보컬+드럼+베이스+기타', description: '보컬·드럼·베이스·기타 악기 4갈래' },
-  vocal: { stems: ['vocals', 'instrumental'] as const, menuSub: '보컬+악기', description: '보컬·악기 2갈래(보컬 누출이 적은 분리 모델)' },
+  channel: { stems: ['left', 'right'] as const, menuSub: '왼쪽+오른쪽 채널', description: '왼쪽·오른쪽 채널 2갈래(AI 분리 모델 없이 순수 채널 분리)', dialogTitle: '채널 분리', failureHint: '채널 분리에 실패했습니다. ffmpeg가 설치되어 있는지, 원본이 스테레오인지 확인해 주세요.' },
+  full: { stems: ['vocals', 'drums', 'bass', 'other'] as const, menuSub: '보컬+드럼+베이스+기타', description: '보컬·드럼·베이스·기타 악기 4갈래', dialogTitle: 'STEM 분리', failureHint: 'STEM 분리에 실패했습니다. audio.cpp가 해당 분리 모델을 포함해 빌드되어 있는지, 모델 파일이 있는지 확인해 주세요.' },
+  vocal: { stems: ['vocals', 'instrumental'] as const, menuSub: '보컬+악기', description: '보컬·악기 2갈래(보컬 누출이 적은 분리 모델)', dialogTitle: 'STEM 분리', failureHint: 'STEM 분리에 실패했습니다. audio.cpp가 해당 분리 모델을 포함해 빌드되어 있는지, 모델 파일이 있는지 확인해 주세요.' },
 };
 type StemMode = keyof typeof STEM_MODE_CONFIG;
 type StemName = typeof STEM_MODE_CONFIG[StemMode]['stems'][number];
-const STEM_LABELS: Record<StemName, string> = { vocals: '보컬', drums: '드럼', bass: '베이스', other: '기타 악기', instrumental: '악기' };
+const STEM_LABELS: Record<StemName, string> = { vocals: '보컬', drums: '드럼', bass: '베이스', other: '기타 악기', instrumental: '악기', left: '왼쪽 채널', right: '오른쪽 채널' };
 
 function StemDialog({ project, mode, onClose, notify, visualizerEnabled, visualizerRingCount, visualizerHue, visualizerLineWidth, visualizerTrail, visualizerSpiral, visualizerRingMode, visualizerTimeStep, visualizerTimeSkew, visualizerRingStep, visualizerAmplitude }: { project: Project; mode: StemMode; onClose: () => void; notify: (text: string, error?: boolean) => void; visualizerEnabled: boolean; visualizerRingCount: number; visualizerHue: number; visualizerLineWidth: number; visualizerTrail: number; visualizerSpiral: number; visualizerRingMode: 'radial' | 'time'; visualizerTimeStep: number; visualizerTimeSkew: number; visualizerRingStep: number; visualizerAmplitude: number }) {
   const stemOrder = STEM_MODE_CONFIG[mode].stems as readonly StemName[];
@@ -930,6 +1111,7 @@ function StemDialog({ project, mode, onClose, notify, visualizerEnabled, visuali
   const [saving, setSaving] = useState(false);
   const [merged, setMerged] = useState(false);
   const [editingStem, setEditingStem] = useState<StemName | null>(null);
+  const [audibleStems, setAudibleStems] = useState<Set<StemName>>(() => new Set(stemOrder));
   const [stemPeaks, setStemPeaks] = useState<Partial<Record<StemName, number[]>>>({});
   const [processedStems, setProcessedStems] = useState<Partial<Record<StemName, boolean>>>({});
   const [combinedPeaks, setCombinedPeaks] = useState<number[]>([]);
@@ -990,7 +1172,7 @@ function StemDialog({ project, mode, onClose, notify, visualizerEnabled, visuali
         setLoading(false);
       } catch (error) {
         if (cancelled) return;
-        const message = error instanceof Error && error.message && error.message !== 'load failed' ? error.message : 'STEM 분리에 실패했습니다. audio.cpp가 해당 분리 모델을 포함해 빌드되어 있는지, 모델 파일이 있는지 확인해 주세요.';
+        const message = error instanceof Error && error.message && error.message !== 'load failed' ? error.message : STEM_MODE_CONFIG[mode].failureHint;
         setErrorText(message);
         setLoading(false);
       }
@@ -1004,11 +1186,32 @@ function StemDialog({ project, mode, onClose, notify, visualizerEnabled, visuali
   }, [project.id, mode]);
 
   async function refreshPreview() {
-    const buffers = stemOrder.map(name => currentBuffersRef.current[name]).filter((buffer): buffer is AudioBuffer => !!buffer);
-    if (buffers.length !== stemOrder.length) return;
+    const included = stemOrder.filter(name => audibleStems.has(name));
+    const buffers = included.map(name => currentBuffersRef.current[name]).filter((buffer): buffer is AudioBuffer => !!buffer);
+    if (buffers.length !== included.length) return;
+    if (!buffers.length) { combinedPreviewRef.current = null; setPreviewPeaks([]); return; }
     const combined = await mixBuffers(buffers);
     combinedPreviewRef.current = combined;
     setPreviewPeaks(computeWaveformPeaks(combined, 300));
+  }
+  // STEM4(보컬/드럼/베이스/기타)에서 체크박스로 어떤 트랙을 들을지/저장할지 고를 수 있게 한다 --
+  // 체크 해제된 트랙은 "미리듣기"(및 그걸 그대로 쓰는 "저장")에서만 빠지고, "원본"은 항상 4개 전부를
+  // 담은 고정 기준선으로 남긴다(다른 STEM 편집과 같은 "원본 vs 미리듣기" 비교 관례를 그대로 따름).
+  useEffect(() => {
+    if (mode !== 'full' || loading) return;
+    void (async () => {
+      await refreshPreview();
+      setMerged(false);
+      if (isPlayingRef.current && activeKey === 'combined-preview') playKey('combined-preview', currentPosition());
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [audibleStems]);
+  function toggleStemAudible(name: StemName) {
+    setAudibleStems(previous => {
+      const next = new Set(previous);
+      if (next.has(name)) next.delete(name); else next.add(name);
+      return next;
+    });
   }
 
   function handleStemSaved(name: StemName, buffer: AudioBuffer, params: PostProcessParams) {
@@ -1055,6 +1258,12 @@ function StemDialog({ project, mode, onClose, notify, visualizerEnabled, visuali
   function handleKeyClick(key: string) {
     if (activeKey === key && isPlaying) { pausePlayback(); return; }
     playKey(key);
+  }
+  // "원본"/"미리듣기" 둘 다 4트랙 전체를 듣는 자리라, STEM4에서 여기를 누르면 체크박스도
+  // "전부 켜짐"으로 되돌려서 지금 듣고 있는 것(전체 믹스)과 화면 상태가 어긋나지 않게 한다.
+  function handleCombinedRowClick(key: string) {
+    if (mode === 'full') setAudibleStems(new Set(stemOrder));
+    handleKeyClick(key);
   }
   function stopPlayback() { pausePlayback(); setActiveKey(null); setPositionSeconds(0); }
   function seekBy(deltaSeconds: number) {
@@ -1125,12 +1334,14 @@ function StemDialog({ project, mode, onClose, notify, visualizerEnabled, visuali
   return <>
     {!editingStem && <Dialog open onOpenChange={open => { if (!open) { stopPlayback(); onClose(); } }}>
       <DialogContent className="studio-dialog stem-dialog">
-        <DialogTitle>STEM 분리 ({STEM_MODE_CONFIG[mode].menuSub})</DialogTitle>
-        <DialogDescription>"{project.title}"을(를) {STEM_MODE_CONFIG[mode].description}로 분리했습니다. 각 STEM을 후처리한 뒤 합쳐서 저장하세요. 여기서 만든 STEM 파일은 창을 닫으면 사라지고, 원본 완성곡은 바뀌지 않습니다.</DialogDescription>
-        {loading ? <div className="stem-loading"><LoaderCircle className="spin"/>STEM 분리 중...</div> : errorText ? <p className="field-hint warning">{errorText}</p> : <>
+        <DialogTitle>{STEM_MODE_CONFIG[mode].dialogTitle} ({STEM_MODE_CONFIG[mode].menuSub})</DialogTitle>
+        <DialogDescription>"{project.title}"을(를) {STEM_MODE_CONFIG[mode].description}로 분리했습니다. 각 트랙을 후처리한 뒤 합쳐서 저장하세요.</DialogDescription>
+        {loading ? <div className="stem-loading"><LoaderCircle className="spin"/>{STEM_MODE_CONFIG[mode].dialogTitle} 중...</div> : errorText ? <p className="field-hint warning">{errorText}</p> : <>
           <div className="stem-list">
             {stemOrder.map(name => <div key={name} className={rowClass(name, processedStems[name] ? 'wet' : 'dry', 'stem-row')}>
-              <button type="button" className="pp-waveform-label" aria-label={activeKey === name && isPlaying ? `${STEM_LABELS[name]} 일시정지` : `${STEM_LABELS[name]} 재생`} onClick={() => handleKeyClick(name)}>{activeKey === name && isPlaying ? <Pause size={15}/> : <Play size={15}/>}</button>
+              {mode === 'full'
+                ? <label className="stem-audible-checkbox" title={audibleStems.has(name) ? `${STEM_LABELS[name]} 끄기` : `${STEM_LABELS[name]} 켜기`}><input type="checkbox" checked={audibleStems.has(name)} onChange={() => toggleStemAudible(name)}/></label>
+                : <button type="button" className="pp-waveform-label" aria-label={activeKey === name && isPlaying ? `${STEM_LABELS[name]} 일시정지` : `${STEM_LABELS[name]} 재생`} onClick={() => handleKeyClick(name)}>{activeKey === name && isPlaying ? <Pause size={15}/> : <Play size={15}/>}</button>}
               <span className="stem-label">{STEM_LABELS[name]}{processedStems[name] && <span className="small-badge">처리됨</span>}</span>
               <Waveform peaks={stemPeaks[name] || []} playedFraction={playedFraction} variant={processedStems[name] ? 'processed' : undefined}/>
               <Button variant="outline" size="sm" onClick={() => setEditingStem(name)}><SlidersHorizontal size={14}/>후처리</Button>
@@ -1138,11 +1349,11 @@ function StemDialog({ project, mode, onClose, notify, visualizerEnabled, visuali
           </div>
           <div className="stem-combined">
             <div className={rowClass('combined-original', 'dry', 'pp-waveform-row')}>
-              <button type="button" className="pp-waveform-label" title="원본 합본" aria-label={activeKey === 'combined-original' && isPlaying ? '원본 합본 일시정지' : '원본 합본 재생'} onClick={() => handleKeyClick('combined-original')}>{activeKey === 'combined-original' && isPlaying ? <Pause size={15}/> : <AudioLines size={15}/>}</button>
+              <button type="button" className="pp-waveform-label" title="원본 합본" aria-label={activeKey === 'combined-original' && isPlaying ? '원본 합본 일시정지' : '원본 합본 재생'} onClick={() => handleCombinedRowClick('combined-original')}>{activeKey === 'combined-original' && isPlaying ? <Pause size={15}/> : <AudioLines size={15}/>}</button>
               <Waveform peaks={combinedPeaks} playedFraction={playedFraction}/>
             </div>
             <div className={rowClass('combined-preview', 'wet', 'pp-waveform-row')}>
-              <button type="button" className="pp-waveform-label" title="현재 미리듣기" aria-label={activeKey === 'combined-preview' && isPlaying ? '미리듣기 일시정지' : '미리듣기 재생'} onClick={() => handleKeyClick('combined-preview')}>{activeKey === 'combined-preview' && isPlaying ? <Pause size={15}/> : <Combine size={15}/>}</button>
+              <button type="button" className="pp-waveform-label" title="현재 미리듣기" aria-label={activeKey === 'combined-preview' && isPlaying ? '미리듣기 일시정지' : '미리듣기 재생'} onClick={() => handleCombinedRowClick('combined-preview')}>{activeKey === 'combined-preview' && isPlaying ? <Pause size={15}/> : <Combine size={15}/>}</button>
               <Waveform peaks={previewPeaks} playedFraction={playedFraction} variant="processed"/>
             </div>
           </div>
@@ -1156,15 +1367,15 @@ function StemDialog({ project, mode, onClose, notify, visualizerEnabled, visuali
         <div className="dialog-actions pp-dialog-actions">
           <div className="pp-transport">
             <Button variant="ghost" size="icon" aria-label="5초 뒤로" onClick={() => seekBy(-5)} disabled={loading}><Rewind size={15}/></Button>
-            <Button variant="ghost" size="icon" aria-label={isPlaying ? '일시정지' : '재생'} onClick={() => handleKeyClick(activeKey || 'combined-original')} disabled={loading}>{isPlaying ? <Pause size={15}/> : <Play size={15}/>}</Button>
+            <Button variant="ghost" size="icon" aria-label={isPlaying ? '일시정지' : '재생'} onClick={() => handleKeyClick(activeKey || (mode === 'full' ? 'combined-preview' : 'combined-original'))} disabled={loading}>{isPlaying ? <Pause size={15}/> : <Play size={15}/>}</Button>
             <Button variant="ghost" size="icon" aria-label="5초 앞으로" onClick={() => seekBy(5)} disabled={loading}><FastForward size={15}/></Button>
             <button type="button" className="speed-btn" aria-label="재생 속도" onClick={cycleSpeed} disabled={loading}>{playbackRate}x</button>
             <Volume2 size={14} className="pp-volume-icon"/>
             <input className="abc-player-volume" type="range" aria-label="미리듣기 볼륨" min={0} max={2} step={0.1} value={previewVolume} onChange={event => applyPreviewVolume(Number(event.target.value))} disabled={loading}/>
           </div>
           <div className="pp-dialog-actions-right">
-            <Button variant="outline" onClick={() => void handleMerge()} disabled={loading || !!errorText || merging}>{merging ? <LoaderCircle className="spin"/> : <Combine size={15}/>}합치기</Button>
             <Button variant="outline" onClick={() => { stopPlayback(); onClose(); }} disabled={saving}>취소</Button>
+            <Button onClick={() => void handleMerge()} disabled={loading || !!errorText || merging || (mode === 'full' && audibleStems.size === 0)}>{merging ? <LoaderCircle className="spin"/> : <Combine size={15}/>}합치기</Button>
             <Button onClick={() => void handleSave()} disabled={!merged || saving}>{saving ? <LoaderCircle className="spin"/> : <Save size={15}/>}저장</Button>
           </div>
         </div>
@@ -1179,6 +1390,1787 @@ function StemDialog({ project, mode, onClose, notify, visualizerEnabled, visuali
       titleOverride={STEM_LABELS[editingStem]}
       sourceOverride={{ buffer: currentBuffersRef.current[editingStem]!, params: stemParamsRef.current[editingStem] || PP_DEFAULT_PARAMS }}
       onSaveOverride={(buffer, params) => handleStemSaved(editingStem, buffer, params)}
+    />}
+  </>;
+}
+
+type MidiNote = { id: number; pitch: number; start: number; end: number; instrument: string };
+const MIDI_NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+function midiPitchName(pitch: number) { return `${MIDI_NOTE_NAMES[pitch % 12]}${Math.floor(pitch / 12) - 1}`; }
+const MIDI_INSTRUMENT_OPTIONS: { id: string; label: string }[] = [
+  { id: 'acoustic_piano', label: '어쿠스틱 피아노' }, { id: 'electric_piano', label: '일렉트릭 피아노' },
+  { id: 'acoustic_guitar', label: '어쿠스틱 기타' }, { id: 'electric_guitar', label: '일렉트릭 기타' },
+  { id: 'electric_bass', label: '베이스' }, { id: 'violin', label: '바이올린' }, { id: 'cello', label: '첼로' },
+  { id: 'strings', label: '스트링 앙상블' }, { id: 'trumpet', label: '트럼펫' }, { id: 'sax', label: '색소폰' },
+  { id: 'flute', label: '플루트' }, { id: 'organ', label: '오르간' }, { id: 'synth_lead', label: '신스 리드' },
+  { id: 'synth_pad', label: '신스 패드' }, { id: 'voice', label: '보컬' }, { id: 'drums', label: '드럼' },
+];
+const MIDI_INSTRUMENT_LABELS: Record<string, string> = Object.fromEntries(MIDI_INSTRUMENT_OPTIONS.map(option => [option.id, option.label]));
+// MuScriptor can tag notes with instrument names outside our fixed MIDI_INSTRUMENT_COLORS palette
+// (e.g. "clarinet", "tenor_sax") -- falling back to one flat color for all of them would make the
+// legend useless, so unknown instruments get a stable hash-derived hue instead of a shared default.
+function midiInstrumentColor(instrument: string): string {
+  const known = MIDI_INSTRUMENT_COLORS[instrument];
+  if (known) return known;
+  let hash = 0;
+  for (let i = 0; i < instrument.length; i++) hash = (hash * 31 + instrument.charCodeAt(i)) >>> 0;
+  return `hsl(${hash % 360}, 55%, 62%)`;
+}
+const MIDI_INSTRUMENT_COLORS: Record<string, string> = {
+  acoustic_piano: '#7fb069', electric_piano: '#6fa8dc', acoustic_guitar: '#e0a458', electric_guitar: '#e0665e',
+  electric_bass: '#a37ee0', violin: '#e0c458', cello: '#d18ec9', strings: '#8ecdd1', trumpet: '#e08e4b',
+  sax: '#c9a3e0', flute: '#8ce08c', organ: '#e0d58e', synth_lead: '#5ee0c8', synth_pad: '#8ea3e0',
+  voice: '#e08eae', drums: '#b0b0b0',
+};
+const MIDI_PX_PER_SECOND_DEFAULT = 90;
+const MIDI_ZOOM_MIN = 40;
+const MIDI_ZOOM_MAX = 300;
+const MIDI_MIN_HIT_WIDTH = 12;
+const MIDI_MUTED_COLOR = '#565f56';
+const MIDI_ROW_HEIGHT_DEFAULT = 13;
+const MIDI_ROW_ZOOM_MIN = 6;
+const MIDI_ROW_ZOOM_MAX = 30;
+const MIDI_MIN_NOTE_SECONDS = 0.08;
+const MIDI_NEW_NOTE_SECONDS = 0.5;
+const MIDI_SNAP_SECONDS = 1 / 16;
+function midiSnap(seconds: number) { return Math.round(seconds / MIDI_SNAP_SECONDS) * MIDI_SNAP_SECONDS; }
+function midiPitchToFrequency(pitch: number) { return 440 * Math.pow(2, (pitch - 69) / 12); }
+const MIDI_INSTRUMENT_WAVEFORMS: Record<string, OscillatorType> = {
+  acoustic_piano: 'triangle', electric_piano: 'triangle', acoustic_guitar: 'sawtooth', electric_guitar: 'sawtooth',
+  electric_bass: 'sine', violin: 'sawtooth', cello: 'sawtooth', strings: 'sawtooth', trumpet: 'square', sax: 'square',
+  flute: 'sine', organ: 'square', synth_lead: 'sawtooth', synth_pad: 'triangle', voice: 'sine', drums: 'square',
+};
+
+function MidiEditorDialog({ project, onClose, notify }: { project: Project; onClose: () => void; notify: (text: string, error?: boolean) => void }) {
+  const [loading, setLoading] = useState(true);
+  const [errorText, setErrorText] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [notes, setNotes] = useState<MidiNote[]>([]);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [newNoteInstrument, setNewNoteInstrument] = useState('acoustic_piano');
+  const [pxPerSecond, setPxPerSecond] = useState(MIDI_PX_PER_SECOND_DEFAULT);
+  const [rowHeight, setRowHeight] = useState(MIDI_ROW_HEIGHT_DEFAULT);
+  const [mutedInstruments, setMutedInstruments] = useState<Set<string>>(new Set());
+  const [downloading, setDownloading] = useState(false);
+  const [midiSaveDialogOpen, setMidiSaveDialogOpen] = useState(false);
+  const [midiSaveFolder, setMidiSaveFolder] = useState(DEFAULT_MIDI_PATH);
+  const [midiSaveFilename, setMidiSaveFilename] = useState('');
+  const [midiSaving, setMidiSaving] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [playheadSeconds, setPlayheadSeconds] = useState(0);
+  const nextIdRef = useRef(0);
+  const rollScrollRef = useRef<HTMLDivElement | null>(null);
+  const pendingScrollLeftRef = useRef<number | null>(null);
+  const pendingScrollTopRef = useRef<number | null>(null);
+  const dragRef = useRef<{ id: number; mode: 'move' | 'resize-left' | 'resize-right'; startClientX: number; startClientY: number; startStart: number; startEnd: number; startPitch: number } | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const activeNodesRef = useRef<{ osc: OscillatorNode; gain: GainNode }[]>([]);
+  const instrumentGainsRef = useRef<Map<string, GainNode>>(new Map());
+  const playStartCtxTimeRef = useRef(0);
+  const playRafRef = useRef<number | null>(null);
+  const playEndTimerRef = useRef<number | null>(null);
+
+  function stopPlayback(resetPosition = true) {
+    const ctx = audioCtxRef.current;
+    for (const { osc, gain } of activeNodesRef.current) {
+      try {
+        if (ctx) { gain.gain.cancelScheduledValues(ctx.currentTime); gain.gain.setValueAtTime(0, ctx.currentTime); }
+        osc.stop();
+      } catch { /* already stopped */ }
+    }
+    activeNodesRef.current = [];
+    if (playRafRef.current !== null) cancelAnimationFrame(playRafRef.current);
+    if (playEndTimerRef.current !== null) window.clearTimeout(playEndTimerRef.current);
+    playRafRef.current = null;
+    playEndTimerRef.current = null;
+    setIsPlaying(false);
+    if (resetPosition) setPlayheadSeconds(0);
+  }
+  const previewDuration = notes.length ? Math.max(0.5, ...notes.map(note => note.end)) : 0;
+  function playPreview(startOffset = 0) {
+    if (!notes.length) return;
+    stopPlayback(false);
+    const ctx = audioCtxRef.current || new AudioContext();
+    audioCtxRef.current = ctx;
+    if (ctx.state === 'suspended') void ctx.resume();
+    const startCtxTime = ctx.currentTime + 0.06;
+    const masterGain = ctx.createGain();
+    masterGain.gain.value = 0.22;
+    masterGain.connect(ctx.destination);
+    // Every note is scheduled regardless of current mute state -- muting only sets that instrument's
+    // shared gain to 0, never removes the oscillator. That's what lets toggling mute mid-playback take
+    // effect immediately on already-scheduled/sounding notes instead of only future playPreview() calls.
+    instrumentGainsRef.current = new Map();
+    function instrumentGainFor(instrument: string): GainNode {
+      let node = instrumentGainsRef.current.get(instrument);
+      if (!node) {
+        node = ctx.createGain();
+        node.gain.value = mutedInstruments.has(instrument) ? 0 : 1;
+        node.connect(masterGain);
+        instrumentGainsRef.current.set(instrument, node);
+      }
+      return node;
+    }
+    const nodes: { osc: OscillatorNode; gain: GainNode }[] = [];
+    for (const note of notes) {
+      if (note.end <= startOffset) continue;
+      const effectiveStart = Math.max(note.start, startOffset);
+      const duration = Math.max(0.05, note.end - effectiveStart);
+      const noteStart = startCtxTime + (effectiveStart - startOffset);
+      const noteEnd = noteStart + duration;
+      const attack = Math.min(0.02, duration / 4);
+      const release = Math.min(0.08, duration / 3);
+      const osc = ctx.createOscillator();
+      osc.type = MIDI_INSTRUMENT_WAVEFORMS[note.instrument] || 'triangle';
+      osc.frequency.value = midiPitchToFrequency(note.pitch);
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0, noteStart);
+      gain.gain.linearRampToValueAtTime(0.9, noteStart + attack);
+      gain.gain.setValueAtTime(0.9, Math.max(noteStart + attack, noteEnd - release));
+      gain.gain.linearRampToValueAtTime(0, noteEnd);
+      osc.connect(gain);
+      gain.connect(instrumentGainFor(note.instrument));
+      osc.start(noteStart);
+      osc.stop(noteEnd + 0.02);
+      nodes.push({ osc, gain });
+    }
+    activeNodesRef.current = nodes;
+    playStartCtxTimeRef.current = startCtxTime;
+    setIsPlaying(true);
+    setPlayheadSeconds(startOffset);
+    const totalSeconds = previewDuration - startOffset + 0.2;
+    playEndTimerRef.current = window.setTimeout(() => stopPlayback(), Math.max(0, totalSeconds) * 1000);
+    const tick = () => {
+      const current = audioCtxRef.current;
+      if (!current) return;
+      setPlayheadSeconds(startOffset + Math.max(0, current.currentTime - startCtxTime));
+      playRafRef.current = requestAnimationFrame(tick);
+    };
+    playRafRef.current = requestAnimationFrame(tick);
+  }
+  function seekPreview(seconds: number) {
+    const next = Math.max(0, Math.min(seconds, previewDuration));
+    if (isPlaying) { playPreview(next); return; }
+    setPlayheadSeconds(next);
+  }
+  // Applied straight to the live per-instrument gain nodes so toggling mute takes effect immediately
+  // on whatever's already scheduled/sounding, not just on the next playPreview() call.
+  useEffect(() => {
+    const ctx = audioCtxRef.current;
+    if (!ctx) return;
+    for (const [instrument, node] of instrumentGainsRef.current) {
+      const target = mutedInstruments.has(instrument) ? 0 : 1;
+      node.gain.cancelScheduledValues(ctx.currentTime);
+      node.gain.linearRampToValueAtTime(target, ctx.currentTime + 0.03);
+    }
+  }, [mutedInstruments]);
+  useEffect(() => () => stopPlayback(), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await api<{ notes: MidiNote[] }>(`/projects/${project.id}/midi/notes`);
+        if (cancelled) return;
+        setNotes(response.notes);
+        nextIdRef.current = response.notes.reduce((max, note) => Math.max(max, note.id + 1), 0);
+        if (response.notes.length) {
+          const counts = new Map<string, number>();
+          for (const note of response.notes) counts.set(note.instrument, (counts.get(note.instrument) || 0) + 1);
+          setNewNoteInstrument([...counts.entries()].sort((a, b) => b[1] - a[1])[0][0]);
+        }
+        setLoading(false);
+      } catch (error) {
+        if (cancelled) return;
+        setErrorText((error as Error).message || 'MIDI 노트를 불러오지 못했습니다.');
+        setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [project.id]);
+
+  const usedInstruments = [...new Set(notes.map(note => note.instrument))];
+  const minPitch = notes.length ? Math.max(0, Math.min(...notes.map(n => n.pitch)) - 2) : 48;
+  const maxPitch = notes.length ? Math.min(127, Math.max(...notes.map(n => n.pitch)) + 2) : 84;
+  const durationSeconds = Math.max(10, ...notes.map(n => n.end + 2));
+  const rollWidth = durationSeconds * pxPerSecond;
+  const rollHeight = (maxPitch - minPitch + 1) * rowHeight;
+  const rowY = (pitch: number) => (maxPitch - pitch) * rowHeight;
+
+  function updateNote(id: number, patch: Partial<MidiNote>) {
+    setNotes(previous => previous.map(note => note.id === id ? { ...note, ...patch } : note));
+  }
+  function deleteSelected() {
+    if (selectedId === null) return;
+    stopPlayback();
+    setNotes(previous => previous.filter(note => note.id !== selectedId));
+    setSelectedId(null);
+  }
+  function toggleInstrumentMuted(instrument: string) {
+    const willMute = !mutedInstruments.has(instrument);
+    setMutedInstruments(previous => {
+      const next = new Set(previous);
+      if (willMute) next.add(instrument); else next.delete(instrument);
+      return next;
+    });
+    if (willMute && selectedId !== null) {
+      const selectedNote = notes.find(note => note.id === selectedId);
+      if (selectedNote && selectedNote.instrument === instrument) setSelectedId(null);
+    }
+  }
+  function addNoteAt(seconds: number, pitch: number) {
+    stopPlayback();
+    const start = Math.max(0, midiSnap(seconds));
+    const id = nextIdRef.current++;
+    const note: MidiNote = { id, pitch: Math.max(0, Math.min(127, pitch)), start, end: start + MIDI_NEW_NOTE_SECONDS, instrument: newNoteInstrument };
+    setNotes(previous => [...previous, note]);
+    setSelectedId(id);
+  }
+  function onBackgroundPointerDown(event: React.PointerEvent<SVGRectElement>) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const seconds = (event.clientX - rect.left) / pxPerSecond;
+    const pitch = maxPitch - Math.floor((event.clientY - rect.top) / rowHeight);
+    addNoteAt(seconds, pitch);
+  }
+  // React's onWheel prop is attached as a passive listener, so event.preventDefault() inside it
+  // silently fails (and logs a console warning) -- the roll would scroll AND zoom at once. Attaching
+  // a plain DOM listener with {passive:false} is the only way to actually suppress the native scroll.
+  // Plain wheel zooms time (X); Shift+wheel zooms pitch-row height (Y) -- kept on a separate modifier
+  // so one doesn't fight the other, matching how piano-roll editors usually split the two axes.
+  useEffect(() => {
+    const el = rollScrollRef.current;
+    if (!el) return;
+    const handleWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      const rect = el.getBoundingClientRect();
+      if (event.shiftKey) {
+        const cursorOffsetInContent = el.scrollTop + (event.clientY - rect.top);
+        setRowHeight(previous => {
+          const next = Math.max(MIDI_ROW_ZOOM_MIN, Math.min(MIDI_ROW_ZOOM_MAX, previous - Math.round(event.deltaY / 20)));
+          if (next !== previous) {
+            const pitchRowAtCursor = cursorOffsetInContent / previous;
+            pendingScrollTopRef.current = pitchRowAtCursor * next - (event.clientY - rect.top);
+          }
+          return next;
+        });
+        return;
+      }
+      const cursorOffsetInContent = el.scrollLeft + (event.clientX - rect.left);
+      setPxPerSecond(previous => {
+        const next = Math.max(MIDI_ZOOM_MIN, Math.min(MIDI_ZOOM_MAX, previous - Math.round(event.deltaY / 4)));
+        if (next !== previous) {
+          const timeAtCursor = cursorOffsetInContent / previous;
+          pendingScrollLeftRef.current = timeAtCursor * next - (event.clientX - rect.left);
+        }
+        return next;
+      });
+    };
+    el.addEventListener('wheel', handleWheel, { passive: false });
+    return () => el.removeEventListener('wheel', handleWheel);
+  }, [loading, errorText]);
+  // Runs synchronously after the SVG's new size is committed to the DOM but before paint, so the
+  // scroll jump that keeps the cursor's time/pitch position fixed never flashes on screen.
+  useLayoutEffect(() => {
+    if (pendingScrollLeftRef.current === null || !rollScrollRef.current) return;
+    rollScrollRef.current.scrollLeft = Math.max(0, pendingScrollLeftRef.current);
+    pendingScrollLeftRef.current = null;
+  }, [pxPerSecond]);
+  useLayoutEffect(() => {
+    if (pendingScrollTopRef.current === null || !rollScrollRef.current) return;
+    rollScrollRef.current.scrollTop = Math.max(0, pendingScrollTopRef.current);
+    pendingScrollTopRef.current = null;
+  }, [rowHeight]);
+  function onNotePointerDown(event: React.PointerEvent<SVGRectElement>, note: MidiNote, mode: 'move' | 'resize-left' | 'resize-right') {
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    stopPlayback();
+    setSelectedId(note.id);
+    dragRef.current = { id: note.id, mode, startClientX: event.clientX, startClientY: event.clientY, startStart: note.start, startEnd: note.end, startPitch: note.pitch };
+  }
+  function onNotePointerMove(event: React.PointerEvent) {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const deltaSeconds = (event.clientX - drag.startClientX) / pxPerSecond;
+    if (drag.mode === 'move') {
+      const deltaPitch = -Math.round((event.clientY - drag.startClientY) / rowHeight);
+      const duration = drag.startEnd - drag.startStart;
+      const start = Math.max(0, midiSnap(drag.startStart + deltaSeconds));
+      updateNote(drag.id, { start, end: start + duration, pitch: Math.max(0, Math.min(127, drag.startPitch + deltaPitch)) });
+    } else if (drag.mode === 'resize-left') {
+      const start = Math.max(0, Math.min(drag.startEnd - MIDI_MIN_NOTE_SECONDS, midiSnap(drag.startStart + deltaSeconds)));
+      updateNote(drag.id, { start });
+    } else {
+      const end = Math.max(drag.startStart + MIDI_MIN_NOTE_SECONDS, midiSnap(drag.startEnd + deltaSeconds));
+      updateNote(drag.id, { end });
+    }
+  }
+  function onNotePointerUp() { dragRef.current = null; }
+
+  async function save() {
+    setSaving(true);
+    try {
+      await api(`/projects/${project.id}/midi`, 'POST', { notes: notes.map(({ pitch, start, end, instrument }) => ({ pitch, start, end, instrument })) });
+      notify('MIDI를 저장했습니다.');
+      stopPlayback();
+      onClose();
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setSaving(false);
+    }
+  }
+  async function downloadViaPicker() {
+    setDownloading(true);
+    try {
+      // Renders whatever's on screen right now (possibly unsaved edits), independent of "저장" --
+      // download and save are separate actions so either can be used without the other.
+      const response = await fetch(`/api/projects/${project.id}/midi/render`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ notes: notes.map(({ pitch, start, end, instrument }) => ({ pitch, start, end, instrument })) }) });
+      if (!response.ok) throw new Error('MIDI 파일을 생성하지 못했습니다.');
+      const disposition = response.headers.get('content-disposition') || '';
+      const match = disposition.match(/filename="([^"]+)"/);
+      const suggestedName = match ? decodeURIComponent(match[1]) : `${project.title}.mid`;
+      const blob = await response.blob();
+      const picker = (window as unknown as { showSaveFilePicker?: SaveFilePickerFn }).showSaveFilePicker;
+      if (typeof picker === 'function') {
+        const handle = await picker({ suggestedName, types: [{ description: 'MIDI 파일', accept: { 'audio/midi': ['.mid'] } }] });
+        const writable = await handle.createWritable();
+        await writable.write(blob);
+        await writable.close();
+        notify(`"${handle.name}" 파일로 저장했습니다.`);
+      } else {
+        openMidiSaveDialog();
+      }
+    } catch (error) {
+      if ((error as { name?: string }).name === 'AbortError') return;
+      notify('탐색기로 저장하지 못했습니다. 다른 방법으로 저장해 주세요.', true);
+      openMidiSaveDialog();
+    } finally {
+      setDownloading(false);
+    }
+  }
+  function openMidiSaveDialog() {
+    setMidiSaveFolder(DEFAULT_MIDI_PATH);
+    setMidiSaveFilename(project.title.trim() || 'midi');
+    setMidiSaveDialogOpen(true);
+  }
+  async function confirmMidiSave() {
+    setMidiSaving(true);
+    try {
+      const result = await api<{ filename: string }>(`/projects/${project.id}/midi/save-to-folder`, 'POST', { folder: midiSaveFolder, filename: midiSaveFilename, notes: notes.map(({ pitch, start, end, instrument }) => ({ pitch, start, end, instrument })) });
+      setMidiSaveDialogOpen(false);
+      notify(`"${result.filename}" 파일로 저장했습니다.`);
+    } catch (error) {
+      notify((error as Error).message, true);
+    } finally {
+      setMidiSaving(false);
+    }
+  }
+  function closeDialog() {
+    stopPlayback();
+    onClose();
+  }
+
+  const octavePitches: number[] = [];
+  for (let pitch = minPitch; pitch <= maxPitch; pitch++) if (pitch % 12 === 0) octavePitches.push(pitch);
+  const beatLines: number[] = [];
+  for (let second = 0; second <= durationSeconds; second++) beatLines.push(second);
+
+  return <>
+    <Dialog open onOpenChange={open => { if (!open) closeDialog(); }}>
+    <DialogContent className="studio-dialog detail-dialog midi-editor-dialog">
+      <DialogTitle>{project.title} · MIDI 편집기</DialogTitle>
+      <DialogDescription>MuScriptor가 추출한 음표를 확인하고, 옮기거나 늘이거나 지우거나 추가후 저장. (빈 공간을 클릭하면 새 음표 추가 · 몸통을 끌면 이동, 가장자리를 끌면 길이 조절, 마우스 휠로 줌인/줌아웃 (X) (shift+마우스 휠 (Y)))</DialogDescription>
+      {loading ? <div className="midi-editor-loading"><LoaderCircle className="spin"/>음표를 불러오는 중…</div>
+      : errorText ? <div className="inline-note warning"><CircleHelp size={17}/><span>{errorText}</span></div>
+      : <>
+        <div className="midi-editor-toolbar">
+          <div className="midi-editor-legend">
+            {usedInstruments.map(id => {
+              const muted = mutedInstruments.has(id);
+              return <button key={id} type="button" className={`midi-editor-legend-item${muted ? ' muted' : ''}`} onClick={() => toggleInstrumentMuted(id)} title={muted ? `${MIDI_INSTRUMENT_LABELS[id] || id} 켜기` : `${MIDI_INSTRUMENT_LABELS[id] || id} 끄기`}>
+                <i className="midi-editor-legend-swatch" style={{ background: muted ? MIDI_MUTED_COLOR : midiInstrumentColor(id) }}/>{MIDI_INSTRUMENT_LABELS[id] || id}
+              </button>;
+            })}
+          </div>
+          <div className="midi-editor-toolbar-right">
+            <label>새 음표 악기
+              <select value={newNoteInstrument} onChange={event => setNewNoteInstrument(event.target.value)}>
+                {MIDI_INSTRUMENT_OPTIONS.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
+              </select>
+            </label>
+          </div>
+        </div>
+        <div className="dialog-scroll midi-roll-scroll" ref={rollScrollRef}>
+          <svg className="midi-roll-svg" width={rollWidth} height={rollHeight} onPointerMove={onNotePointerMove} onPointerUp={onNotePointerUp}>
+            <rect className="midi-roll-bg" x={0} y={0} width={rollWidth} height={rollHeight} onPointerDown={onBackgroundPointerDown}/>
+            {octavePitches.map(pitch => <g key={pitch}>
+              <line className="midi-roll-octave-line" x1={0} y1={rowY(pitch) + rowHeight} x2={rollWidth} y2={rowY(pitch) + rowHeight}/>
+              <text className="midi-roll-pitch-label" x={3} y={rowY(pitch) + rowHeight - 3}>{midiPitchName(pitch)}</text>
+            </g>)}
+            {beatLines.map(second => <line key={second} className="midi-roll-beat-line" x1={second * pxPerSecond} y1={0} x2={second * pxPerSecond} y2={rollHeight}/>)}
+            {notes.map(note => {
+              const muted = mutedInstruments.has(note.instrument);
+              const x = note.start * pxPerSecond;
+              const width = Math.max(4, (note.end - note.start) * pxPerSecond);
+              const y = rowY(note.pitch);
+              const hitWidth = Math.max(width, MIDI_MIN_HIT_WIDTH);
+              const hitX = x - (hitWidth - width) / 2;
+              const handleWidth = Math.min(6, hitWidth / 3);
+              return <g key={note.id}>
+                <rect className={`midi-note${selectedId === note.id ? ' selected' : ''}${muted ? ' muted' : ''}`} x={x} y={y + 1} width={width} height={rowHeight - 2} rx={2} style={{ fill: muted ? MIDI_MUTED_COLOR : midiInstrumentColor(note.instrument) }} pointerEvents="none"/>
+                {!muted && <>
+                  <rect className="midi-note-hit" x={hitX} y={y + 1} width={hitWidth} height={rowHeight - 2} onPointerDown={event => onNotePointerDown(event, note, 'move')}/>
+                  <rect className="midi-note-handle" x={hitX} y={y + 1} width={handleWidth} height={rowHeight - 2} onPointerDown={event => onNotePointerDown(event, note, 'resize-left')}/>
+                  <rect className="midi-note-handle" x={hitX + hitWidth - handleWidth} y={y + 1} width={handleWidth} height={rowHeight - 2} onPointerDown={event => onNotePointerDown(event, note, 'resize-right')}/>
+                </>}
+              </g>;
+            })}
+            {isPlaying && <line className="midi-roll-playhead" x1={playheadSeconds * pxPerSecond} y1={0} x2={playheadSeconds * pxPerSecond} y2={rollHeight}/>}
+          </svg>
+        </div>
+        {!notes.length && <p className="midi-editor-empty-hint">추출된 음표가 없어요. 빈 공간을 클릭해 새 음표를 추가할 수 있어요.</p>}
+        {!!notes.length && <div className="pp-seek-row">
+          <span className="pp-seek-time">{formatSeekTime(playheadSeconds)}</span>
+          <input className="pp-seek-bar" type="range" aria-label="미리듣기 위치" min={0} max={previewDuration} step={0.01} value={Math.min(playheadSeconds, previewDuration)} onChange={event => seekPreview(Number(event.target.value))}/>
+          <span className="pp-seek-time">{formatSeekTime(previewDuration)}</span>
+        </div>}
+      </>}
+      <div className="dialog-actions pp-dialog-actions">
+        <div className="midi-editor-actions-left">
+          <Button variant="outline" size="sm" onClick={() => isPlaying ? stopPlayback() : playPreview(playheadSeconds)} disabled={!notes.length}>{isPlaying ? <><Square size={13}/>정지</> : <><Play size={13}/>미리듣기</>}</Button>
+          <Button variant="outline" size="sm" onClick={deleteSelected} disabled={selectedId === null}><Trash2 size={13}/>삭제하기</Button>
+        </div>
+        <div className="pp-dialog-actions-right">
+          <Button variant="outline" onClick={closeDialog} disabled={saving}>취소</Button>
+          <Button onClick={() => void save()} disabled={saving || loading || !!errorText}>{saving ? <LoaderCircle className="spin"/> : <Save size={14}/>}저장</Button>
+          <Button onClick={() => void downloadViaPicker()} disabled={downloading}>{downloading ? <LoaderCircle className="spin"/> : <Download size={14}/>}다운로드</Button>
+        </div>
+      </div>
+    </DialogContent>
+    </Dialog>
+    <Dialog open={midiSaveDialogOpen} onOpenChange={setMidiSaveDialogOpen}>
+      <DialogContent className="studio-dialog">
+        <DialogTitle>MIDI 저장</DialogTitle>
+        <DialogDescription>이 브라우저에서는 탐색기로 바로 저장할 수 없어, 저장할 폴더와 파일명을 직접 확인해 주세요.</DialogDescription>
+        <div className="dialog-scroll">
+          <label>폴더<Input value={midiSaveFolder} onChange={event => setMidiSaveFolder(event.target.value)} placeholder={DEFAULT_MIDI_PATH}/></label>
+          <label>파일명<Input value={midiSaveFilename} onChange={event => setMidiSaveFilename(event.target.value)} placeholder="midi"/></label>
+        </div>
+        <div className="dialog-actions">
+          <Button variant="outline" onClick={() => setMidiSaveDialogOpen(false)} disabled={midiSaving}>취소</Button>
+          <Button onClick={() => void confirmMidiSave()} disabled={midiSaving}>{midiSaving ? <LoaderCircle className="spin"/> : <Save size={14}/>}저장</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  </>;
+}
+
+// Shared preview transport state for source, reference, and transformed audio rows.
+// The four timbre engines all play one keyed buffer at a time, so this keeps
+// playback, seeking, speed, and volume behavior consistent across tabs.
+function useAudioTransport() {
+  const [activeKey, setActiveKey] = useState<string | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [positionSeconds, setPositionSeconds] = useState(0);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [previewVolume, setPreviewVolume] = useState(1);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const previewGainRef = useRef<GainNode | null>(null);
+  const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const playStartCtxTimeRef = useRef(0);
+  const playOffsetRef = useRef(0);
+  const rateRef = useRef(1);
+  const isPlayingRef = useRef(false);
+  const buffersRef = useRef<Record<string, AudioBuffer | null>>({});
+  const [peaksMap, setPeaksMap] = useState<Record<string, number[]>>({});
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+
+  function ensureAudioContext(): AudioContext {
+    if (audioCtxRef.current) return audioCtxRef.current;
+    const ctx = new AudioContext();
+    audioCtxRef.current = ctx;
+    const gainNode = ctx.createGain();
+    gainNode.gain.value = previewVolume;
+    gainNode.connect(ctx.destination);
+    previewGainRef.current = gainNode;
+    return ctx;
+  }
+  function setBuffer(key: string, buffer: AudioBuffer | null) {
+    buffersRef.current[key] = buffer;
+    setPeaksMap(previous => ({ ...previous, [key]: buffer ? computeWaveformPeaks(buffer, 300) : [] }));
+  }
+  function bufferForKey(key: string | null): AudioBuffer | null { return key ? buffersRef.current[key] || null : null; }
+  function peaksForKey(key: string): number[] { return peaksMap[key] || []; }
+  function pausePlayback() {
+    if (isPlaying) playOffsetRef.current = currentPosition();
+    currentSourceRef.current?.stop();
+    currentSourceRef.current = null;
+    setIsPlaying(false);
+  }
+  function currentPosition(): number {
+    const ctx = audioCtxRef.current;
+    if (!ctx || !isPlayingRef.current) return playOffsetRef.current;
+    return playOffsetRef.current + (ctx.currentTime - playStartCtxTimeRef.current) * rateRef.current;
+  }
+  function playKey(key: string, atPosition?: number) {
+    const ctx = audioCtxRef.current;
+    const buffer = bufferForKey(key);
+    if (!ctx || !buffer) return;
+    const position = atPosition !== undefined ? atPosition : currentPosition();
+    const clamped = Math.max(0, Math.min(position, Math.max(0, buffer.duration - 0.02)));
+    currentSourceRef.current?.stop();
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.playbackRate.value = rateRef.current;
+    source.connect(previewGainRef.current || ctx.destination);
+    source.onended = () => { if (currentSourceRef.current === source) { currentSourceRef.current = null; setIsPlaying(false); playOffsetRef.current = 0; setPositionSeconds(0); } };
+    source.start(0, clamped);
+    currentSourceRef.current = source;
+    playStartCtxTimeRef.current = ctx.currentTime;
+    playOffsetRef.current = clamped;
+    setPositionSeconds(clamped);
+    setActiveKey(key);
+    setIsPlaying(true);
+  }
+  function handleKeyClick(key: string) {
+    if (activeKey === key && isPlaying) { pausePlayback(); return; }
+    playKey(key);
+  }
+  function stopPlayback() { pausePlayback(); setActiveKey(null); setPositionSeconds(0); }
+  function seekBy(deltaSeconds: number) {
+    const key = activeKey || 'source';
+    const buffer = bufferForKey(key);
+    if (!buffer) return;
+    const next = Math.max(0, Math.min(currentPosition() + deltaSeconds, Math.max(0, buffer.duration - 0.02)));
+    if (isPlaying) { playKey(key, next); return; }
+    playOffsetRef.current = next;
+    setPositionSeconds(next);
+    setActiveKey(key);
+  }
+  function seekTo(nextSeconds: number) {
+    const key = activeKey || 'source';
+    const buffer = bufferForKey(key);
+    if (!buffer) return;
+    const next = Math.max(0, Math.min(nextSeconds, Math.max(0, buffer.duration - 0.02)));
+    if (isPlaying) { playKey(key, next); return; }
+    playOffsetRef.current = next;
+    setPositionSeconds(next);
+    setActiveKey(key);
+  }
+  function cycleSpeed() {
+    const next = playbackRate >= 2 ? 1 : 2;
+    const pos = currentPosition();
+    setPlaybackRate(next);
+    rateRef.current = next;
+    if (isPlaying && activeKey) { playKey(activeKey, pos); return; }
+    playOffsetRef.current = pos;
+    setPositionSeconds(pos);
+  }
+  function applyPreviewVolume(next: number) {
+    setPreviewVolume(next);
+    if (previewGainRef.current) previewGainRef.current.gain.value = next;
+  }
+  useEffect(() => {
+    if (!isPlaying) return;
+    let raf = 0;
+    const tick = () => { setPositionSeconds(currentPosition()); raf = requestAnimationFrame(tick); };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying]);
+
+  const activeBuffer = bufferForKey(activeKey);
+  const playedFraction = activeBuffer ? Math.min(1, positionSeconds / activeBuffer.duration) : 0;
+  const rowClass = (key: string, base: string) => `${base}${activeKey === key && isPlaying ? ' pp-row-playing-original' : ''}`;
+  return {
+    activeKey, isPlaying, positionSeconds, playbackRate, previewVolume, activeBuffer, playedFraction, rowClass,
+    ensureAudioContext, setBuffer, bufferForKey, peaksForKey, handleKeyClick, stopPlayback, seekBy, seekTo, cycleSpeed, applyPreviewVolume,
+    closeContext: () => { void audioCtxRef.current?.close(); },
+  };
+}
+type AudioTransport = ReturnType<typeof useAudioTransport>;
+function SeekRow({ t }: { t: AudioTransport }) {
+  return <div className="pp-seek-row">
+    <span className="pp-seek-time">{formatSeekTime(t.positionSeconds)}</span>
+    <input className="pp-seek-bar" type="range" aria-label="재생 위치" min={0} max={t.activeBuffer?.duration || 0} step={0.01} value={Math.min(t.positionSeconds, t.activeBuffer?.duration || 0)} onChange={event => t.seekTo(Number(event.target.value))} disabled={!t.activeBuffer}/>
+    <span className="pp-seek-time">{formatSeekTime(t.activeBuffer?.duration || 0)}</span>
+  </div>;
+}
+// Keep only the controls here so close/save can sit in the same action row.
+// SeekRow stays above it, matching the existing preview dialogs.
+function TransportControls({ t, disabled }: { t: AudioTransport; disabled: boolean }) {
+  return <div className="pp-transport">
+    <Button variant="ghost" size="icon" aria-label="5초 뒤로" onClick={() => t.seekBy(-5)} disabled={disabled}><Rewind size={15}/></Button>
+    <Button variant="ghost" size="icon" aria-label={t.isPlaying ? '일시정지' : '재생'} onClick={() => t.handleKeyClick(t.activeKey || 'source')} disabled={disabled}>{t.isPlaying ? <Pause size={15}/> : <Play size={15}/>}</Button>
+    <Button variant="ghost" size="icon" aria-label="5초 앞으로" onClick={() => t.seekBy(5)} disabled={disabled}><FastForward size={15}/></Button>
+    <button type="button" className="speed-btn" aria-label="재생 속도" onClick={t.cycleSpeed} disabled={disabled}>{t.playbackRate}x</button>
+    <Volume2 size={14} className="pp-volume-icon"/>
+    <input className="abc-player-volume" type="range" aria-label="미리듣기 볼륨" min={0} max={2} step={0.1} value={t.previewVolume} onChange={event => t.applyPreviewVolume(Number(event.target.value))} disabled={disabled}/>
+  </div>;
+}
+
+
+// "오디오 도구" 페이지의 도구 목록 -- AudioAuK ComfyUI 노드의 TASKS 딕셔너리(nodes.py)에 있는
+// 지시문 템플릿 중, 완성곡 맥락이 필요 없고(독립 오디오 업로드 또는 텍스트만) 기존 SongYUE2
+// 기능(음원 복원=AudioSR, STEM 분리, 음색 변조의 change-timbre)과 안 겹치는 것만 추렸다.
+// instruction()은 AuKInstructionBuilder 노드가 하는 "템플릿에 필드 채우기"를 프론트에서 그대로
+// 재현한 것 -- AudioAuK의 POST /api/jobs는 이 instruction 문자열을 그대로 받는 자유 텍스트라,
+// 서버는 이 문자열을 검증 없이 전달만 한다.
+type AukToolField = { key: string; label: string; type: 'text' | 'number'; placeholder: string };
+type AukTool = { id: string; label: string; category: string; audio: 'none' | 'optional' | 'required'; audioLabel: string; fields: AukToolField[]; instruction: (values: Record<string, string>) => string };
+const AUK_TOOL_CATEGORIES = [
+  { id: 'tts', label: 'TTS 생성' },
+  { id: 'edit', label: '가사/대사 편집' },
+  { id: 'adjust', label: '음성 특성 조절' },
+  { id: 'transform', label: '음성 변형' },
+  { id: 'quality', label: '품질 개선' },
+];
+const AUK_TOOLS: AukTool[] = [
+  { id: 'voice-description-tts', label: '설명으로 TTS 생성', category: 'tts', audio: 'none', audioLabel: '',
+    fields: [{ key: 'description', label: '음색 설명', type: 'text', placeholder: 'Warm, clear voice' }, { key: 'text', label: '말할 내용', type: 'text', placeholder: 'Hello, welcome to AuK.' }],
+    instruction: v => `Generate speech based on the following description: "${v.description}". The content to speak is: "${v.text}".` },
+  { id: 'voice-cloning', label: '목소리 복제 TTS', category: 'tts', audio: 'required', audioLabel: '복제할 목소리 레퍼런스',
+    fields: [{ key: 'text', label: '말할 내용', type: 'text', placeholder: 'Hello, welcome to AuK.' }],
+    instruction: v => `Say the following with the same voice: "${v.text}".` },
+  { id: 'replace-speech', label: '가사/대사 교체', category: 'edit', audio: 'required', audioLabel: '수정할 오디오',
+    fields: [{ key: 'original', label: '원래 구절', type: 'text', placeholder: 'old words' }, { key: 'replacement', label: '바꿀 구절', type: 'text', placeholder: 'new words' }],
+    instruction: v => `Replace '${v.original}' with '${v.replacement}'.` },
+  { id: 'insert-before', label: '구절 삽입(앞)', category: 'edit', audio: 'required', audioLabel: '수정할 오디오',
+    fields: [{ key: 'text', label: '삽입할 구절', type: 'text', placeholder: 'new words' }, { key: 'anchor', label: '기준 구절', type: 'text', placeholder: 'existing words' }],
+    instruction: v => `Add '${v.text}' before '${v.anchor}'.` },
+  { id: 'insert-after', label: '구절 삽입(뒤)', category: 'edit', audio: 'required', audioLabel: '수정할 오디오',
+    fields: [{ key: 'text', label: '삽입할 구절', type: 'text', placeholder: 'new words' }, { key: 'anchor', label: '기준 구절', type: 'text', placeholder: 'existing words' }],
+    instruction: v => `Add '${v.text}' after '${v.anchor}'.` },
+  { id: 'remove-speech', label: '구절 삭제', category: 'edit', audio: 'required', audioLabel: '수정할 오디오',
+    fields: [{ key: 'text', label: '삭제할 구절', type: 'text', placeholder: 'words to remove' }],
+    instruction: v => `Remove '${v.text}'.` },
+  { id: 'raise-pitch', label: '피치 올리기', category: 'adjust', audio: 'required', audioLabel: '수정할 오디오',
+    fields: [{ key: 'semitones', label: '반음 수', type: 'number', placeholder: '2' }],
+    instruction: v => `Raise the pitch by ${v.semitones} semitones.` },
+  { id: 'lower-pitch', label: '피치 내리기', category: 'adjust', audio: 'required', audioLabel: '수정할 오디오',
+    fields: [{ key: 'semitones', label: '반음 수', type: 'number', placeholder: '2' }],
+    instruction: v => `Lower the pitch by ${v.semitones} semitones.` },
+  { id: 'change-speed', label: '속도 조절', category: 'adjust', audio: 'required', audioLabel: '수정할 오디오',
+    fields: [{ key: 'factor', label: '배속', type: 'number', placeholder: '1.25' }],
+    instruction: v => `Adjust the speech speed to ${v.factor}x.` },
+  { id: 'increase-volume', label: '음량 올리기', category: 'adjust', audio: 'required', audioLabel: '수정할 오디오',
+    fields: [{ key: 'decibels', label: 'dB', type: 'number', placeholder: '5' }],
+    instruction: v => `Increase the volume by ${v.decibels} dB.` },
+  { id: 'decrease-volume', label: '음량 내리기', category: 'adjust', audio: 'required', audioLabel: '수정할 오디오',
+    fields: [{ key: 'decibels', label: 'dB', type: 'number', placeholder: '5' }],
+    instruction: v => `Decrease the volume by ${v.decibels} dB.` },
+  { id: 'change-emotion', label: '감정 바꾸기', category: 'adjust', audio: 'required', audioLabel: '수정할 오디오',
+    fields: [{ key: 'description', label: '감정 설명', type: 'text', placeholder: 'happy' }],
+    instruction: v => `Change the emotion to ${v.description}.` },
+  { id: 'convert-to-whisper', label: '속삭임으로 변환', category: 'transform', audio: 'required', audioLabel: '수정할 오디오', fields: [],
+    instruction: () => 'Say this in a quiet, whispering voice, keeping the same words.' },
+  { id: 'whisper-to-speech', label: '속삭임 → 일반 발화', category: 'transform', audio: 'required', audioLabel: '수정할 오디오', fields: [],
+    instruction: () => 'Convert this whispered speech into a normal speaking voice while preserving the speaker and content.' },
+  { id: 'remove-accent', label: '억양 제거', category: 'transform', audio: 'required', audioLabel: '수정할 오디오', fields: [],
+    instruction: () => "Remove the regional accent while preserving the speaker's voice and content." },
+  { id: 'add-nonverbal', label: '비언어음 추가', category: 'transform', audio: 'required', audioLabel: '수정할 오디오',
+    fields: [{ key: 'sound', label: '소리', type: 'text', placeholder: 'cough' }, { key: 'position', label: '위치', type: 'text', placeholder: 'beginning' }],
+    instruction: v => `Add a ${v.sound} at the ${v.position} of the speech.` },
+  { id: 'remove-nonverbal', label: '비언어음 제거', category: 'transform', audio: 'required', audioLabel: '수정할 오디오',
+    fields: [{ key: 'sound', label: '소리', type: 'text', placeholder: 'breaths' }],
+    instruction: v => `Remove all ${v.sound} from the audio.` },
+  { id: 'enhance-speech', label: '음성 향상(종합)', category: 'quality', audio: 'required', audioLabel: '복원할 오디오', fields: [],
+    instruction: () => 'Preserve all speakers, remove noise and reverberation, and output clean speech of the same length.' },
+  { id: 'denoise-only', label: '노이즈만 제거', category: 'quality', audio: 'required', audioLabel: '복원할 오디오', fields: [],
+    instruction: () => 'Remove only the background noise, preserve everything else, and output audio of the same length.' },
+  { id: 'dereverberate-only', label: '잔향만 제거', category: 'quality', audio: 'required', audioLabel: '복원할 오디오', fields: [],
+    instruction: () => 'Remove only the room reverberation, preserve everything else, and output audio of the same length.' },
+  { id: 'repair-quality', label: '음질 결함 복구', category: 'quality', audio: 'required', audioLabel: '복원할 오디오',
+    fields: [{ key: 'defect', label: '결함 설명', type: 'text', placeholder: 'telephone effect' }],
+    instruction: v => `Repair the ${v.defect} and restore natural, clear speech.` },
+];
+
+// 사이드바 "오디오 도구 (실험적)" 페이지 -- 완성곡과 무관하게 AudioAuK의 TTS/편집/조절/변형/품질개선
+// 작업을 독립적으로 실행한다. 카테고리 → 도구 선택 → (도구별) 동적 입력창 → 실행 → 결과 미리듣기+저장.
+function AudioToolsPage({ notify, onCreated }: { notify: (text: string, error?: boolean) => void; onCreated: (project: Project) => void }) {
+  const [categoryId, setCategoryId] = useState(AUK_TOOL_CATEGORIES[0].id);
+  const toolsInCategory = AUK_TOOLS.filter(tool => tool.category === categoryId);
+  const [toolId, setToolId] = useState(toolsInCategory[0].id);
+  const tool = AUK_TOOLS.find(item => item.id === toolId) || toolsInCategory[0];
+  const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
+  const [seconds, setSeconds] = useState(10);
+  const [checkpoint, setCheckpoint] = useState<'flash' | 'base'>('flash');
+  const [audioName, setAudioName] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [errorText, setErrorText] = useState('');
+  const [resultUrl, setResultUrl] = useState<string | null>(null);
+  const audioBlobRef = useRef<Blob | null>(null);
+  const resultDataUrlRef = useRef<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  function selectCategory(nextCategoryId: string) {
+    setCategoryId(nextCategoryId);
+    const first = AUK_TOOLS.find(item => item.category === nextCategoryId);
+    if (first) { setToolId(first.id); setFieldValues({}); }
+  }
+  function selectTool(nextTool: AukTool) {
+    setToolId(nextTool.id);
+    setFieldValues(Object.fromEntries(nextTool.fields.map(field => [field.key, field.placeholder])));
+    setResultUrl(null);
+    setErrorText('');
+  }
+  function handlePickFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    audioBlobRef.current = file;
+    setAudioName(file.name);
+  }
+
+  async function run() {
+    if (tool.audio === 'required' && !audioBlobRef.current) { setErrorText(`${tool.audioLabel}를 먼저 선택해 주세요.`); return; }
+    setRunning(true);
+    setErrorText('');
+    setResultUrl(null);
+    try {
+      const values = { ...Object.fromEntries(tool.fields.map(field => [field.key, field.placeholder])), ...fieldValues };
+      const instruction = tool.instruction(values);
+      let audioDataUrl: string | undefined;
+      if (audioBlobRef.current) {
+        audioDataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(audioBlobRef.current as Blob);
+        });
+      }
+      // AudioAuK는 audioId(참고 음성)가 없는 순수 텍스트 TTS에는 반드시 양의 출력 길이(초)가 필요하다
+      // (0="원본 길이만큼"인데 원본이 없으니 거부됨) -- 오디오가 있는 작업은 0(원본과 동일 길이) 그대로.
+      const result = await api<{ dataUrl: string }>('/audio-tools/auk', 'POST', { task: 'tts', instruction, audioDataUrl, checkpoint, seconds: tool.audio === 'none' ? seconds : 0 });
+      resultDataUrlRef.current = result.dataUrl;
+      setResultUrl(result.dataUrl);
+    } catch (error) { setErrorText((error as Error).message); }
+    finally { setRunning(false); }
+  }
+
+  async function handleSave() {
+    if (!resultDataUrlRef.current) return;
+    setSaving(true);
+    try {
+      const completed = await api<Project>('/audio-save', 'POST', { dataUrl: resultDataUrlRef.current, title: `오디오 도구 - ${tool.label}` });
+      onCreated(completed);
+      notify('결과를 라이브러리에 추가했습니다.');
+    } catch (error) { setErrorText((error as Error).message); }
+    finally { setSaving(false); }
+  }
+
+  return <section className="library-page page-scroll">
+    <div className="page-heading library-heading">
+      <div><span className="eyebrow">AudioAuK 기반</span><h1>오디오 도구<span className="small-badge">실험적</span></h1><p>완성곡과 무관하게 텍스트→음성 생성, 가사/대사 편집, 피치·속도·음량 조절, 음성 변형, 품질 개선을 바로 실행합니다.</p></div>
+    </div>
+    <div className="inline-note warning"><CircleHelp size={17}/><span>실험적 기능입니다 — AudioAuK(별도 로컬 서버)가 필요합니다. 처음 실행 시 자동으로 기동을 시도하며 시간이 걸릴 수 있습니다.</span></div>
+    <div className="form-section idea-section">
+      <div className="mode-switch" aria-label="도구 카테고리">
+        {AUK_TOOL_CATEGORIES.map(category => <button key={category.id} className={categoryId === category.id ? 'active' : ''} aria-pressed={categoryId === category.id} onClick={() => selectCategory(category.id)}>{category.label}</button>)}
+      </div>
+      <div className="voice-convert-engine-switch" role="group" aria-label="도구 선택">
+        {toolsInCategory.map(item => <Button key={item.id} variant={toolId === item.id ? undefined : 'outline'} size="sm" onClick={() => selectTool(item)} disabled={running}>{item.label}</Button>)}
+      </div>
+      {tool.fields.map(field => <label className="wide-field" key={field.key}>{field.label}
+        <Input type={field.type === 'number' ? 'number' : 'text'} value={fieldValues[field.key] ?? field.placeholder} onChange={event => setFieldValues({ ...fieldValues, [field.key]: event.target.value })} disabled={running}/>
+      </label>)}
+      {tool.audio === 'none' && <label className="wide-field">출력 길이(초) -- 참고할 오디오가 없어 직접 정해야 합니다
+        <Input type="number" min={1} max={3600} value={seconds} onChange={event => setSeconds(Math.max(1, Number(event.target.value) || 1))} disabled={running}/>
+      </label>}
+      {tool.audio !== 'none' && <div className="voice-convert-topbar">
+        <Button variant="outline" className="voice-convert-file-btn" onClick={() => fileInputRef.current?.click()} disabled={running} title={audioName || undefined}>
+          <Upload size={14}/><span className="voice-convert-file-name">{audioName || `${tool.audioLabel} 선택${tool.audio === 'optional' ? ' (선택)' : ''}`}</span>
+        </Button>
+        <input ref={fileInputRef} type="file" accept="audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/mp4,audio/ogg" hidden onChange={handlePickFile}/>
+      </div>}
+      <div className="voice-convert-engine-switch" role="group" aria-label="AuK 체크포인트">
+        <Button variant={checkpoint === 'flash' ? undefined : 'outline'} size="sm" onClick={() => setCheckpoint('flash')} disabled={running}>Flash</Button>
+        <Button variant={checkpoint === 'base' ? undefined : 'outline'} size="sm" onClick={() => setCheckpoint('base')} disabled={running}>Base</Button>
+      </div>
+      <Button onClick={() => void run()} disabled={running}>{running ? <LoaderCircle className="spin"/> : <Sparkles size={14}/>}실행</Button>
+      {errorText && <p className="field-hint warning">{errorText}</p>}
+      {resultUrl && <div className="form-section">
+        <audio src={resultUrl} controls/>
+        <Button onClick={() => void handleSave()} disabled={saving}>{saving ? <LoaderCircle className="spin"/> : <Save size={15}/>}라이브러리에 저장</Button>
+      </div>}
+    </div>
+  </section>;
+}
+
+type DdspJobStatus = { id: string; projectId: string; status: string; targetStep: number; currentStep: number; currentLoss: number | null; createdAt: number; updatedAt: number; skippedRefs: string[]; error: string | null };
+
+// 라이브러리 파일 선택기 -- multiple=false(기본, 원본/참조 audio 선택용)면 더블클릭 한 번으로 바로
+// 확정되고, multiple=true(DDSP-SVC 레퍼런스 여러 개 선택용)면 체크박스로 여러 개 고른 뒤 "완료"를
+// 눌러야 확정된다. 폴더 이동 시 선택은 초기화한다(v1 단순화).
+function MultiFileLibraryPicker({ open, onClose, onConfirm, multiple = false, title, description }: { open: boolean; onClose: () => void; onConfirm: (relPaths: string[]) => void; multiple?: boolean; title?: string; description?: string }) {
+  const [browsePath, setBrowsePath] = useState('audio-ref');
+  const [browseEntries, setBrowseEntries] = useState<{ name: string; type: 'dir' | 'file' }[]>([]);
+  const [browseLoading, setBrowseLoading] = useState(false);
+  const [browseError, setBrowseError] = useState('');
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+
+  async function loadBrowsePath(relPath: string, fallbackToRoot = false) {
+    setBrowseLoading(true);
+    setBrowseError('');
+    try {
+      const result = await api<{ path: string; entries: { name: string; type: 'dir' | 'file' }[] }>(`/library/browse?path=${encodeURIComponent(relPath)}`);
+      setBrowsePath(result.path);
+      setBrowseEntries(result.entries);
+      setSelected(new Set());
+    } catch (error) {
+      if (fallbackToRoot && relPath !== '') { await loadBrowsePath('', false); return; }
+      setBrowseError((error as Error).message);
+      setBrowseEntries([]);
+    } finally { setBrowseLoading(false); }
+  }
+  useEffect(() => { if (open) void loadBrowsePath(browsePath || 'audio-ref', true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open]);
+
+  function navigateInto(name: string) { void loadBrowsePath(browsePath ? `${browsePath}/${name}` : name); }
+  function navigateUp() {
+    if (!browsePath) return;
+    const parts = browsePath.split('/');
+    parts.pop();
+    void loadBrowsePath(parts.join('/'));
+  }
+  function toggle(name: string) {
+    if (!multiple) { onConfirm([browsePath ? `${browsePath}/${name}` : name]); onClose(); return; }
+    setSelected(previous => { const next = new Set(previous); if (next.has(name)) next.delete(name); else next.add(name); return next; });
+  }
+  function confirm() {
+    onConfirm([...selected].map(name => (browsePath ? `${browsePath}/${name}` : name)));
+    onClose();
+  }
+
+  return <Dialog open={open} onOpenChange={next => { if (!next) onClose(); }}>
+    <DialogContent className="studio-dialog voice-convert-browser-dialog">
+      <DialogTitle>{title || (multiple ? '레퍼런스 음색 파일 선택 (여러 개 가능)' : '오디오 파일 선택')}</DialogTitle>
+      <DialogDescription>{description || (multiple ? 'library 폴더 안의 오디오 파일을 여러 개 골라 주세요. DDSP-SVC 학습에 쓰일 목표 음색 클립들입니다.' : 'library 폴더 안의 오디오 파일을 골라 주세요.')}</DialogDescription>
+      <div className="voice-convert-browser-path">
+        <Button variant="ghost" size="icon" aria-label="상위 폴더로" onClick={navigateUp} disabled={!browsePath || browseLoading}><ChevronLeft size={15}/></Button>
+        <span className="voice-convert-browser-path-text">library/{browsePath}</span>
+      </div>
+      <div className="voice-convert-browser-list">
+        {browseLoading ? <div className="stem-loading"><LoaderCircle className="spin"/>불러오는 중...</div>
+        : browseError ? <p className="field-hint warning">{browseError}</p>
+        : !browseEntries.length ? <p className="voice-convert-browser-empty">파일이 없습니다.</p>
+        : browseEntries.map(entry => <button key={entry.name} type="button" className={`voice-convert-browser-item${selected.has(entry.name) ? ' selected' : ''}`} onClick={() => entry.type === 'dir' ? navigateInto(entry.name) : toggle(entry.name)}>
+          {entry.type === 'dir' ? <Folder size={14}/> : multiple ? <input type="checkbox" checked={selected.has(entry.name)} onChange={() => toggle(entry.name)} onClick={event => event.stopPropagation()}/> : <Music2 size={14}/>}
+          <span>{entry.name}</span>
+        </button>)}
+      </div>
+      <div className="dialog-actions">
+        <Button variant="outline" onClick={onClose}>취소</Button>
+        {multiple && <Button onClick={confirm} disabled={!selected.size}>{<Check size={14}/>}완료 ({selected.size}개)</Button>}
+      </div>
+    </DialogContent>
+  </Dialog>;
+}
+
+const DDSP_STATUS_LABEL: Record<string, string> = {
+  preparing: '준비 중...', preprocessing: '데이터 전처리 중...', training: '학습 중', inferring: '변환 중...', postprocessing: '후처리 중...', completed: '완료', failed: '실패', cancelled: '취소됨',
+};
+
+
+type TimbreEngine = 'seed_vc' | 'vevo2' | 'auk' | 'ddsp';
+const TIMBRE_ENGINES: { id: TimbreEngine; label: string }[] = [
+  { id: 'seed_vc', label: 'Seed-VC' },
+  { id: 'vevo2', label: 'Vevo' },
+  { id: 'auk', label: 'AuK' },
+  { id: 'ddsp', label: 'DDSP-SVC' },
+];
+
+// Sidebar timbre transform dialog. Source/reference audio can now come from
+// any library file, so the backend uses a preview session instead of project id.
+function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onDdspJobStarted, onDdspJobCleared }: {
+  onClose: () => void; notify: (text: string, error?: boolean) => void; onCreated: (project: Project) => void;
+  ddspActiveJobs: Record<string, string>; onDdspJobStarted: (previewId: string, jobId: string) => void; onDdspJobCleared: (previewId: string) => void;
+}) {
+  const t = useAudioTransport();
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const [sourceName, setSourceName] = useState<string | null>(null);
+  const [referenceName, setReferenceName] = useState<string | null>(null);
+  const referenceBlobRef = useRef<Blob | null>(null);
+  const [preparing, setPreparing] = useState(false);
+  const [engine, setEngine] = useState<TimbreEngine>('seed_vc');
+  const [checkpoint, setCheckpoint] = useState<'flash' | 'base'>('flash');
+  const [textDescription, setTextDescription] = useState('');
+  const [ddspReferencePaths, setDdspReferencePaths] = useState<string[]>([]);
+  const [ddspTargetStep, setDdspTargetStep] = useState(40000);
+  const [ddspPickerOpen, setDdspPickerOpen] = useState(false);
+  const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
+  const [referencePickerOpen, setReferencePickerOpen] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [applyProgress, setApplyProgress] = useState(0);
+  const [starting, setStarting] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [errorText, setErrorText] = useState('');
+  const [warningText, setWarningText] = useState('');
+  const [transcript, setTranscript] = useState<string | null>(null);
+  const [ddspJob, setDdspJob] = useState<DdspJobStatus | null>(null);
+  const ddspResultLoadedRef = useRef<string | null>(null);
+  useEffect(() => () => t.closeContext(), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const ddspActiveJobId = previewId ? ddspActiveJobs[previewId] || null : null;
+  useEffect(() => {
+    if (!ddspActiveJobId) { setDdspJob(null); return; }
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const jobs = await api<DdspJobStatus[]>('/ddsp-jobs');
+        if (cancelled) return;
+        const found = jobs.find(item => item.id === ddspActiveJobId);
+        if (!found) return;
+        setDdspJob(found);
+        if (found.status === 'failed') { setErrorText(found.error || 'DDSP-SVC 학습이 실패했습니다.'); onDdspJobCleared(found.projectId); }
+      } catch { /* 네트워크 일시 오류는 다음 폴링에서 재시도 */ }
+    };
+    void poll();
+    const interval = window.setInterval(poll, 3000);
+    return () => { cancelled = true; window.clearInterval(interval); };
+  }, [ddspActiveJobId, onDdspJobCleared]);
+  // 학습이 completed로 바뀌면 결과 스템을 한 번만 불러와 오른쪽 결과 영역을 채운다.
+  useEffect(() => {
+    if (!ddspJob || ddspJob.status !== 'completed' || !previewId || ddspResultLoadedRef.current === ddspJob.id) return;
+    ddspResultLoadedRef.current = ddspJob.id;
+    (async () => {
+      try {
+        const ctx = t.ensureAudioContext();
+        const [vocalsResponse, instrumentalResponse] = await Promise.all([
+          fetch(`/api/timbre-transform/${previewId}/stems/vocals`),
+          fetch(`/api/timbre-transform/${previewId}/stems/instrumental`),
+        ]);
+        if (!vocalsResponse.ok || !instrumentalResponse.ok) throw new Error('load failed');
+        const [vocalsBuffer, instrumentalBuffer] = await Promise.all([
+          ctx.decodeAudioData(await vocalsResponse.arrayBuffer()),
+          ctx.decodeAudioData(await instrumentalResponse.arrayBuffer()),
+        ]);
+        const mixed = await mixBuffers([vocalsBuffer, instrumentalBuffer]);
+        t.setBuffer('result', mixed);
+        onDdspJobCleared(previewId);
+      } catch { setErrorText('학습 결과를 불러오지 못했습니다.'); }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ddspJob, previewId]);
+
+  async function readFileAsDataUrl(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  async function pickSource(relPath: string) {
+    setErrorText('');
+    t.setBuffer('result', null); t.setBuffer('source-vocal', null); t.setBuffer('source-instrumental', null);
+    t.setBuffer('result-vocal', null); t.setBuffer('result-instrumental', null);
+    setPreviewId(null);
+    setDdspJob(null);
+    ddspResultLoadedRef.current = null;
+    setPreparing(true);
+    try {
+      const response = await fetch(`/api/library/file?path=${encodeURIComponent(relPath)}`);
+      if (!response.ok) throw new Error('파일을 불러오지 못했습니다.');
+      const blob = await response.blob();
+      setSourceName(relPath.split('/').pop() || relPath);
+      const ctx = t.ensureAudioContext();
+      const buffer = await ctx.decodeAudioData(await blob.arrayBuffer());
+      t.setBuffer('source', buffer);
+      const dataUrl = await readFileAsDataUrl(blob);
+      const prepared = await api<{ previewId: string }>('/timbre-transform/prepare', 'POST', { sourceDataUrl: dataUrl });
+      setPreviewId(prepared.previewId);
+      const [vocalsResponse, instrumentalResponse] = await Promise.all([
+        fetch(`/api/timbre-transform/${prepared.previewId}/stems/vocals`),
+        fetch(`/api/timbre-transform/${prepared.previewId}/stems/instrumental`),
+      ]);
+      if (vocalsResponse.ok && instrumentalResponse.ok) {
+        const [vocalsBuffer, instrumentalBuffer] = await Promise.all([
+          ctx.decodeAudioData(await vocalsResponse.arrayBuffer()),
+          ctx.decodeAudioData(await instrumentalResponse.arrayBuffer()),
+        ]);
+        t.setBuffer('source-vocal', vocalsBuffer);
+        t.setBuffer('source-instrumental', instrumentalBuffer);
+      }
+    } catch (error) { setErrorText((error as Error).message || '원본 오디오 준비에 실패했습니다.'); }
+    finally { setPreparing(false); }
+  }
+
+  async function pickReference(relPath: string) {
+    setErrorText('');
+    try {
+      const response = await fetch(`/api/library/file?path=${encodeURIComponent(relPath)}`);
+      if (!response.ok) throw new Error('파일을 불러오지 못했습니다.');
+      const blob = await response.blob();
+      referenceBlobRef.current = blob;
+      setReferenceName(relPath.split('/').pop() || relPath);
+      try {
+        const ctx = t.ensureAudioContext();
+        const buffer = await ctx.decodeAudioData(await blob.arrayBuffer());
+        t.setBuffer('reference', buffer);
+      } catch { t.setBuffer('reference', null); }
+    } catch (error) { setErrorText((error as Error).message); }
+  }
+
+  // Seed-VC/Vevo2/AuK 적용은 서버가 실시간 %를 안 주므로(DDSP-SVC처럼 스텝 단위 진행이 없음),
+  // "노래 만들기"와 같은 방식(POST /generate/status의 elapsedMs/expectedMs 추정치)을 그대로 재사용한다.
+  function withEstimatedProgress<T>(run: () => Promise<T>): Promise<T> {
+    setApplyProgress(0);
+    const poll = window.setInterval(() => {
+      api<{ active: boolean; elapsedMs: number; expectedMs: number }>('/generate/status').then(status => {
+        if (status.active && status.expectedMs > 0) setApplyProgress(Math.min(96, Math.round(status.elapsedMs / status.expectedMs * 100)));
+      }).catch(() => {});
+    }, 500);
+    return run().finally(() => { window.clearInterval(poll); setApplyProgress(100); });
+  }
+
+  async function applyLegacy() {
+    if (!previewId || !referenceBlobRef.current) return;
+    setApplying(true);
+    setErrorText('');
+    try {
+      await withEstimatedProgress(async () => {
+        const dataUrl = await readFileAsDataUrl(referenceBlobRef.current as Blob);
+        await api(`/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl, engine });
+        const ctx = t.ensureAudioContext();
+        const [vocalsResponse, instrumentalResponse] = await Promise.all([
+          fetch(`/api/timbre-transform/${previewId}/stems/vocals`),
+          fetch(`/api/timbre-transform/${previewId}/stems/instrumental`),
+        ]);
+        if (!vocalsResponse.ok || !instrumentalResponse.ok) throw new Error('load failed');
+        const [vocalsBuffer, instrumentalBuffer] = await Promise.all([
+          ctx.decodeAudioData(await vocalsResponse.arrayBuffer()),
+          ctx.decodeAudioData(await instrumentalResponse.arrayBuffer()),
+        ]);
+        t.setBuffer('result-vocal', vocalsBuffer);
+        t.setBuffer('result-instrumental', instrumentalBuffer);
+        const mixed = await mixBuffers([vocalsBuffer, instrumentalBuffer]);
+        t.setBuffer('result', mixed);
+      });
+    } catch (error) {
+      const message = error instanceof Error && error.message && error.message !== 'load failed' ? error.message : '보컬 음색 변환에 실패했습니다. audio.cpp가 Seed-VC/Vevo2 모델을 포함해 빌드되어 있는지, 모델 파일이 있는지 확인해 주세요.';
+      setErrorText(message);
+    } finally { setApplying(false); }
+  }
+
+  async function applyAuk() {
+    if (!previewId) return;
+    if (!referenceBlobRef.current && !textDescription.trim()) return;
+    setApplying(true);
+    setErrorText('');
+    setWarningText('');
+    try {
+      await withEstimatedProgress(async () => {
+        const referenceDataUrl = referenceBlobRef.current ? await readFileAsDataUrl(referenceBlobRef.current) : undefined;
+        const result = await api<{ ok: boolean; warning: string | null; transcript: string | null }>(`/timbre-transform/${previewId}/auk/apply`, 'POST', { referenceDataUrl, textDescription: textDescription.trim() || undefined, checkpoint });
+        setWarningText(result.warning || '');
+        setTranscript(result.transcript);
+        const ctx = t.ensureAudioContext();
+        const [vocalsResponse, instrumentalResponse] = await Promise.all([
+          fetch(`/api/timbre-transform/${previewId}/stems/vocals`),
+          fetch(`/api/timbre-transform/${previewId}/stems/instrumental`),
+        ]);
+        if (!vocalsResponse.ok || !instrumentalResponse.ok) throw new Error('load failed');
+        const [vocalsBuffer, instrumentalBuffer] = await Promise.all([
+          ctx.decodeAudioData(await vocalsResponse.arrayBuffer()),
+          ctx.decodeAudioData(await instrumentalResponse.arrayBuffer()),
+        ]);
+        const mixed = await mixBuffers([vocalsBuffer, instrumentalBuffer]);
+        t.setBuffer('result', mixed);
+      });
+    } catch (error) {
+      const message = error instanceof Error && error.message && error.message !== 'load failed' ? error.message : 'AuK 변환에 실패했습니다.';
+      setErrorText(message);
+    } finally { setApplying(false); }
+  }
+
+  async function startDdspTraining() {
+    if (!previewId || !ddspReferencePaths.length) return;
+    setStarting(true);
+    setErrorText('');
+    ddspResultLoadedRef.current = null;
+    setDdspJob(null);
+    try {
+      const referenceDataUrls = await Promise.all(ddspReferencePaths.map(async relPath => {
+        const response = await fetch(`/api/library/file?path=${encodeURIComponent(relPath)}`);
+        if (!response.ok) throw new Error(`파일을 불러오지 못했습니다: ${relPath}`);
+        return readFileAsDataUrl(await response.blob());
+      }));
+      const result = await api<{ jobId: string }>(`/timbre-transform/${previewId}/ddsp/start`, 'POST', { referenceDataUrls, targetStep: ddspTargetStep });
+      onDdspJobStarted(previewId, result.jobId);
+      notify('DDSP-SVC 학습을 시작했습니다. 창을 닫아도 계속 진행됩니다.');
+    } catch (error) { setErrorText((error as Error).message); }
+    finally { setStarting(false); }
+  }
+
+  async function handleSave() {
+    const buffer = t.bufferForKey('result');
+    if (!buffer || !sourceName) return;
+    setSaving(true);
+    try {
+      t.stopPlayback();
+      const wavBlob = audioBufferToWavBlob(buffer);
+      const dataUrl = await readFileAsDataUrl(wavBlob);
+      const base = sourceName.replace(/\.[^.]+$/, '');
+      const engineLabel = TIMBRE_ENGINES.find(item => item.id === engine)?.label || engine;
+      const completed = await api<Project>('/audio-save', 'POST', { dataUrl, title: `${base} (${engineLabel} 음색 변조)` });
+      onCreated(completed);
+      notify('음색을 변환해 라이브러리에 추가했습니다.');
+    } catch (error) { setErrorText((error as Error).message); }
+    finally { setSaving(false); }
+  }
+
+  const isLegacy = engine === 'seed_vc' || engine === 'vevo2';
+  const isTraining = !!ddspJob && !['completed', 'failed', 'cancelled'].includes(ddspJob.status);
+  const busy = preparing || applying || starting;
+  const canApply = engine === 'ddsp' ? !!ddspReferencePaths.length && !!previewId && !isTraining
+    : engine === 'auk' ? !!previewId && (!!referenceName || !!textDescription.trim())
+    : !!previewId && !!referenceName;
+  const resultBuffer = t.bufferForKey('result');
+  const ddspProgress = ddspJob?.targetStep ? Math.min(100, Math.round(ddspJob.currentStep / ddspJob.targetStep * 100)) : 0;
+
+  return <Dialog open onOpenChange={next => { if (!next) onClose(); }}>
+    <DialogContent className="studio-dialog audio-compare-dialog timbre-transform-dialog">
+      <DialogTitle>음색 변조 (실험적)</DialogTitle>
+      <DialogDescription>라이브러리에서 원본과 참조 audio를 고르고, 모델을 골라 음색을 바꿔 보세요.</DialogDescription>
+      <div className="timbre-transform-body">
+        <div className="timbre-left-panel">
+          <div className="timbre-section-heading">Audio 선택</div>
+          <Button variant="outline" className="voice-convert-file-btn" onClick={() => setSourcePickerOpen(true)} disabled={busy} title={sourceName || undefined}>
+            <Upload size={14}/><span className="voice-convert-file-name">{sourceName || '원본 audio 선택'}</span>
+          </Button>
+          <Button variant="outline" className="voice-convert-file-btn" onClick={() => setReferencePickerOpen(true)} disabled={busy} title={referenceName || undefined}>
+            <Upload size={14}/><span className="voice-convert-file-name">{referenceName || '참조 audio 선택'}</span>
+          </Button>
+
+          <div className="timbre-section-heading">모델 Selection</div>
+          <div className="timbre-model-grid" role="group" aria-label="음색 변조 모델">
+            {TIMBRE_ENGINES.map(item => <button key={item.id} type="button" className={`timbre-model-btn${engine === item.id ? ' active' : ''}`} onClick={() => setEngine(item.id)} disabled={busy}>{item.label}</button>)}
+          </div>
+
+          {engine === 'auk' && <div className="timbre-engine-options">
+            <div className="voice-convert-engine-switch" role="group" aria-label="AuK 체크포인트">
+              <Button variant={checkpoint === 'flash' ? undefined : 'outline'} size="sm" onClick={() => setCheckpoint('flash')} disabled={busy}>Flash</Button>
+              <Button variant={checkpoint === 'base' ? undefined : 'outline'} size="sm" onClick={() => setCheckpoint('base')} disabled={busy}>Base</Button>
+            </div>
+            <Textarea value={textDescription} onChange={event => setTextDescription(event.target.value)} placeholder="목표 음색 텍스트 설명 (예: 따뜻하고 부드러운 남성 재즈 보컬) -- 참조가 없으면 필수, 있으면 스타일 수식어로 함께 사용됩니다" disabled={busy} rows={3}/>
+            <p className="field-hint">주의: 참조 audio를 쓰면 결과는 원곡 멜로디가 아니라 그 목소리로 가사를 다시 말하는(TTS) 형태입니다. 30초를 넘는 긴 곡에서는 결과가 불안정할 수 있습니다.</p>
+          </div>}
+
+          {engine === 'ddsp' && <div className="timbre-engine-options">
+            <Button variant="outline" className="voice-convert-file-btn" onClick={() => setDdspPickerOpen(true)} disabled={isTraining || starting}>
+              <Upload size={14}/><span className="voice-convert-file-name">{ddspReferencePaths.length ? `레퍼런스 ${ddspReferencePaths.length}개 선택됨` : '레퍼런스 선택 (여러 개, 참조 audio와 별개)'}</span>
+            </Button>
+            <label className="field-hint">목표 스텝<Input type="number" min={100} max={500000} step={1000} value={ddspTargetStep} onChange={event => setDdspTargetStep(Number(event.target.value))} disabled={isTraining || starting}/></label>
+            <Button onClick={() => void startDdspTraining()} disabled={!canApply || starting}>{starting ? <LoaderCircle className="spin"/> : <Sparkles size={14}/>}학습 시작</Button>
+            <p className="field-hint">기본값 40,000스텝은 이 환경 기준 약 1시간 35분 소요(초당 7~10스텝).</p>
+          </div>}
+
+          {engine !== 'ddsp' && <div className="timbre-apply-row">
+            <Button onClick={() => void (isLegacy ? applyLegacy() : applyAuk())} disabled={!canApply || applying}>{applying ? <LoaderCircle className="spin"/> : <Mic size={14}/>}적용</Button>
+          </div>}
+          {applying && engine !== 'ddsp' && <div className="timbre-progress-block"><span>적용 중 ({applyProgress}%)</span><Progress value={applyProgress}/></div>}
+          {starting && engine === 'ddsp' && <div className="timbre-progress-block"><span>학습 준비 중...</span><Progress value={8}/></div>}
+          {ddspJob && <div className="stem-loading">
+            {isTraining && <LoaderCircle className="spin"/>}
+            {DDSP_STATUS_LABEL[ddspJob.status] || ddspJob.status}
+            {ddspJob.status === 'training' && ` (${ddspProgress}%, ${ddspJob.currentStep}/${ddspJob.targetStep} 스텝${ddspJob.currentLoss !== null ? `, loss ${ddspJob.currentLoss.toFixed(3)}` : ''})`}
+            {ddspJob.skippedRefs.length > 0 && ` -- ${ddspJob.skippedRefs.length}개 클립은 2초 미만이라 제외됨`}
+          </div>}
+          {ddspJob?.status === 'training' && <div className="timbre-progress-block"><Progress value={ddspProgress}/></div>}
+          {preparing && <div className="stem-loading"><LoaderCircle className="spin"/>원본 오디오 준비 중(보컬/악기 분리)...</div>}
+          {errorText && <p className="field-hint warning">{errorText}</p>}
+          {warningText && <p className="field-hint warning">{warningText}</p>}
+          {transcript && <p className="field-hint">AuK가 인식한 원곡 가사: {transcript}</p>}
+        </div>
+
+        <div className="timbre-main-panel">
+          {!sourceName ? <p className="field-hint">왼쪽에서 "원본 audio"를 먼저 골라 주세요.</p> : <>
+            {isLegacy ? <div className="stem-list timbre-legacy-list">
+              <div className={t.rowClass('source', 'stem-row')}>
+                <button type="button" className="pp-waveform-label" aria-label="원곡 재생/일시정지" onClick={() => t.handleKeyClick('source')} disabled={!t.peaksForKey('source').length}>{t.activeKey === 'source' && t.isPlaying ? <Pause size={15}/> : <AudioLines size={15}/>}</button>
+                <span className="stem-label">원곡</span>
+                <Waveform peaks={t.peaksForKey('source')} playedFraction={t.playedFraction}/>
+              </div>
+              <div className={t.rowClass('source-vocal', 'stem-row stem-row-sub')}>
+                <button type="button" className="pp-waveform-label" aria-label="원곡 보컬 재생/일시정지" onClick={() => t.handleKeyClick('source-vocal')} disabled={!t.peaksForKey('source-vocal').length}>{t.activeKey === 'source-vocal' && t.isPlaying ? <Pause size={15}/> : <Mic size={15}/>}</button>
+                <span className="stem-label">원곡 보컬</span>
+                <Waveform peaks={t.peaksForKey('source-vocal')} playedFraction={t.playedFraction}/>
+              </div>
+              <div className={t.rowClass('source-instrumental', 'stem-row stem-row-sub')}>
+                <button type="button" className="pp-waveform-label" aria-label="원곡 악기 재생/일시정지" onClick={() => t.handleKeyClick('source-instrumental')} disabled={!t.peaksForKey('source-instrumental').length}>{t.activeKey === 'source-instrumental' && t.isPlaying ? <Pause size={15}/> : <Guitar size={15}/>}</button>
+                <span className="stem-label">원곡 악기</span>
+                <Waveform peaks={t.peaksForKey('source-instrumental')} playedFraction={t.playedFraction}/>
+              </div>
+              <div className={t.rowClass('reference', 'stem-row')}>
+                <button type="button" className="pp-waveform-label" aria-label="참고곡 재생/일시정지" onClick={() => t.handleKeyClick('reference')} disabled={!t.peaksForKey('reference').length}>{t.activeKey === 'reference' && t.isPlaying ? <Pause size={15}/> : <Mic size={15}/>}</button>
+                <span className="stem-label">참고곡</span>
+                <Waveform peaks={t.peaksForKey('reference')} playedFraction={t.playedFraction}/>
+              </div>
+              <div className={t.rowClass('result', 'stem-row')}>
+                <button type="button" className="pp-waveform-label" aria-label="변환곡 재생/일시정지" onClick={() => t.handleKeyClick('result')} disabled={!t.peaksForKey('result').length}>{t.activeKey === 'result' && t.isPlaying ? <Pause size={15}/> : <Combine size={15}/>}</button>
+                <span className="stem-label">변환곡</span>
+                <Waveform peaks={t.peaksForKey('result')} playedFraction={t.playedFraction} variant="processed"/>
+              </div>
+              <div className={t.rowClass('result-vocal', 'stem-row stem-row-sub')}>
+                <button type="button" className="pp-waveform-label" aria-label="변환곡 보컬 재생/일시정지" onClick={() => t.handleKeyClick('result-vocal')} disabled={!t.peaksForKey('result-vocal').length}>{t.activeKey === 'result-vocal' && t.isPlaying ? <Pause size={15}/> : <Mic size={15}/>}</button>
+                <span className="stem-label">변환곡 보컬</span>
+                <Waveform peaks={t.peaksForKey('result-vocal')} playedFraction={t.playedFraction} variant="processed"/>
+              </div>
+              <div className={t.rowClass('result-instrumental', 'stem-row stem-row-sub')}>
+                <button type="button" className="pp-waveform-label" aria-label="변환곡 악기 재생/일시정지" onClick={() => t.handleKeyClick('result-instrumental')} disabled={!t.peaksForKey('result-instrumental').length}>{t.activeKey === 'result-instrumental' && t.isPlaying ? <Pause size={15}/> : <Guitar size={15}/>}</button>
+                <span className="stem-label">변환곡 악기</span>
+                <Waveform peaks={t.peaksForKey('result-instrumental')} playedFraction={t.playedFraction} variant="processed"/>
+              </div>
+            </div> : <div className="stem-list">
+              <div className={t.rowClass('source', 'stem-row')}>
+                <div className="audio-compare-toolbar">
+                  <button type="button" className="pp-waveform-label" aria-label="원곡 재생/일시정지" onClick={() => t.handleKeyClick('source')} disabled={!t.peaksForKey('source').length}>{t.activeKey === 'source' && t.isPlaying ? <Pause size={15}/> : <Play size={15}/>}</button>
+                  <span className="stem-label audio-compare-label"><strong>원곡</strong></span>
+                </div>
+                <div className="audio-compare-charts">
+                  <CompareWaveform peaks={t.peaksForKey('source')} fraction={t.positionSeconds / (t.bufferForKey('source')?.duration || 1)} processed={false}/>
+                  <CompareSpectrogram buffer={t.bufferForKey('source')} fraction={t.positionSeconds / (t.bufferForKey('source')?.duration || 1)}/>
+                </div>
+              </div>
+              <div className={t.rowClass('reference', 'stem-row')}>
+                <div className="audio-compare-toolbar">
+                  <button type="button" className="pp-waveform-label" aria-label="참고곡 재생/일시정지" onClick={() => t.handleKeyClick('reference')} disabled={!t.peaksForKey('reference').length}>{t.activeKey === 'reference' && t.isPlaying ? <Pause size={15}/> : <Play size={15}/>}</button>
+                  <span className="stem-label audio-compare-label"><strong>참고곡</strong></span>
+                </div>
+                <div className="audio-compare-charts">
+                  <CompareWaveform peaks={t.peaksForKey('reference')} fraction={t.positionSeconds / (t.bufferForKey('reference')?.duration || 1)} processed={false}/>
+                  <CompareSpectrogram buffer={t.bufferForKey('reference')} fraction={t.positionSeconds / (t.bufferForKey('reference')?.duration || 1)}/>
+                </div>
+              </div>
+              <div className={t.rowClass('result', 'stem-row')}>
+                <div className="audio-compare-toolbar">
+                  <button type="button" className="pp-waveform-label" aria-label="결과 재생/일시정지" onClick={() => t.handleKeyClick('result')} disabled={!resultBuffer}>{t.activeKey === 'result' && t.isPlaying ? <Pause size={15}/> : <Play size={15}/>}</button>
+                  <span className="stem-label audio-compare-label"><strong>결과</strong></span>
+                </div>
+                <div className="audio-compare-charts">
+                  <CompareWaveform peaks={t.peaksForKey('result')} fraction={t.positionSeconds / (resultBuffer?.duration || 1)} processed={true}/>
+                  <CompareSpectrogram buffer={resultBuffer} fraction={t.positionSeconds / (resultBuffer?.duration || 1)}/>
+                </div>
+              </div>
+            </div>}
+            <SeekRow t={t}/>
+            <div className="dialog-actions pp-dialog-actions">
+              <TransportControls t={t} disabled={!t.peaksForKey('source').length}/>
+              <div className="pp-dialog-actions-right">
+                <Button variant="outline" onClick={onClose} disabled={saving}>닫기</Button>
+                <Button onClick={() => void handleSave()} disabled={!resultBuffer || saving}>{saving ? <LoaderCircle className="spin"/> : <Save size={15}/>}저장</Button>
+              </div>
+            </div>
+          </>}
+        </div>
+      </div>
+    </DialogContent>
+    <MultiFileLibraryPicker open={sourcePickerOpen} onClose={() => setSourcePickerOpen(false)} onConfirm={paths => paths[0] && void pickSource(paths[0])} title="원본 audio 선택" description="음색을 바꿀 원본 오디오 파일을 골라 주세요."/>
+    <MultiFileLibraryPicker open={referencePickerOpen} onClose={() => setReferencePickerOpen(false)} onConfirm={paths => paths[0] && void pickReference(paths[0])} title="참조 audio 선택" description="목표 음색의 참조 오디오 파일을 골라 주세요."/>
+    <MultiFileLibraryPicker open={ddspPickerOpen} onClose={() => setDdspPickerOpen(false)} onConfirm={setDdspReferencePaths} multiple/>
+  </Dialog>;
+}
+
+function AudioRestoreDialog({ file, onClose, notify, onCreated }: { file: File; onClose: () => void; notify: (text: string, error?: boolean) => void; onCreated: (project: Project) => void }) {
+  const [title, setTitle] = useState(file.name.replace(/\.[^./]+$/, ''));
+  const [loading, setLoading] = useState(true);
+  const [progress, setProgress] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const [errorText, setErrorText] = useState('');
+  const [originalPeaks, setOriginalPeaks] = useState<number[]>([]);
+  const [restoredPeaks, setRestoredPeaks] = useState<number[]>([]);
+  const [activeKey, setActiveKey] = useState<string | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [positionSeconds, setPositionSeconds] = useState(0);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [previewVolume, setPreviewVolume] = useState(1);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const previewGainRef = useRef<GainNode | null>(null);
+  const originalBufferRef = useRef<AudioBuffer | null>(null);
+  const restoredBufferRef = useRef<AudioBuffer | null>(null);
+  const previewIdRef = useRef<string | null>(null);
+  const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const playStartCtxTimeRef = useRef(0);
+  const playOffsetRef = useRef(0);
+  const rateRef = useRef(1);
+  const isPlayingRef = useRef(false);
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+
+  function bufferForKey(key: string | null): AudioBuffer | null {
+    if (key === 'original') return originalBufferRef.current;
+    if (key === 'restored') return restoredBufferRef.current;
+    return null;
+  }
+
+  function ensureAudioContext(): AudioContext {
+    if (audioCtxRef.current) return audioCtxRef.current;
+    const ctx = new AudioContext();
+    audioCtxRef.current = ctx;
+    const gainNode = ctx.createGain();
+    gainNode.gain.value = previewVolume;
+    gainNode.connect(ctx.destination);
+    previewGainRef.current = gainNode;
+    return ctx;
+  }
+
+  useEffect(() => {
+    if (!loading) return;
+    const poll = window.setInterval(() => {
+      api<{ active: boolean; elapsedMs: number; expectedMs: number }>('/generate/status').then(status => {
+        if (status.active && status.expectedMs > 0) setProgress(Math.min(96, Math.round(status.elapsedMs / status.expectedMs * 100)));
+      }).catch(() => {});
+    }, 1000);
+    return () => window.clearInterval(poll);
+  }, [loading]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const dataUrl = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(file);
+        });
+        const result = await api<{ id: string; durationMs: number }>('/audiosr-restore/preview', 'POST', { dataUrl });
+        if (cancelled) return;
+        previewIdRef.current = result.id;
+        const ctx = ensureAudioContext();
+        const [originalResponse, restoredResponse] = await Promise.all([
+          fetch(`/api/audiosr-restore/preview/${result.id}/original`),
+          fetch(`/api/audiosr-restore/preview/${result.id}/restored`),
+        ]);
+        if (!originalResponse.ok || !restoredResponse.ok) throw new Error('load failed');
+        const [originalBuffer, restoredBuffer] = await Promise.all([
+          ctx.decodeAudioData(await originalResponse.arrayBuffer()),
+          ctx.decodeAudioData(await restoredResponse.arrayBuffer()),
+        ]);
+        if (cancelled) return;
+        originalBufferRef.current = originalBuffer;
+        restoredBufferRef.current = restoredBuffer;
+        setOriginalPeaks(computeWaveformPeaks(originalBuffer, 300));
+        setRestoredPeaks(computeWaveformPeaks(restoredBuffer, 300));
+      } catch (error) {
+        if (!cancelled) setErrorText(error instanceof Error && error.message && error.message !== 'load failed' ? error.message : '오디오 복원에 실패했습니다. audio.cpp가 AudioSR 모델을 포함해 빌드되어 있는지, 모델 파일이 있는지 확인해 주세요.');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (previewIdRef.current) void api(`/audiosr-restore/preview/${previewIdRef.current}`, 'DELETE').catch(() => {});
+      void audioCtxRef.current?.close();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function pausePlayback() {
+    if (isPlaying) playOffsetRef.current = currentPosition();
+    currentSourceRef.current?.stop();
+    currentSourceRef.current = null;
+    setIsPlaying(false);
+  }
+  function currentPosition(): number {
+    const ctx = audioCtxRef.current;
+    if (!ctx || !isPlayingRef.current) return playOffsetRef.current;
+    return playOffsetRef.current + (ctx.currentTime - playStartCtxTimeRef.current) * rateRef.current;
+  }
+  function playKey(key: string, atPosition?: number) {
+    const ctx = audioCtxRef.current;
+    const buffer = bufferForKey(key);
+    if (!ctx || !buffer) return;
+    const position = atPosition !== undefined ? atPosition : currentPosition();
+    const clamped = Math.max(0, Math.min(position, Math.max(0, buffer.duration - 0.02)));
+    currentSourceRef.current?.stop();
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.playbackRate.value = rateRef.current;
+    source.connect(previewGainRef.current || ctx.destination);
+    source.onended = () => { if (currentSourceRef.current === source) { currentSourceRef.current = null; setIsPlaying(false); playOffsetRef.current = 0; setPositionSeconds(0); } };
+    source.start(0, clamped);
+    currentSourceRef.current = source;
+    playStartCtxTimeRef.current = ctx.currentTime;
+    playOffsetRef.current = clamped;
+    setPositionSeconds(clamped);
+    setActiveKey(key);
+    setIsPlaying(true);
+  }
+  function handleKeyClick(key: string) {
+    if (activeKey === key && isPlaying) { pausePlayback(); return; }
+    playKey(key);
+  }
+  function stopPlayback() { pausePlayback(); setActiveKey(null); setPositionSeconds(0); }
+  function seekBy(deltaSeconds: number) {
+    const key = activeKey || 'original';
+    const buffer = bufferForKey(key);
+    if (!buffer) return;
+    const next = Math.max(0, Math.min(currentPosition() + deltaSeconds, Math.max(0, buffer.duration - 0.02)));
+    if (isPlaying) { playKey(key, next); return; }
+    playOffsetRef.current = next;
+    setPositionSeconds(next);
+    setActiveKey(key);
+  }
+  function seekTo(nextSeconds: number) {
+    const key = activeKey || 'original';
+    const buffer = bufferForKey(key);
+    if (!buffer) return;
+    const next = Math.max(0, Math.min(nextSeconds, Math.max(0, buffer.duration - 0.02)));
+    if (isPlaying) { playKey(key, next); return; }
+    playOffsetRef.current = next;
+    setPositionSeconds(next);
+    setActiveKey(key);
+  }
+  function cycleSpeed() {
+    const next = playbackRate >= 2 ? 1 : 2;
+    const pos = currentPosition();
+    setPlaybackRate(next);
+    rateRef.current = next;
+    if (isPlaying && activeKey) { playKey(activeKey, pos); return; }
+    playOffsetRef.current = pos;
+    setPositionSeconds(pos);
+  }
+  function applyPreviewVolume(next: number) {
+    setPreviewVolume(next);
+    if (previewGainRef.current) previewGainRef.current.gain.value = next;
+  }
+
+  useEffect(() => {
+    if (!isPlaying) return;
+    let raf = 0;
+    const tick = () => { setPositionSeconds(currentPosition()); raf = requestAnimationFrame(tick); };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying]);
+
+  async function handleSave() {
+    if (!previewIdRef.current) return;
+    setSaving(true);
+    try {
+      stopPlayback();
+      const completed = await api<Project>(`/audiosr-restore/preview/${previewIdRef.current}/save`, 'POST', { title: title.trim() });
+      previewIdRef.current = null;
+      onCreated(completed);
+      notify('오디오를 복원해 라이브러리에 추가했습니다.');
+      onClose();
+    } catch (error) { setErrorText((error as Error).message); }
+    finally { setSaving(false); }
+  }
+
+  const activeBuffer = bufferForKey(activeKey);
+  const rowClass = (key: string, kind: 'dry' | 'wet', base: string) => `${base}${activeKey === key && isPlaying ? (kind === 'wet' ? ' pp-row-playing-processed' : ' pp-row-playing-original') : ''}`;
+
+  return <Dialog open onOpenChange={open => { if (!open) { stopPlayback(); onClose(); } }}>
+    <DialogContent className="studio-dialog audio-restore-dialog audio-compare-dialog">
+      <DialogTitle>음원 복원</DialogTitle>
+      <DialogDescription>저음질 오디오를 AudioSR로 복원했습니다. 원본과 비교해 들어보고 저장할지 정하세요.</DialogDescription>
+      <div className="form-section idea-section">
+        <label htmlFor="restore-dialog-title">제목<span className="optional">선택</span></label>
+        <Input id="restore-dialog-title" value={title} onChange={event => setTitle(event.target.value)} placeholder="비워두면 파일 이름을 사용합니다" maxLength={120}/>
+      </div>
+      {errorText && <p className="field-hint warning">{errorText}</p>}
+      {loading && <div className="stem-loading"><LoaderCircle className="spin"/>오디오 복원 중... ({progress}%)</div>}
+      <div className="stem-list">
+        <div className={rowClass('original', 'dry', 'stem-row')}>
+          <div className="audio-compare-toolbar">
+            <button type="button" className="pp-waveform-label" aria-label={activeKey === 'original' && isPlaying ? '원본 일시정지' : '원본 재생'} onClick={() => handleKeyClick('original')} disabled={!originalPeaks.length}>{activeKey === 'original' && isPlaying ? <Pause size={15}/> : <AudioLines size={15}/>}</button>
+            <span className="stem-label audio-compare-label"><strong>원본</strong></span>
+          </div>
+          <div className="audio-compare-charts">
+            <CompareWaveform peaks={originalPeaks} fraction={positionSeconds / (originalBufferRef.current?.duration || 1)} processed={false}/>
+            <CompareSpectrogram buffer={originalBufferRef.current} fraction={positionSeconds / (originalBufferRef.current?.duration || 1)}/>
+          </div>
+        </div>
+        <div className={rowClass('restored', 'wet', 'stem-row')}>
+          <div className="audio-compare-toolbar">
+            <button type="button" className="pp-waveform-label" aria-label={activeKey === 'restored' && isPlaying ? '복원 일시정지' : '복원 재생'} onClick={() => handleKeyClick('restored')} disabled={!restoredPeaks.length}>{activeKey === 'restored' && isPlaying ? <Pause size={15}/> : <RefreshCw size={15}/>}</button>
+            <span className="stem-label audio-compare-label"><strong>복원</strong></span>
+          </div>
+          <div className="audio-compare-charts">
+            <CompareWaveform peaks={restoredPeaks} fraction={positionSeconds / (restoredBufferRef.current?.duration || 1)} processed={true}/>
+            <CompareSpectrogram buffer={restoredBufferRef.current} fraction={positionSeconds / (restoredBufferRef.current?.duration || 1)}/>
+          </div>
+        </div>
+      </div>
+      <div className="pp-seek-row">
+        <span className="pp-seek-time">{formatSeekTime(positionSeconds)}</span>
+        <input className="pp-seek-bar" type="range" aria-label="재생 위치" min={0} max={activeBuffer?.duration || 0} step={0.01} value={Math.min(positionSeconds, activeBuffer?.duration || 0)} onChange={event => seekTo(Number(event.target.value))} disabled={!activeBuffer}/>
+        <span className="pp-seek-time">{formatSeekTime(activeBuffer?.duration || 0)}</span>
+      </div>
+      <div className="dialog-actions pp-dialog-actions">
+        <div className="pp-transport">
+          <Button variant="ghost" size="icon" aria-label="5초 뒤로" onClick={() => seekBy(-5)} disabled={!originalPeaks.length}><Rewind size={15}/></Button>
+          <Button variant="ghost" size="icon" aria-label={isPlaying ? '일시정지' : '재생'} onClick={() => handleKeyClick(activeKey || 'original')} disabled={!originalPeaks.length}>{isPlaying ? <Pause size={15}/> : <Play size={15}/>}</Button>
+          <Button variant="ghost" size="icon" aria-label="5초 앞으로" onClick={() => seekBy(5)} disabled={!originalPeaks.length}><FastForward size={15}/></Button>
+          <button type="button" className="speed-btn" aria-label="재생 속도" onClick={cycleSpeed} disabled={!originalPeaks.length}>{playbackRate}x</button>
+          <Volume2 size={14} className="pp-volume-icon"/>
+          <input className="abc-player-volume" type="range" aria-label="미리듣기 볼륨" min={0} max={2} step={0.1} value={previewVolume} onChange={event => applyPreviewVolume(Number(event.target.value))} disabled={!originalPeaks.length}/>
+        </div>
+        <div className="pp-dialog-actions-right">
+          <Button variant="outline" onClick={() => { stopPlayback(); onClose(); }} disabled={saving}>취소</Button>
+          <Button onClick={() => void handleSave()} disabled={!restoredPeaks.length || saving}>{saving ? <LoaderCircle className="spin"/> : <Save size={15}/>}저장</Button>
+        </div>
+      </div>
+    </DialogContent>
+  </Dialog>;
+}
+
+function AudioCompareDialog({ onClose, notify, onCreated }: { onClose: () => void; notify: (text: string, error?: boolean) => void; onCreated: (project: Project) => void }) {
+  const [row1Name, setRow1Name] = useState('');
+  const [row2Name, setRow2Name] = useState('');
+  const [row1Peaks, setRow1Peaks] = useState<number[]>([]);
+  const [row2Peaks, setRow2Peaks] = useState<number[]>([]);
+  const [row1Processed, setRow1Processed] = useState(false);
+  const [row2Processed, setRow2Processed] = useState(false);
+  const [editingRow, setEditingRow] = useState<1 | 2 | null>(null);
+  const [activeKey, setActiveKey] = useState<string | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [positionSeconds, setPositionSeconds] = useState(0);
+  const [playbackRate, setPlaybackRate] = useState(1);
+  const [previewVolume, setPreviewVolume] = useState(1);
+  const [saving1, setSaving1] = useState(false);
+  const [saving2, setSaving2] = useState(false);
+  const [errorText, setErrorText] = useState('');
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const previewGainRef = useRef<GainNode | null>(null);
+  const row1BufferRef = useRef<AudioBuffer | null>(null);
+  const row2BufferRef = useRef<AudioBuffer | null>(null);
+  const row1ParamsRef = useRef<PostProcessParams>(PP_DEFAULT_PARAMS);
+  const row2ParamsRef = useRef<PostProcessParams>(PP_DEFAULT_PARAMS);
+  const row1InputRef = useRef<HTMLInputElement>(null);
+  const row2InputRef = useRef<HTMLInputElement>(null);
+  const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const playStartCtxTimeRef = useRef(0);
+  const playOffsetRef = useRef(0);
+  const rateRef = useRef(1);
+  const isPlayingRef = useRef(false);
+  useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
+
+  function bufferForKey(key: string | null): AudioBuffer | null {
+    if (key === 'row1') return row1BufferRef.current;
+    if (key === 'row2') return row2BufferRef.current;
+    return null;
+  }
+
+  useEffect(() => {
+    const ctx = new AudioContext();
+    audioCtxRef.current = ctx;
+    const gainNode = ctx.createGain();
+    gainNode.gain.value = previewVolume;
+    gainNode.connect(ctx.destination);
+    previewGainRef.current = gainNode;
+    return () => { void ctx.close(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function handlePickFile(row: 1 | 2, event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    const ctx = audioCtxRef.current;
+    if (!ctx) return;
+    try {
+      if (activeKey === `row${row}`) stopPlayback();
+      const decoded = await ctx.decodeAudioData(await file.arrayBuffer());
+      const peaks = computeWaveformPeaks(decoded, 300);
+      if (row === 1) { row1BufferRef.current = decoded; row1ParamsRef.current = PP_DEFAULT_PARAMS; setRow1Peaks(peaks); setRow1Name(file.name); setRow1Processed(false); }
+      else { row2BufferRef.current = decoded; row2ParamsRef.current = PP_DEFAULT_PARAMS; setRow2Peaks(peaks); setRow2Name(file.name); setRow2Processed(false); }
+      setErrorText('');
+    } catch { setErrorText('오디오 파일을 불러오지 못했습니다.'); }
+  }
+
+  function handleRowProcessed(row: 1 | 2, buffer: AudioBuffer, params: PostProcessParams) {
+    const peaks = computeWaveformPeaks(buffer, 300);
+    if (row === 1) { row1BufferRef.current = buffer; row1ParamsRef.current = params; setRow1Peaks(peaks); setRow1Processed(true); }
+    else { row2BufferRef.current = buffer; row2ParamsRef.current = params; setRow2Peaks(peaks); setRow2Processed(true); }
+    setEditingRow(null);
+  }
+
+  function pausePlayback() {
+    if (isPlaying) playOffsetRef.current = currentPosition();
+    currentSourceRef.current?.stop();
+    currentSourceRef.current = null;
+    setIsPlaying(false);
+  }
+  function currentPosition(): number {
+    const ctx = audioCtxRef.current;
+    if (!ctx || !isPlayingRef.current) return playOffsetRef.current;
+    return playOffsetRef.current + (ctx.currentTime - playStartCtxTimeRef.current) * rateRef.current;
+  }
+  function playKey(key: string, atPosition?: number) {
+    const ctx = audioCtxRef.current;
+    const buffer = bufferForKey(key);
+    if (!ctx || !buffer) return;
+    const position = atPosition !== undefined ? atPosition : currentPosition();
+    const clamped = Math.max(0, Math.min(position, Math.max(0, buffer.duration - 0.02)));
+    currentSourceRef.current?.stop();
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.playbackRate.value = rateRef.current;
+    source.connect(previewGainRef.current || ctx.destination);
+    source.onended = () => { if (currentSourceRef.current === source) { currentSourceRef.current = null; setIsPlaying(false); playOffsetRef.current = 0; setPositionSeconds(0); } };
+    source.start(0, clamped);
+    currentSourceRef.current = source;
+    playStartCtxTimeRef.current = ctx.currentTime;
+    playOffsetRef.current = clamped;
+    setPositionSeconds(clamped);
+    setActiveKey(key);
+    setIsPlaying(true);
+  }
+  function handleKeyClick(key: string) {
+    if (activeKey === key && isPlaying) { pausePlayback(); return; }
+    playKey(key);
+  }
+  function stopPlayback() { pausePlayback(); setActiveKey(null); setPositionSeconds(0); }
+  function seekBy(deltaSeconds: number) {
+    const key = activeKey || 'row1';
+    const buffer = bufferForKey(key);
+    if (!buffer) return;
+    const next = Math.max(0, Math.min(currentPosition() + deltaSeconds, Math.max(0, buffer.duration - 0.02)));
+    if (isPlaying) { playKey(key, next); return; }
+    playOffsetRef.current = next;
+    setPositionSeconds(next);
+    setActiveKey(key);
+  }
+  function seekTo(nextSeconds: number) {
+    const key = activeKey || 'row1';
+    const buffer = bufferForKey(key);
+    if (!buffer) return;
+    const next = Math.max(0, Math.min(nextSeconds, Math.max(0, buffer.duration - 0.02)));
+    if (isPlaying) { playKey(key, next); return; }
+    playOffsetRef.current = next;
+    setPositionSeconds(next);
+    setActiveKey(key);
+  }
+  function cycleSpeed() {
+    const next = playbackRate >= 2 ? 1 : 2;
+    const pos = currentPosition();
+    setPlaybackRate(next);
+    rateRef.current = next;
+    if (isPlaying && activeKey) { playKey(activeKey, pos); return; }
+    playOffsetRef.current = pos;
+    setPositionSeconds(pos);
+  }
+  function applyPreviewVolume(next: number) {
+    setPreviewVolume(next);
+    if (previewGainRef.current) previewGainRef.current.gain.value = next;
+  }
+
+  useEffect(() => {
+    if (!isPlaying) return;
+    let raf = 0;
+    const tick = () => { setPositionSeconds(currentPosition()); raf = requestAnimationFrame(tick); };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying]);
+
+  async function handleSaveRow(row: 1 | 2) {
+    const buffer = row === 1 ? row1BufferRef.current : row2BufferRef.current;
+    if (!buffer) return;
+    const processed = row === 1 ? row1Processed : row2Processed;
+    const name = (row === 1 ? row1Name : row2Name).replace(/\.[^./]+$/, '') || `음원-${row}`;
+    const setSaving = row === 1 ? setSaving1 : setSaving2;
+    setSaving(true);
+    try {
+      const wavBlob = audioBufferToWavBlob(buffer);
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(wavBlob);
+      });
+      const title = processed ? `${name} (후처리)` : name;
+      const completed = await api<Project>('/audio-save', 'POST', { dataUrl, title });
+      onCreated(completed);
+      notify(`"${title}"을(를) 라이브러리에 추가했습니다.`);
+    } catch (error) { setErrorText((error as Error).message); }
+    finally { setSaving(false); }
+  }
+
+  const activeBuffer = bufferForKey(activeKey);
+  const playedFraction = activeBuffer ? Math.min(1, positionSeconds / activeBuffer.duration) : 0;
+  const rowClass = (key: string, kind: 'dry' | 'wet', base: string) => `${base}${activeKey === key && isPlaying ? (kind === 'wet' ? ' pp-row-playing-processed' : ' pp-row-playing-original') : ''}`;
+  const anyLoaded = !!row1BufferRef.current || !!row2BufferRef.current;
+
+  return <>
+    {!editingRow && <Dialog open onOpenChange={open => { if (!open) { stopPlayback(); onClose(); } }}>
+      <DialogContent className="studio-dialog audio-compare-dialog">
+        <DialogTitle>음원 비교</DialogTitle>
+        <DialogDescription>두 오디오를 각각 불러와 원본과 후처리 결과를 번갈아 들으며 비교하세요. 저장1/저장2를 누르면 그 상태 그대로 라이브러리에 추가됩니다.</DialogDescription>
+        {errorText && <p className="field-hint warning">{errorText}</p>}
+        <div className="stem-list">
+          <div className={rowClass('row1', row1Processed ? 'wet' : 'dry', 'stem-row')}>
+            <div className="audio-compare-toolbar">
+            <button type="button" className="pp-waveform-label" aria-label={activeKey === 'row1' && isPlaying ? '음원-1 일시정지' : '음원-1 재생'} onClick={() => handleKeyClick('row1')} disabled={!row1Peaks.length}>{activeKey === 'row1' && isPlaying ? <Pause size={15}/> : <Play size={15}/>}</button>
+            <button type="button" className="audio-compare-load-btn" aria-label="음원-1 파일 불러오기" title="음원-1 파일 불러오기" onClick={() => row1InputRef.current?.click()}><Upload size={13}/></button>
+            <span className="stem-label audio-compare-label"><strong>음원-1</strong>{row1Name && <small title={row1Name}>({row1Name})</small>}{row1Processed && <span className="small-badge">처리됨</span>}</span>
+            <Button variant="outline" size="sm" onClick={() => setEditingRow(1)} disabled={!row1BufferRef.current}><SlidersHorizontal size={14}/>후처리</Button>
+            </div>
+            <div className="audio-compare-charts">
+              <CompareWaveform peaks={row1Peaks} fraction={positionSeconds / (row1BufferRef.current?.duration || 1)} processed={row1Processed}/>
+              <CompareSpectrogram buffer={row1BufferRef.current} fraction={positionSeconds / (row1BufferRef.current?.duration || 1)}/>
+            </div>
+          </div>
+          <div className={rowClass('row2', row2Processed ? 'wet' : 'dry', 'stem-row')}>
+            <div className="audio-compare-toolbar">
+            <button type="button" className="pp-waveform-label" aria-label={activeKey === 'row2' && isPlaying ? '음원-2 일시정지' : '음원-2 재생'} onClick={() => handleKeyClick('row2')} disabled={!row2Peaks.length}>{activeKey === 'row2' && isPlaying ? <Pause size={15}/> : <Play size={15}/>}</button>
+            <button type="button" className="audio-compare-load-btn" aria-label="음원-2 파일 불러오기" title="음원-2 파일 불러오기" onClick={() => row2InputRef.current?.click()}><Upload size={13}/></button>
+            <span className="stem-label audio-compare-label"><strong>음원-2</strong>{row2Name && <small title={row2Name}>({row2Name})</small>}{row2Processed && <span className="small-badge">처리됨</span>}</span>
+            <Button variant="outline" size="sm" onClick={() => setEditingRow(2)} disabled={!row2BufferRef.current}><SlidersHorizontal size={14}/>후처리</Button>
+            </div>
+            <div className="audio-compare-charts">
+              <CompareWaveform peaks={row2Peaks} fraction={positionSeconds / (row2BufferRef.current?.duration || 1)} processed={row2Processed}/>
+              <CompareSpectrogram buffer={row2BufferRef.current} fraction={positionSeconds / (row2BufferRef.current?.duration || 1)}/>
+            </div>
+          </div>
+        </div>
+        <div className="pp-seek-row">
+          <span className="pp-seek-time">{formatSeekTime(positionSeconds)}</span>
+          <input className="pp-seek-bar" type="range" aria-label="재생 위치" min={0} max={activeBuffer?.duration || 0} step={0.01} value={Math.min(positionSeconds, activeBuffer?.duration || 0)} onChange={event => seekTo(Number(event.target.value))} disabled={!activeBuffer}/>
+          <span className="pp-seek-time">{formatSeekTime(activeBuffer?.duration || 0)}</span>
+        </div>
+        <div className="dialog-actions pp-dialog-actions">
+          <div className="pp-transport">
+            <Button variant="ghost" size="icon" aria-label="5초 뒤로" onClick={() => seekBy(-5)} disabled={!activeBuffer}><Rewind size={15}/></Button>
+            <Button variant="ghost" size="icon" aria-label={isPlaying ? '일시정지' : '재생'} onClick={() => handleKeyClick(activeKey || 'row1')} disabled={!anyLoaded}>{isPlaying ? <Pause size={15}/> : <Play size={15}/>}</Button>
+            <Button variant="ghost" size="icon" aria-label="5초 앞으로" onClick={() => seekBy(5)} disabled={!activeBuffer}><FastForward size={15}/></Button>
+            <button type="button" className="speed-btn" aria-label="재생 속도" onClick={cycleSpeed} disabled={!activeBuffer}>{playbackRate}x</button>
+            <Volume2 size={14} className="pp-volume-icon"/>
+            <input className="abc-player-volume" type="range" aria-label="미리듣기 볼륨" min={0} max={2} step={0.1} value={previewVolume} onChange={event => applyPreviewVolume(Number(event.target.value))}/>
+          </div>
+          <div className="pp-dialog-actions-right">
+            <Button variant="outline" onClick={() => { stopPlayback(); onClose(); }}>취소</Button>
+            <Button variant="outline" onClick={() => void handleSaveRow(1)} disabled={!row1BufferRef.current || saving1}>{saving1 ? <LoaderCircle className="spin"/> : <Save size={15}/>}저장1</Button>
+            <Button variant="outline" onClick={() => void handleSaveRow(2)} disabled={!row2BufferRef.current || saving2}>{saving2 ? <LoaderCircle className="spin"/> : <Save size={15}/>}저장2</Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>}
+    <input ref={row1InputRef} type="file" accept="audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/mp4,audio/ogg" hidden onChange={event => void handlePickFile(1, event)}/>
+    <input ref={row2InputRef} type="file" accept="audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/mp4,audio/ogg" hidden onChange={event => void handlePickFile(2, event)}/>
+    {editingRow && <PostProcessDialog
+      key={editingRow}
+      project={{ id: `compare-row${editingRow}`, title: editingRow === 1 ? (row1Name || '음원-1') : (row2Name || '음원-2') } as unknown as Project}
+      onClose={() => setEditingRow(null)}
+      notify={notify}
+      visualizerEnabled={false}
+      visualizerRingCount={1}
+      visualizerHue={0}
+      visualizerLineWidth={1}
+      visualizerTrail={0}
+      visualizerSpiral={0}
+      visualizerRingMode="radial"
+      visualizerTimeStep={0.1}
+      visualizerTimeSkew={1}
+      visualizerRingStep={1}
+      visualizerAmplitude={1}
+      titleOverride={editingRow === 1 ? (row1Name || '음원-1') : (row2Name || '음원-2')}
+      sourceOverride={{ buffer: (editingRow === 1 ? row1BufferRef.current : row2BufferRef.current)!, params: editingRow === 1 ? row1ParamsRef.current : row2ParamsRef.current }}
+      onSaveOverride={(buffer, params) => handleRowProcessed(editingRow, buffer, params)}
     />}
   </>;
 }
@@ -1227,6 +3219,44 @@ export default function Studio() {
   const [coverPendingProject, setCoverPendingProject] = useState<Project | null>(null);
   const [postProcessTarget, setPostProcessTarget] = useState<Project | null>(null);
   const [stemTarget, setStemTarget] = useState<{ project: Project; mode: StemMode } | null>(null);
+  const [midiEditorTarget, setMidiEditorTarget] = useState<Project | null>(null);
+  const [timbreTransformOpen, setTimbreTransformOpen] = useState(false);
+  // previewId(음색 변조 팝업이 열릴 때마다 생기는 세션 id, 더 이상 project.id가 아님) -> DDSP-SVC job id.
+  // TimbreTransformDialog를 닫아도 학습을 계속 추적하려고 다이얼로그 바깥(App)에 둔다. 마운트 시
+  // GET /api/ddsp-jobs로 하이드레이션하고, 완료/실패로 바뀌면 다이얼로그가 닫혀 있어도 토스트를 띄운다.
+  const [ddspActiveJobs, setDdspActiveJobs] = useState<Record<string, string>>({});
+  const ddspNotifiedRef = useRef<Set<string>>(new Set());
+  // 마운트 시 서버가 이미 추적 중인(창을 닫았다 새로고침해도 살아있는) DDSP-SVC job을 복원.
+  useEffect(() => {
+    void api<DdspJobStatus[]>('/ddsp-jobs').then(jobs => {
+      const running = jobs.filter(job => !['completed', 'failed', 'cancelled'].includes(job.status));
+      if (running.length) setDdspActiveJobs(previous => { const next = { ...previous }; for (const job of running) next[job.projectId] = job.id; return next; });
+    }).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  // ddspActiveJobs에 뭐가 있는 동안 폴링해서, TimbreTransformDialog가 닫혀 있어도 완료/실패 시
+  // 토스트를 띄운다(다이얼로그가 열려 있을 때의 진행률 표시는 DdspTabPanel이 따로 폴링).
+  useEffect(() => {
+    const jobIds = Object.values(ddspActiveJobs);
+    if (!jobIds.length) return;
+    const poll = async () => {
+      try {
+        const jobs = await api<DdspJobStatus[]>('/ddsp-jobs');
+        for (const job of jobs) {
+          if (!jobIds.includes(job.id)) continue;
+          if ((job.status === 'completed' || job.status === 'failed') && !ddspNotifiedRef.current.has(job.id)) {
+            ddspNotifiedRef.current.add(job.id);
+            notify(job.status === 'completed' ? 'DDSP-SVC 학습이 끝났습니다 -- 음색 변조 팝업에서 결과를 확인하세요.' : `DDSP-SVC 학습이 실패했습니다 -- ${job.error || ''}`, job.status === 'failed');
+            setDdspActiveJobs(previous => { const next = { ...previous }; delete next[job.projectId]; return next; });
+          }
+        }
+      } catch { /* 일시적 네트워크 오류, 다음 폴링에서 재시도 */ }
+    };
+    void poll();
+    const interval = window.setInterval(poll, 5000);
+    return () => window.clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ddspActiveJobs]);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [activePlaylistId, setActivePlaylistId] = useState<string | null>(null);
   const [downloadTarget, setDownloadTarget] = useState<Project | null>(null);
@@ -1274,6 +3304,9 @@ export default function Studio() {
   const coverInputRef = useRef<HTMLInputElement>(null);
   const coverAudioInputRef = useRef<HTMLInputElement>(null);
   const coverTargetRef = useRef<{ type: 'project'; item: Project } | { type: 'abc-note'; item: AbcNote } | null>(null);
+  const restoreInputRef = useRef<HTMLInputElement>(null);
+  const [restoreFile, setRestoreFile] = useState<File | null>(null);
+  const [compareOpen, setCompareOpen] = useState(false);
   const model = models.find(item => item.id === draft.modelId) || models[0];
   const update = (value: Partial<Draft>) => setDraft(previous => ({ ...previous, ...value }));
   const notify = (text: string, error = false) => setNotice({ text, error });
@@ -1345,7 +3378,7 @@ export default function Studio() {
   }
   async function storeSettings(test = false) {
     setBusy(test ? 'test' : 'settings');
-    try { const result = await api<Settings>('/settings', 'PUT', { provider: settings.provider, enginePath: settings.enginePath, pythonEnginePath: settings.pythonEnginePath, pythonScriptPath: settings.pythonScriptPath, pythonMemoryBudgetGib: settings.pythonMemoryBudgetGib, sheetSagePythonPath: settings.sheetSagePythonPath, settingPath: settings.settingPath, musicPath: settings.musicPath, examplesPath: settings.examplesPath, coversPath: settings.coversPath, abcNotesPath: settings.abcNotesPath, stylePresets: settings.stylePresets, visualizerEnabled: settings.visualizerEnabled, visualizerRingCount: settings.visualizerRingCount, visualizerHue: settings.visualizerHue, visualizerLineWidth: settings.visualizerLineWidth, visualizerTrail: settings.visualizerTrail, visualizerSpiral: settings.visualizerSpiral, visualizerRingMode: settings.visualizerRingMode, visualizerTimeStep: settings.visualizerTimeStep, visualizerTimeSkew: settings.visualizerTimeSkew, visualizerRingStep: settings.visualizerRingStep, visualizerAmplitude: settings.visualizerAmplitude, saveFormat: settings.saveFormat }); setSettings(result); setSavedSettings(result); if (test) { await api('/llm/test', 'POST'); notify('연결을 확인했습니다. 작사 도우미를 사용할 수 있어요.'); } else notify('설정을 저장했습니다.'); }
+    try { const result = await api<Settings>('/settings', 'PUT', { provider: settings.provider, enginePath: settings.enginePath, pythonEnginePath: settings.pythonEnginePath, pythonScriptPath: settings.pythonScriptPath, pythonMemoryBudgetGib: settings.pythonMemoryBudgetGib, sheetSagePythonPath: settings.sheetSagePythonPath, comfyUiEndpoint: settings.comfyUiEndpoint, comfyUiEnginePath: settings.comfyUiEnginePath, audioAukEndpoint: settings.audioAukEndpoint, audioAukPath: settings.audioAukPath, ddspSvcPath: settings.ddspSvcPath, settingPath: settings.settingPath, musicPath: settings.musicPath, examplesPath: settings.examplesPath, coversPath: settings.coversPath, abcNotesPath: settings.abcNotesPath, stylePresets: settings.stylePresets, visualizerEnabled: settings.visualizerEnabled, visualizerRingCount: settings.visualizerRingCount, visualizerHue: settings.visualizerHue, visualizerLineWidth: settings.visualizerLineWidth, visualizerTrail: settings.visualizerTrail, visualizerSpiral: settings.visualizerSpiral, visualizerRingMode: settings.visualizerRingMode, visualizerTimeStep: settings.visualizerTimeStep, visualizerTimeSkew: settings.visualizerTimeSkew, visualizerRingStep: settings.visualizerRingStep, visualizerAmplitude: settings.visualizerAmplitude, saveFormat: settings.saveFormat }); setSettings(result); setSavedSettings(result); if (test) { await api('/llm/test', 'POST'); notify('연결을 확인했습니다. 작사 도우미를 사용할 수 있어요.'); } else notify('설정을 저장했습니다.'); }
     catch (error) { notify((error as Error).message, true); } finally { setBusy(''); }
   }
   async function selectProvider(id: Settings['provider']) {
@@ -1428,6 +3461,12 @@ export default function Studio() {
       setCurrentAbcNoteId(null);
       notify('오디오에서 멜로디를 추출했습니다. 아래 악보를 확인하고 필요하면 수정해 보세요.');
     } catch (error) { notify((error as Error).message, true); } finally { setBusy(''); }
+  }
+  function handleRestoreAudioFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setRestoreFile(file);
   }
   async function checkAbc() {
     if (!draft.abc.trim()) { notify('검사할 악보가 없습니다.', true); return; }
@@ -1724,11 +3763,11 @@ export default function Studio() {
     } catch (error) { notify((error as Error).message, true); }
   }
   async function deleteCover(item: Project) {
-    try { await api(`/projects/${item.id}/cover`, 'DELETE'); setProjects(previous => previous.map(project => project.id === item.id ? { ...project, coverPath: null } : project)); notify('커버 이미지를 삭제했습니다.'); }
+    try { await api(`/projects/${item.id}/cover`, 'DELETE'); setProjects(previous => previous.map(project => project.id === item.id ? { ...project, coverPath: null } : project)); notify('앨범 표지를 삭제했습니다.'); }
     catch (error) { notify((error as Error).message, true); }
   }
   async function deleteAbcNoteCover(item: AbcNote) {
-    try { await api(`/abc-notes/${item.id}/cover`, 'DELETE'); setAbcNotes(previous => previous.map(note => note.id === item.id ? { ...note, coverPath: null } : note)); notify('커버 이미지를 삭제했습니다.'); }
+    try { await api(`/abc-notes/${item.id}/cover`, 'DELETE'); setAbcNotes(previous => previous.map(note => note.id === item.id ? { ...note, coverPath: null } : note)); notify('앨범 표지를 삭제했습니다.'); }
     catch (error) { notify((error as Error).message, true); }
   }
   // --- playlists ---
@@ -1816,17 +3855,20 @@ export default function Studio() {
   const installed = (item: typeof models[number]) => inventory?.repositories?.some(repo => (item.id !== 'yue2-original' || repo.id === 'm-a-p/YuE2-3B') && repo.files?.some(file => file.path.endsWith(item.file) && file.state === 'complete'));
   function projectList() { return <>
     <div className="collection-toolbar"><div className="collection-tabs" aria-label="작업 필터">{([['all', '전체'], ['projects', '프로젝트'], ['audio', '완성된 곡'], ['favorites', '좋아요']] as const).map(([value, label]) => <button key={value} aria-pressed={tab === value} className={tab === value ? 'active' : ''} onClick={() => setTab(value)}>{label}{value === 'all' && <span>{projects.length}</span>}</button>)}</div><div className="collection-actions"><div className="search-field"><Search size={15}/><input aria-label="곡 검색" placeholder="곡 검색" value={query} onChange={event => setQuery(event.target.value)}/></div><select className="sort-select" aria-label="정렬 방식" value={sortOption} onChange={event => setSortOption(event.target.value as typeof sortOption)}><option value="date-desc">최신순</option><option value="date-asc">오래된순</option><option value="title-asc">이름 A-Z</option><option value="title-desc">이름 Z-A</option></select><Button variant="ghost" size="icon" aria-label={settings.viewMode === 'card' ? '목록 보기' : '카드 보기'} onClick={() => void setViewMode(settings.viewMode === 'card' ? 'list' : 'card')}>{settings.viewMode === 'card' ? <ListMusic/> : <LayoutGrid/>}</Button></div></div>
-    {visibleProjects.length ? <div className={`project-list ${settings.viewMode === 'card' ? 'card-view' : ''}`}>{visibleProjects.map(item => <article className={`song-card ${item.status === 'completed' ? 'status-done' : 'status-draft'}${nowPlaying?.id === item.id && isPlaying ? ' now-playing' : ''}`} key={item.id}><button className={`song-symbol ${item.status === 'completed' ? 'status-done' : 'status-draft'}`} aria-label={item.status === 'completed' ? `${item.title} 재생` : `${item.title} 설정 불러오기`} onClick={() => item.status === 'completed' ? playQueue(visibleProjects, visibleProjects.indexOf(item)) : loadProject(item)}>{item.coverPath ? <img className="song-cover" src={coverUrl(item)} alt=""/> : item.status === 'completed' ? <AudioLines size={24}/> : <FileText size={24}/>}</button><button className="song-info" onClick={() => item.status === 'completed' ? (setSelected(item), setNotes(item.notes || '')) : loadProject(item)}><strong>{item.title}</strong><p>{item.style}</p><div><span className="small-badge">{item.status === 'completed' ? '완성' : '초안'}</span><span>{models.find(m => m.id === item.modelId)?.name || item.modelId}</span><span>{new Date(item.createdAt).toLocaleDateString('ko-KR')}</span></div></button><Button variant="ghost" size="icon" aria-label={item.favorite ? `${item.title} 좋아요 취소` : `${item.title} 좋아요`} onClick={() => void favorite(item)} className={item.favorite ? 'hearted' : ''}><Heart fill={item.favorite ? 'currentColor' : 'none'}/></Button><Button variant="ghost" size="icon" aria-label={`${item.title} 설정 불러오기`} onClick={() => loadProject(item)}><ArrowRight/></Button><Popover><PopoverTrigger render={<Button variant="ghost" size="icon" aria-label={`${item.title} 더보기`}/>}><MoreVertical/></PopoverTrigger><PopoverContent className="song-menu" align="end">{item.status === 'completed' ? <><button className="song-menu-item" onClick={() => loadProject(item)}><RefreshCw size={15}/>리믹스(설정 재사용)</button><button className="song-menu-item" onClick={() => coverFromProject(item)}><Disc3 size={15}/>커버</button><button className="song-menu-item" onClick={() => renameProject(item)}><Pencil size={15}/>이름 변경</button><button className="song-menu-item" onClick={() => openDownload(item)}><Download size={15}/>다운로드</button><button className="song-menu-item" onClick={() => setPostProcessTarget(item)}><SlidersHorizontal size={15}/>후처리 / EQ</button><button className="song-menu-item" onClick={() => setStemTarget({ project: item, mode: 'vocal' })}><Layers size={15}/><span className="stem-menu-item-text">STEM 분리<small>{STEM_MODE_CONFIG.vocal.menuSub}</small></span></button><button className="song-menu-item" onClick={() => setStemTarget({ project: item, mode: 'full' })}><Layers size={15}/><span className="stem-menu-item-text">STEM 분리<small>{STEM_MODE_CONFIG.full.menuSub}</small></span></button><button className="song-menu-item" onClick={() => setPlaylistPickerTarget(item)}><ListPlus size={15}/>재생목록에 추가</button><button className="song-menu-item" onClick={() => openCoverPicker(item)}><ImageIcon size={15}/>커버 {item.coverPath ? '변경' : '등록'}</button>{item.coverPath && <button className="song-menu-item" onClick={() => void deleteCover(item)}><X size={15}/>커버 삭제</button>}<button className="song-menu-item" onClick={() => { setSelected(item); setNotes(item.notes || ''); }}><CircleHelp size={15}/>상세 정보</button></> : <><button className="song-menu-item" onClick={() => renameProject(item)}><Pencil size={15}/>이름 변경</button><button className="song-menu-item" onClick={() => void addAsExample(item)}><Sparkles size={15}/>예시로 추가하기</button><button className="song-menu-item" onClick={() => openCoverPicker(item)}><ImageIcon size={15}/>커버 {item.coverPath ? '변경' : '등록'}</button></>}<button className="song-menu-item danger" onClick={() => setDeleteTarget(item)}><Trash2 size={15}/>삭제</button></PopoverContent></Popover>{item.status === 'completed' && item.durationMs ? <span className="song-duration">{formatTime(item.durationMs / 1000)}</span> : null}</article>)}</div> : <div className="empty-library"><div className="empty-icon"><AudioLines size={42} strokeWidth={1.25}/></div><h2>{query ? '검색 결과가 없어요' : tab === 'audio' ? '완성된 노래가 아직 없어요' : page === 'favorites' || tab === 'favorites' ? '마음에 드는 곡을 모아 보세요' : '첫 번째 노래를 기다리고 있어요'}</h2><p>{query ? '다른 제목이나 스타일로 검색해 보세요.' : tab === 'audio' ? '노래 만들기로 곡을 생성하면 이곳에서 결과를 들을 수 있어요.' : page === 'favorites' || tab === 'favorites' ? '저장한 곡의 하트를 누르면 이곳에 나타나요.' : <>가사 한 줄, 떠오르는 분위기에서 시작해 보세요.<br/>저장한 초안과 완성된 곡이 이곳에 모입니다.</>}</p>{!query && tab === 'all' && page !== 'favorites' && <Button variant="outline" className="soft-button" onClick={() => setPresetOpen(true)}><Sparkles/>예시로 시작하기<ArrowRight/></Button>}</div>}
+    {visibleProjects.length ? <div className={`project-list ${settings.viewMode === 'card' ? 'card-view' : ''}`}>{visibleProjects.map(item => <article className={`song-card ${item.status === 'completed' ? 'status-done' : 'status-draft'}${nowPlaying?.id === item.id && isPlaying ? ' now-playing' : ''}`} key={item.id}><button className={`song-symbol ${item.status === 'completed' ? 'status-done' : 'status-draft'}`} aria-label={item.status === 'completed' ? `${item.title} 재생` : `${item.title} 설정 불러오기`} onClick={() => item.status === 'completed' ? playQueue(visibleProjects, visibleProjects.indexOf(item)) : loadProject(item)}>{item.coverPath ? <img className="song-cover" src={coverUrl(item)} alt=""/> : item.status === 'completed' ? <AudioLines size={24}/> : <FileText size={24}/>}</button><button className="song-info" onClick={() => item.status === 'completed' ? (setSelected(item), setNotes(item.notes || '')) : loadProject(item)}><strong>{item.title}</strong><p>{item.style}</p><div><span className="small-badge">{item.status === 'completed' ? '완성' : '초안'}</span><span>{models.find(m => m.id === item.modelId)?.name || item.modelId}</span><span>{new Date(item.createdAt).toLocaleDateString('ko-KR')}</span></div></button><Button variant="ghost" size="icon" aria-label={item.favorite ? `${item.title} 좋아요 취소` : `${item.title} 좋아요`} onClick={() => void favorite(item)} className={item.favorite ? 'hearted' : ''}><Heart fill={item.favorite ? 'currentColor' : 'none'}/></Button><Button variant="ghost" size="icon" aria-label={`${item.title} 설정 불러오기`} onClick={() => loadProject(item)}><ArrowRight/></Button><Popover><PopoverTrigger render={<Button variant="ghost" size="icon" aria-label={`${item.title} 더보기`}/>}><MoreVertical/></PopoverTrigger><PopoverContent className="song-menu" align="end">{item.status === 'completed' ? <><button className="song-menu-item" onClick={() => loadProject(item)}><RefreshCw size={15}/>리믹스(설정 재사용)</button><button className="song-menu-item" onClick={() => coverFromProject(item)}><Disc3 size={15}/>커버</button><button className="song-menu-item" onClick={() => renameProject(item)}><Pencil size={15}/>이름 변경</button><button className="song-menu-item" onClick={() => openDownload(item)}><Download size={15}/>다운로드</button><button className="song-menu-item" onClick={() => setMidiEditorTarget(item)}><Music2 size={15}/>MIDI로 내보내기</button><button className="song-menu-item" onClick={() => setPostProcessTarget(item)}><SlidersHorizontal size={15}/>후처리 / EQ</button><button className="song-menu-item" onClick={() => setStemTarget({ project: item, mode: 'channel' })}><Layers size={15}/><span className="stem-menu-item-text">채널 분리<small>{STEM_MODE_CONFIG.channel.menuSub}</small></span></button><button className="song-menu-item" onClick={() => setStemTarget({ project: item, mode: 'vocal' })}><Layers size={15}/><span className="stem-menu-item-text">STEM 분리<small>{STEM_MODE_CONFIG.vocal.menuSub}</small></span></button><button className="song-menu-item" onClick={() => setStemTarget({ project: item, mode: 'full' })}><Layers size={15}/><span className="stem-menu-item-text">STEM 분리<small>{STEM_MODE_CONFIG.full.menuSub}</small></span></button><button className="song-menu-item" onClick={() => setPlaylistPickerTarget(item)}><ListPlus size={15}/>재생목록에 추가</button><button className="song-menu-item" onClick={() => openCoverPicker(item)}><ImageIcon size={15}/>앨범 표지 {item.coverPath ? '변경' : '등록'}</button>{item.coverPath && <button className="song-menu-item" onClick={() => void deleteCover(item)}><X size={15}/>앨범 표지 삭제</button>}<button className="song-menu-item" onClick={() => { setSelected(item); setNotes(item.notes || ''); }}><CircleHelp size={15}/>상세 정보</button></> : <><button className="song-menu-item" onClick={() => renameProject(item)}><Pencil size={15}/>이름 변경</button><button className="song-menu-item" onClick={() => void addAsExample(item)}><Sparkles size={15}/>예시로 추가하기</button><button className="song-menu-item" onClick={() => openCoverPicker(item)}><ImageIcon size={15}/>앨범 표지 {item.coverPath ? '변경' : '등록'}</button></>}<button className="song-menu-item danger" onClick={() => setDeleteTarget(item)}><Trash2 size={15}/>삭제</button></PopoverContent></Popover>{item.status === 'completed' && item.durationMs ? <span className="song-duration">{formatTime(item.durationMs / 1000)}</span> : null}</article>)}</div> : <div className="empty-library"><div className="empty-icon"><AudioLines size={42} strokeWidth={1.25}/></div><h2>{query ? '검색 결과가 없어요' : tab === 'audio' ? '완성된 노래가 아직 없어요' : page === 'favorites' || tab === 'favorites' ? '마음에 드는 곡을 모아 보세요' : '첫 번째 노래를 기다리고 있어요'}</h2><p>{query ? '다른 제목이나 스타일로 검색해 보세요.' : tab === 'audio' ? '노래 만들기로 곡을 생성하면 이곳에서 결과를 들을 수 있어요.' : page === 'favorites' || tab === 'favorites' ? '저장한 곡의 하트를 누르면 이곳에 나타나요.' : <>가사 한 줄, 떠오르는 분위기에서 시작해 보세요.<br/>저장한 초안과 완성된 곡이 이곳에 모입니다.</>}</p>{!query && tab === 'all' && page !== 'favorites' && <Button variant="outline" className="soft-button" onClick={() => setPresetOpen(true)}><Sparkles/>예시로 시작하기<ArrowRight/></Button>}</div>}
   </>; }
   function playlistPage() {
     if (activePlaylist) return <section className="library-page page-scroll"><div className="page-heading library-heading"><div><button className="playlist-back" onClick={() => setActivePlaylistId(null)}><ChevronLeft size={15}/>재생목록</button><h1>{activePlaylist.name}</h1><p>{playlistSongs.length}곡</p></div><div className="playlist-detail-actions"><Button variant="ghost" size="icon" aria-label={settings.viewMode === 'card' ? '목록 보기' : '카드 보기'} onClick={() => void setViewMode(settings.viewMode === 'card' ? 'list' : 'card')}>{settings.viewMode === 'card' ? <ListMusic/> : <LayoutGrid/>}</Button><Button onClick={() => playQueue(playlistSongs, 0)} disabled={!playlistSongs.some(item => item.status === 'completed')}><Play/>전체 재생</Button></div></div>{playlistSongs.length ? <div className={`project-list ${settings.viewMode === 'card' ? 'card-view' : ''}`}>{playlistSongs.map(item => <article className={`song-card ${item.status === 'completed' ? 'status-done' : 'status-draft'}${nowPlaying?.id === item.id && isPlaying ? ' now-playing' : ''}`} key={item.id}><button className={`song-symbol ${item.status === 'completed' ? 'status-done' : 'status-draft'}`} aria-label={`${item.title} 재생`} onClick={() => playQueue(playlistSongs, playlistSongs.indexOf(item))}>{item.coverPath ? <img className="song-cover" src={coverUrl(item)} alt=""/> : item.status === 'completed' ? <AudioLines size={24}/> : <FileText size={24}/>}</button><button className="song-info" onClick={() => { setSelected(item); setNotes(item.notes || ''); }}><strong>{item.title}</strong><p>{item.style}</p></button><Button variant="ghost" size="icon" aria-label={`${item.title} 재생목록에서 제거`} onClick={() => void removeFromPlaylist(activePlaylist, item.id)}><X/></Button></article>)}</div> : <div className="empty-library"><div className="empty-icon"><ListPlus size={42} strokeWidth={1.25}/></div><h2>아직 곡이 없어요</h2><p>노래의 &quot;...&quot; 메뉴에서 이 재생목록에 곡을 추가해 보세요.</p></div>}</section>;
     return <section className="library-page page-scroll"><div className="page-heading library-heading"><div><span className="eyebrow">연속 재생을 위한 모음</span><h1>재생목록</h1><p>라이브러리의 곡을 모아 이 PC에서 이어 들으세요.</p></div><Button onClick={() => void createPlaylistWith(`새 재생목록 ${playlists.length + 1}`)}><Plus/>새 재생목록</Button></div>{playlists.length ? <div className="playlist-grid">{playlists.map(list => <article className="playlist-card" key={list.id}><button onClick={() => setActivePlaylistId(list.id)}><ListPlus size={22}/><strong>{list.name}</strong><small>{list.songIds.length}곡</small></button><Popover><PopoverTrigger render={<Button variant="ghost" size="icon" aria-label={`${list.name} 더보기`}/>}><MoreVertical/></PopoverTrigger><PopoverContent className="song-menu" align="end"><button className="song-menu-item" onClick={() => void renamePlaylist(list)}><Pencil size={15}/>이름 변경</button><button className="song-menu-item danger" onClick={() => void deletePlaylist(list)}><Trash2 size={15}/>삭제</button></PopoverContent></Popover></article>)}</div> : <div className="empty-library"><div className="empty-icon"><ListPlus size={42} strokeWidth={1.25}/></div><h2>첫 재생목록을 만들어 보세요</h2><p>완성된 곡들을 모아 두면 이 PC에서 순서대로 이어 들을 수 있어요.</p></div>}</section>;
   }
+  function restorePage() {
+    return <section className="library-page page-scroll"><div className="page-heading library-heading"><div><span className="eyebrow">AudioSR로 고음질 복원</span><h1>음원 복원<span className="small-badge">실험적</span></h1><p>저음질(손실 압축 등으로 디테일이 소실된) 오디오 파일을 업로드하면 복원 결과를 미리 들어보고 라이브러리에 추가할 수 있습니다.</p></div></div><div className="inline-note warning"><CircleHelp size={17}/><span>실험적 기능입니다 — audio.cpp의 AudioSR이 클릭/틱 잡음을 만들어낼 수 있음을 확인했습니다(모델 자체의 한계로 추정, 좌우 채널 분리와는 무관). 결과물을 재생해 잡음이 들리면 저장하지 말고 취소해 주세요.</span></div><div className="form-section idea-section"><Button onClick={() => restoreInputRef.current?.click()} disabled={!!busy || !online}><Upload/>오디오 파일 선택</Button><p className="field-hint">MP3/WAV/FLAC/M4A/OGG 지원, 100MB 이하. 모노·스테레오 오디오만 가능합니다(3채널 이상은 지원하지 않음). 스테레오는 왼쪽·오른쪽 채널을 각각 복원한 뒤 다시 합쳐서, 복원 후에도 스테레오가 유지됩니다. 파일을 선택하면 원본/복원 미리듣기 창이 열리고, 저장을 눌러야 라이브러리에 추가됩니다.</p></div></section>;
+  }
   function abcNotePage() {
-    return <section className="library-page page-scroll"><div className="page-heading library-heading"><div><span className="eyebrow">심볼릭 작곡 보관함</span><h1>ABC 악보</h1><p>열기로 검사·수정하고, 더블 클릭하면 지금 곡에 바로 불러옵니다.</p></div><div className="playlist-detail-actions"><Button variant="ghost" size="icon" aria-label={settings.viewMode === 'card' ? '목록 보기' : '카드 보기'} onClick={() => void setViewMode(settings.viewMode === 'card' ? 'list' : 'card')}>{settings.viewMode === 'card' ? <ListMusic/> : <LayoutGrid/>}</Button><Button onClick={() => navigate('create')}><Plus/>만들기로 이동</Button></div></div>{abcNotes.length ? <div className={`project-list ${settings.viewMode === 'card' ? 'card-view' : ''}`}>{abcNotes.map(note => <article className="song-card status-abc" key={note.id}><button className="song-symbol status-abc" aria-label={`${note.title} 열기`} onDoubleClick={() => loadAbcNote(note)} onClick={() => openAbcNote(note)}>{note.coverPath ? <img className="song-cover" src={abcNoteCoverUrl(note)} alt=""/> : <FileText size={24}/>}</button><button className="song-info" onDoubleClick={() => loadAbcNote(note)} onClick={() => openAbcNote(note)}><strong>{note.title}</strong><p>{new Date(note.createdAt).toLocaleDateString('ko-KR')}</p></button><Popover><PopoverTrigger render={<Button variant="ghost" size="icon" aria-label={`${note.title} 더보기`}/>}><MoreVertical/></PopoverTrigger><PopoverContent className="song-menu" align="end"><button className="song-menu-item" onClick={() => openAbcNote(note)}><Pencil size={15}/>열기</button><button className="song-menu-item" onClick={() => loadAbcNote(note)}><ArrowRight size={15}/>불러오기</button><button className="song-menu-item" onClick={() => openAbcNoteCoverPicker(note)}><ImageIcon size={15}/>커버 {note.coverPath ? '변경' : '등록'}</button>{note.coverPath && <button className="song-menu-item" onClick={() => void deleteAbcNoteCover(note)}><X size={15}/>커버 삭제</button>}<button className="song-menu-item danger" onClick={() => void deleteAbcNote(note)}><Trash2 size={15}/>삭제</button></PopoverContent></Popover></article>)}</div> : <div className="empty-library"><div className="empty-icon"><FileText size={42} strokeWidth={1.25}/></div><h2>저장된 악보가 없어요</h2><p>만들기 화면에서 심볼릭 작곡을 만들고 "라이브러리에 저장"을 눌러 보세요.</p></div>}</section>;
+    return <section className="library-page page-scroll"><div className="page-heading library-heading"><div><span className="eyebrow">심볼릭 작곡 보관함</span><h1>ABC 악보</h1><p>열기로 검사·수정하고, 더블 클릭하면 지금 곡에 바로 불러옵니다.</p></div><div className="playlist-detail-actions"><Button variant="ghost" size="icon" aria-label={settings.viewMode === 'card' ? '목록 보기' : '카드 보기'} onClick={() => void setViewMode(settings.viewMode === 'card' ? 'list' : 'card')}>{settings.viewMode === 'card' ? <ListMusic/> : <LayoutGrid/>}</Button><Button onClick={() => navigate('create')}><Plus/>만들기로 이동</Button></div></div>{abcNotes.length ? <div className={`project-list ${settings.viewMode === 'card' ? 'card-view' : ''}`}>{abcNotes.map(note => <article className="song-card status-abc" key={note.id}><button className="song-symbol status-abc" aria-label={`${note.title} 열기`} onDoubleClick={() => loadAbcNote(note)} onClick={() => openAbcNote(note)}>{note.coverPath ? <img className="song-cover" src={abcNoteCoverUrl(note)} alt=""/> : <FileText size={24}/>}</button><button className="song-info" onDoubleClick={() => loadAbcNote(note)} onClick={() => openAbcNote(note)}><strong>{note.title}</strong><p>{new Date(note.createdAt).toLocaleDateString('ko-KR')}</p></button><Popover><PopoverTrigger render={<Button variant="ghost" size="icon" aria-label={`${note.title} 더보기`}/>}><MoreVertical/></PopoverTrigger><PopoverContent className="song-menu" align="end"><button className="song-menu-item" onClick={() => openAbcNote(note)}><Pencil size={15}/>열기</button><button className="song-menu-item" onClick={() => loadAbcNote(note)}><ArrowRight size={15}/>불러오기</button><button className="song-menu-item" onClick={() => openAbcNoteCoverPicker(note)}><ImageIcon size={15}/>앨범 표지 {note.coverPath ? '변경' : '등록'}</button>{note.coverPath && <button className="song-menu-item" onClick={() => void deleteAbcNoteCover(note)}><X size={15}/>앨범 표지 삭제</button>}<button className="song-menu-item danger" onClick={() => void deleteAbcNote(note)}><Trash2 size={15}/>삭제</button></PopoverContent></Popover></article>)}</div> : <div className="empty-library"><div className="empty-icon"><FileText size={42} strokeWidth={1.25}/></div><h2>저장된 악보가 없어요</h2><p>만들기 화면에서 심볼릭 작곡을 만들고 "라이브러리에 저장"을 눌러 보세요.</p></div>}</section>;
   }
   return <div className="studio-shell">
-    <aside className={`sidebar ${mobileNav ? 'mobile-open' : ''}`}><button className="brand" onClick={() => navigate('create')} aria-label="SongYUE2 만들기로 이동"><span className="brand-symbol"><AudioLines size={25}/></span><span>Song<b>YUE2</b><small>by madwind</small></span></button><div className="sidebar-main"><nav aria-label="주 메뉴">{([{ id: 'create', icon: Sparkles }, { id: 'home', icon: Home }, { id: 'projects', icon: Folder }, { id: 'library', icon: ListMusic }, { id: 'playlists', icon: ListPlus }, { id: 'abc', icon: FileText }, { id: 'favorites', icon: Heart }] as const).map(({ id, icon: Icon }) => <button className={`nav-item ${page === id ? 'active' : ''}`} onClick={() => navigate(id)} key={id} aria-current={page === id ? 'page' : undefined}><Icon size={19}/><span>{titles[id]}</span>{id === 'create' && <Plus size={15} className="nav-plus"/>}</button>)}</nav><div className="sidebar-divider"/><div className="sidebar-subhead"><span>최근 프로젝트</span><button aria-label="프로젝트 보기" onClick={() => navigate('projects')}><Plus size={14}/></button></div>{(() => { const recentDrafts = projects.filter(item => item.status === 'draft').slice(0, 4); return recentDrafts.length ? recentDrafts.map(item => <button className="recent-item" key={item.id} onClick={() => loadProject(item)}><span className="recent-dot"/>{item.title}</button>) : <p className="sidebar-empty">새로운 아이디어가<br/>음악이 되는 곳.</p>; })()}</div><div className="sidebar-bottom"><nav aria-label="도구 메뉴"><button className={`nav-item ${page === 'models' ? 'active' : ''}`} onClick={() => navigate('models')}><Cpu size={18}/>모델 관리</button><button className={`nav-item ${page === 'settings' ? 'active' : ''}`} onClick={() => navigate('settings')}><Settings2 size={18}/>설정</button><button className="nav-item" onClick={() => { setHelp(true); setMobileNav(false); }}><CircleHelp size={18}/>도움말</button></nav><div className="profile"><span className="avatar"><Headphones size={18}/></span><div>나의 스튜디오<small>로컬 워크스페이스</small></div><span className="version">0.1</span></div></div></aside>
+    <aside className={`sidebar ${mobileNav ? 'mobile-open' : ''}`}><button className="brand" onClick={() => navigate('create')} aria-label="SongYUE2 만들기로 이동"><span className="brand-symbol"><AudioLines size={25}/></span><span>Song<b>YUE2</b><small>by madwind</small></span></button><div className="sidebar-main"><nav aria-label="주 메뉴">{([{ id: 'create', icon: Sparkles }, { id: 'home', icon: Home }, { id: 'projects', icon: Folder }, { id: 'library', icon: ListMusic }, { id: 'playlists', icon: ListPlus }, { id: 'abc', icon: FileText }, { id: 'favorites', icon: Heart }] as const).map(({ id, icon: Icon }) => <button className={`nav-item ${page === id ? 'active' : ''}`} onClick={() => navigate(id)} key={id} aria-current={page === id ? 'page' : undefined}><Icon size={19}/><span>{titles[id]}</span>{id === 'create' && <Plus size={15} className="nav-plus"/>}</button>)}</nav><div className="sidebar-divider"/><div className="sidebar-subhead"><span>최근 프로젝트</span><button aria-label="프로젝트 보기" onClick={() => navigate('projects')}><Plus size={14}/></button></div>{(() => { const recentDrafts = projects.filter(item => item.status === 'draft').slice(0, 4); return recentDrafts.length ? recentDrafts.map(item => <button className="recent-item" key={item.id} onClick={() => loadProject(item)}><span className="recent-dot"/>{item.title}</button>) : <p className="sidebar-empty">새로운 아이디어가<br/>음악이 되는 곳.</p>; })()}</div><div className="sidebar-bottom"><nav aria-label="도구 메뉴"><button className="nav-item" onClick={() => { setCompareOpen(true); setMobileNav(false); }}><GitCompare size={18}/>음원 비교</button><button className={`nav-item ${page === 'restore' ? 'active' : ''}`} onClick={() => navigate('restore')}><Upload size={18}/>음원 복원 (실험적)</button><button className="nav-item" onClick={() => { setTimbreTransformOpen(true); setMobileNav(false); }}><WandSparkles size={18}/>음색 변조 (실험적)</button><button className={`nav-item ${page === 'tools' ? 'active' : ''}`} onClick={() => navigate('tools')}><SlidersHorizontal size={18}/>오디오 도구 (실험적)</button><button className={`nav-item ${page === 'models' ? 'active' : ''}`} onClick={() => navigate('models')}><Cpu size={18}/>모델 관리</button><button className={`nav-item ${page === 'settings' ? 'active' : ''}`} onClick={() => navigate('settings')}><Settings2 size={18}/>설정</button><button className="nav-item" onClick={() => { setHelp(true); setMobileNav(false); }}><CircleHelp size={18}/>도움말</button></nav><div className="profile"><span className="avatar"><Headphones size={18}/></span><div>나의 스튜디오<small>로컬 워크스페이스</small></div><span className="version">0.1</span></div></div></aside>
     {mobileNav && <button className="nav-scrim" aria-label="메뉴 닫기" onClick={() => setMobileNav(false)}/>}
     <main className="main-shell"><header className="topbar"><div className="topbar-title"><Button variant="ghost" size="icon" className="mobile-menu" aria-label="메뉴 열기" onClick={() => setMobileNav(true)}><Menu/></Button><span className="breadcrumb">작업 공간</span><ChevronRight size={14}/><strong>{titles[page]}</strong></div><Popover open={modelOpen} onOpenChange={setModelOpen}><PopoverTrigger render={<Button variant="outline" className="model-trigger" aria-label="음악 모델 선택"/>}><AudioLines size={17}/><span>{model.name}</span><span className="model-recommended">{model.id === 'yue2-q4' ? '추천' : model.engine}</span><ChevronDown size={15}/></PopoverTrigger><PopoverContent className="model-menu" align="start"><div className="menu-heading">음악 생성 모델<span>새 작업에 적용할 모델을 선택하세요</span></div>{models.map(item => <button key={item.id} className={`model-option ${draft.modelId === item.id ? 'selected' : ''}`} disabled={item.selectable === false} onClick={() => { if (item.selectable === false) return; update({ modelId: item.id }); setModelOpen(false); }}><Cpu size={18}/><span><strong>{item.name}<em>{item.badge}</em></strong><small>{item.detail} · {item.size}</small></span>{draft.modelId === item.id && <Check size={17}/>}</button>)}<div className="model-menu-footer">모델 파일과 실행 엔진의 준비 상태는 별도로 확인합니다.<button onClick={() => { navigate('models'); setModelOpen(false); }}>모델 관리 <ArrowRight size={13}/></button></div></PopoverContent></Popover><div className="device-status"><span className={`status-dot ${online ? '' : 'offline'}`}/><span>{online ? '로컬 연결됨' : '로컬 연결 대기'}</span><span className="device-divider"/><Cpu size={14}/><span>RTX 5070 <span className="muted">· 12 GB</span></span></div></header>
     {page === 'create' ? <div className="creation-layout"><section className="composer" aria-label="노래 편집기"><div className="composer-scroll"><div className="composer-heading"><div><h1>어떤 노래를 만들까요?</h1></div><Music2 size={24}/></div><div className="mode-switch" aria-label="제작 모드"><button className={draft.mode === 'simple' ? 'active' : ''} aria-pressed={draft.mode === 'simple'} onClick={() => update({ mode: 'simple' })}>간편 모드</button><button className={draft.mode === 'custom' ? 'active' : ''} aria-pressed={draft.mode === 'custom'} onClick={() => update({ mode: 'custom' })}>직접 만들기<SlidersHorizontal size={14}/></button></div><div className="mode-switch vocal-mode-switch" aria-label="보컬 여부"><button className={!draft.instrumental ? 'active' : ''} aria-pressed={!draft.instrumental} onClick={() => update({ instrumental: false })}><Mic size={14}/>보컬+악기</button><button className={draft.instrumental ? 'active' : ''} aria-pressed={draft.instrumental} onClick={() => update({ instrumental: true })}><Guitar size={14}/>악기만</button></div>
@@ -1837,14 +3879,17 @@ export default function Studio() {
     <section className="workspace" aria-label="내 작업"><div className="workspace-heading"><div><h2>내 작업<span className="count-label">{projects.length}</span></h2><p>오늘의 아이디어가 다음 노래가 되는 곳</p></div></div>{projectList()}<div className="inspiration-section"><div className="section-caption"><span><Sparkles size={15}/>어디서 시작할지 고민된다면</span><button onClick={() => setPresetOpen(true)}>예시 둘러보기<ChevronRight size={14}/></button></div><div className="inspiration-carousel">{examples.length > 3 && <Button variant="ghost" size="icon" aria-label="이전 예시" onClick={() => setExampleIndex(previous => (previous - 1 + examples.length) % examples.length)}><ChevronLeft/></Button>}<div className="inspiration-grid">{exampleWindow.map(example => <button key={example.id} className={`inspiration-card ${example.color || ''}`} onClick={() => useExample(example)}><div className="preset-top"><Music2 size={21}/><ArrowRight size={15}/></div><span className="genre-label">{example.genre || '예시'}</span><strong>{example.title}</strong><small>{example.caption}</small></button>)}</div>{examples.length > 3 && <Button variant="ghost" size="icon" aria-label="다음 예시" onClick={() => setExampleIndex(previous => (previous + 1) % examples.length)}><ChevronRight/></Button>}</div></div><div className="workspace-note"><ShieldCheck size={15}/><span>가사와 초안은 내 PC에 저장됩니다. 클라우드 LLM은 요청할 때만 연결됩니다.</span></div></section></div>
     : page === 'settings' ? <section className="settings-page page-scroll"><div className="page-heading"><span className="eyebrow">내 작업 방식에 맞게</span><h1>스튜디오 설정</h1><p>작사 도우미와 로컬 작업 환경을 설정하세요.</p></div><section className="settings-section"><div className="settings-section-heading"><div className="setting-icon"><WandSparkles size={21}/></div><div><h2>작사 도우미</h2><p>가사와 스타일을 함께 다듬을 LLM을 선택하세요.</p></div><span className="small-badge">선택 기능</span></div><div className="provider-grid">{providers.map(provider => <button key={provider.id} className={`provider-card ${settings.provider === provider.id ? 'selected' : ''}`} aria-pressed={settings.provider === provider.id} onClick={() => void selectProvider(provider.id)}><span className="provider-mark">{provider.mark}</span><strong>{provider.label}</strong><small>{provider.description}</small>{settings.provider === provider.id && <Check className="provider-check" size={15}/>}</button>)}</div>
     {settings.provider !== 'none' ? <div className="settings-form"><label className="wide-field">연결 주소<Input value={settings.endpoint || '.env 파일에 값이 없습니다'} readOnly/></label><label>LLM 모델 이름<Input value={settings.llmModel || '.env 파일에 값이 없습니다'} readOnly/></label>{settings.provider !== 'ollama' && <label>API 키<Input value={settings.apiKey || '.env 파일에 값이 없습니다'} readOnly/></label>}<p className="field-hint wide-field">연결 주소, 모델 이름, API 키는 프로젝트 폴더의 .env 파일에서 읽어옵니다. .env.sample을 복사해 .env로 저장한 뒤 값을 입력하고 앱을 다시 실행해 주세요.<br/>연결 확인은 실제 짧은 요청을 전송합니다.</p></div> : <div className="inline-note"><Check size={17}/><span>LLM 없이도 직접 쓴 가사와 스타일로 작업할 수 있어요.</span></div>}
-    <div className="settings-actions"><Button variant="outline" onClick={() => { setSettings(savedSettings); notify('저장된 설정으로 되돌렸습니다.'); }}>변경 취소</Button>{settings.provider !== 'none' && <Button variant="outline" disabled={!!busy} onClick={() => void storeSettings(true)}>{busy === 'test' ? <LoaderCircle className="spin"/> : <RefreshCw/>}저장 후 연결 확인</Button>}<Button disabled={!!busy} onClick={() => void storeSettings()}><Save/>설정 저장</Button></div></section><section className="settings-section"><div className="settings-section-heading"><div className="setting-icon"><Cpu size={21}/></div><div><h2>로컬 실행 환경</h2><p>음악 생성 엔진과 라이브러리 폴더 위치입니다.</p></div></div><div className="settings-form"><label className="wide-field">audio.cpp 실행 파일 (GGUF 모델용)<Input value={settings.enginePath} onChange={event => setSettings({ ...settings, enginePath: event.target.value })} placeholder={DEFAULT_ENGINE_PATH}/></label><label className="wide-field">Python 실행 파일 (원본 모델용)<Input value={settings.pythonEnginePath} onChange={event => setSettings({ ...settings, pythonEnginePath: event.target.value })} placeholder="예: test\YuE2-source\.venv\Scripts\python.exe (24GB급 VRAM 권장)"/></label><label className="wide-field">Python 스크립트 (run_yue2.py)<Input value={settings.pythonScriptPath} onChange={event => setSettings({ ...settings, pythonScriptPath: event.target.value })} placeholder="예: test\YuE2-source\skills\yue2-music\scripts\run_yue2.py"/></label><label>Python 메모리 예산 (GiB)<Input type="number" min="1" max="64" value={settings.pythonMemoryBudgetGib} onChange={event => setSettings({ ...settings, pythonMemoryBudgetGib: Number(event.target.value) })}/></label><label className="wide-field">SheetSage2 Python 실행 파일 (제로샷 커버용, 별도 venv 필요)<Input value={settings.sheetSagePythonPath} onChange={event => setSettings({ ...settings, sheetSagePythonPath: event.target.value })} placeholder="예: test\YuE2-source\.venv-sheetsage2\Scripts\python.exe"/></label><label className="wide-field">ComfyUI 연결 주소 (INT8 ConvRot 모델용)<Input value={settings.comfyUiEndpoint} onChange={event => setSettings({ ...settings, comfyUiEndpoint: event.target.value })} placeholder={DEFAULT_COMFYUI_ENDPOINT}/></label><label className="wide-field">ComfyUI 설치 폴더 (필요 시 자동 실행)<Input value={settings.comfyUiEnginePath} onChange={event => setSettings({ ...settings, comfyUiEnginePath: event.target.value })} placeholder={DEFAULT_COMFYUI_ENGINE_PATH}/></label><label className="wide-field">Setting 폴더<Input value={settings.settingPath} onChange={event => setSettings({ ...settings, settingPath: event.target.value })} placeholder={DEFAULT_SETTING_PATH}/></label><label className="wide-field">Music 폴더<Input value={settings.musicPath} onChange={event => setSettings({ ...settings, musicPath: event.target.value })} placeholder={DEFAULT_MUSIC_PATH}/></label><label className="wide-field">예시 폴더<Input value={settings.examplesPath} onChange={event => setSettings({ ...settings, examplesPath: event.target.value })} placeholder={DEFAULT_EXAMPLES_PATH}/></label><label className="wide-field">커버 이미지 폴더<Input value={settings.coversPath} onChange={event => setSettings({ ...settings, coversPath: event.target.value })} placeholder={DEFAULT_COVERS_PATH}/></label><label className="wide-field">ABC 악보 폴더<Input value={settings.abcNotesPath} onChange={event => setSettings({ ...settings, abcNotesPath: event.target.value })} placeholder={DEFAULT_ABC_NOTES_PATH}/></label><label>저장 파일 형식<select value={settings.saveFormat} onChange={event => setSettings({ ...settings, saveFormat: event.target.value as Settings['saveFormat'] })}>{saveFormats.map(format => <option key={format.id} value={format.id}>{format.label}</option>)}</select></label><label>보기 방식<select value={settings.viewMode} onChange={event => void setViewMode(event.target.value as Settings['viewMode'])}>{viewModes.map(mode => <option key={mode.id} value={mode.id}>{mode.label}</option>)}</select></label><label className="wide-field">로그 폴더(읽기 전용)<Input value={settings.outputDirectory} readOnly/></label></div><p className="field-hint wide-field">실행 파일/스크립트/폴더는 모두 SongYUE2 폴더 기준 상대 경로입니다(절대 경로도 입력 가능). 비워두면 위 placeholder 경로가 사용되며, 폴더가 없으면 자동으로 만들어집니다. 메모리 예산은 원본 모델 생성 시 GPU VRAM 사용 한도(GiB)이며, 낮출수록 저사양 GPU에서도 동작할 가능성이 높아지지만 너무 낮으면 실패할 수 있습니다.</p><div className="settings-actions"><Button onClick={() => void storeSettings()} disabled={!!busy}><Save/>설정 저장</Button></div></section><section className="settings-section"><div className="settings-section-heading"><div className="setting-icon"><Sparkles size={21}/></div><div><h2>Music style Presets</h2><p>만들기 화면의 음악 스타일 아래에 뜨는 빠른 태그 버튼입니다. 한 줄에 하나씩 입력하세요.</p></div></div><Textarea className="style-presets-textarea" value={settings.stylePresets} onChange={event => setSettings({ ...settings, stylePresets: event.target.value })} placeholder={DEFAULT_STYLE_PRESETS}/><div className="settings-actions"><Button onClick={() => void storeSettings()} disabled={!!busy}><Save/>설정 저장</Button></div></section><section className="settings-section"><div className="settings-section-heading"><div className="setting-icon"><AudioLines size={21}/></div><div><h2>후처리 비주얼라이저</h2><p>후처리 / EQ 창의 원형 라이브 비주얼라이저 표시 여부와 모양입니다.</p></div></div><div className="settings-form"><label className="checkbox-label wide-field"><input type="checkbox" checked={settings.visualizerEnabled} onChange={event => setSettings({ ...settings, visualizerEnabled: event.target.checked })}/>비주얼라이저 표시</label><div className="wide-field visualizer-row"><label>라인 모드<select value={settings.visualizerRingMode} onChange={event => setSettings({ ...settings, visualizerRingMode: event.target.value as Settings['visualizerRingMode'] })}><option value="radial">1: 회전(R) 방향 — 같은 순간을 링마다 다른 각도로 표시</option><option value="time">2: 시간축 — 링마다 다른 과거 시점의 소리를 표시</option></select></label>{settings.visualizerRingMode === 'radial' ? <label>R 간격<Input type="number" min="0.1" max="20" step="0.1" value={settings.visualizerRingStep} onChange={event => setSettings({ ...settings, visualizerRingStep: Number(event.target.value) })}/></label> : <><label>시간 간격(초)<Input type="number" min="0.02" max="2" step="0.1" value={settings.visualizerTimeStep} onChange={event => setSettings({ ...settings, visualizerTimeStep: Number(event.target.value) })}/></label><label>가속도<Input type="number" min="0.2" max="4" step="0.1" value={settings.visualizerTimeSkew} onChange={event => setSettings({ ...settings, visualizerTimeSkew: Number(event.target.value) })}/></label></>}</div><div className="wide-field visualizer-row"><label>라인 색상(색조 0~360)<Input type="number" min="0" max="359" value={settings.visualizerHue} onChange={event => setSettings({ ...settings, visualizerHue: Number(event.target.value) })}/></label><label>라인 개수<Input type="number" min="1" max="40" value={settings.visualizerRingCount} onChange={event => setSettings({ ...settings, visualizerRingCount: Number(event.target.value) })}/></label><label>라인 굵기<Input type="number" min="0.5" max="8" step="0.5" value={settings.visualizerLineWidth} onChange={event => setSettings({ ...settings, visualizerLineWidth: Number(event.target.value) })}/></label><label>변동폭<Input type="number" min="0.1" max="10" step="0.1" value={settings.visualizerAmplitude} onChange={event => setSettings({ ...settings, visualizerAmplitude: Number(event.target.value) })}/></label><label>잔상(0~95)<Input type="number" min="0" max="95" value={settings.visualizerTrail} onChange={event => setSettings({ ...settings, visualizerTrail: Number(event.target.value) })}/></label><label>나선 정도(0~100)<Input type="number" min="0" max="100" value={settings.visualizerSpiral} onChange={event => setSettings({ ...settings, visualizerSpiral: Number(event.target.value) })}/></label></div></div><p className="field-hint wide-field">기본값: 표시 켬 · 라인 모드 1(회전) · R 간격 {DEFAULT_VISUALIZER_RING_STEP} · 시간 간격 {DEFAULT_VISUALIZER_TIME_STEP}초 · 가속도 {DEFAULT_VISUALIZER_TIME_SKEW} · 색조 {DEFAULT_VISUALIZER_HUE} · 라인 {DEFAULT_VISUALIZER_RING_COUNT}개 · 굵기 {DEFAULT_VISUALIZER_LINE_WIDTH} · 변동폭 {DEFAULT_VISUALIZER_AMPLITUDE} · 잔상 {DEFAULT_VISUALIZER_TRAIL} · 나선 정도 {DEFAULT_VISUALIZER_SPIRAL}. 라인 모드 1(회전)은 모든 링이 같은 순간의 소리를 각각 다른 반지름·각도로 보여줍니다 — R 간격은 링 사이의 반지름 차이입니다. 라인 모드 2(시간축)는 모든 링이 같은 반지름에서 서로 다른 과거 시점의 소리를 보여줍니다 — 시간 간격은 링 사이의 기본 시간 간격(초), 가속도는 그 간격이 링이 오래될수록 점점 벌어지는(&gt;1) 또는 점점 좁아지는(&lt;1) 정도입니다(1=일정한 간격). 변동폭은 소리 크기에 따라 반지름이 기본 반지름을 중심으로 얼마나 늘었다 줄었다 하는지입니다(중간 음량이면 기본 반지름 그대로, 조용하면 안쪽으로 줄어들고 크면 바깥으로 부풀어 오름 — 줄어드는 폭은 늘어나는 폭의 절반) — 키울수록 안팎으로 더 역동적으로 움직입니다. 잔상은 이전 프레임이 사라지는 속도를 늦춰 꼬리를 남깁니다(0=꼬리 없음, 높을수록 길게 남음). 나선 정도는 두 모드 모두에서 링마다 반지름과 함께 회전 위상이 어긋나는 정도입니다(0=완전한 동심원, 100=나선형).</p><div className="settings-actions"><Button onClick={() => void storeSettings()} disabled={!!busy}><Save/>설정 저장</Button></div></section></section>
+    <div className="settings-actions"><Button variant="outline" onClick={() => { setSettings(savedSettings); notify('저장된 설정으로 되돌렸습니다.'); }}>변경 취소</Button>{settings.provider !== 'none' && <Button variant="outline" disabled={!!busy} onClick={() => void storeSettings(true)}>{busy === 'test' ? <LoaderCircle className="spin"/> : <RefreshCw/>}저장 후 연결 확인</Button>}<Button disabled={!!busy} onClick={() => void storeSettings()}><Save/>설정 저장</Button></div></section><section className="settings-section"><div className="settings-section-heading"><div className="setting-icon"><Cpu size={21}/></div><div><h2>로컬 실행 환경</h2><p>음악 생성 엔진과 라이브러리 폴더 위치입니다.</p></div></div><div className="settings-form"><label className="wide-field">audio.cpp 실행 파일 (GGUF 모델용)<Input value={settings.enginePath} onChange={event => setSettings({ ...settings, enginePath: event.target.value })} placeholder={DEFAULT_ENGINE_PATH}/></label><label className="wide-field">Python 실행 파일 (원본 모델용)<Input value={settings.pythonEnginePath} onChange={event => setSettings({ ...settings, pythonEnginePath: event.target.value })} placeholder="예: test\YuE2-source\.venv\Scripts\python.exe (24GB급 VRAM 권장)"/></label><label className="wide-field">Python 스크립트 (run_yue2.py)<Input value={settings.pythonScriptPath} onChange={event => setSettings({ ...settings, pythonScriptPath: event.target.value })} placeholder="예: test\YuE2-source\skills\yue2-music\scripts\run_yue2.py"/></label><label>Python 메모리 예산 (GiB)<Input type="number" min="1" max="64" value={settings.pythonMemoryBudgetGib} onChange={event => setSettings({ ...settings, pythonMemoryBudgetGib: Number(event.target.value) })}/></label><label className="wide-field">SheetSage2 Python 실행 파일 (제로샷 커버용, 별도 venv 필요)<Input value={settings.sheetSagePythonPath} onChange={event => setSettings({ ...settings, sheetSagePythonPath: event.target.value })} placeholder="예: test\YuE2-source\.venv-sheetsage2\Scripts\python.exe"/></label><label className="wide-field">ComfyUI 연결 주소 (INT8 ConvRot 모델용)<Input value={settings.comfyUiEndpoint} onChange={event => setSettings({ ...settings, comfyUiEndpoint: event.target.value })} placeholder={DEFAULT_COMFYUI_ENDPOINT}/></label><label className="wide-field">ComfyUI 설치 폴더 (필요 시 자동 실행)<Input value={settings.comfyUiEnginePath} onChange={event => setSettings({ ...settings, comfyUiEnginePath: event.target.value })} placeholder={DEFAULT_COMFYUI_ENGINE_PATH}/></label><label className="wide-field">AudioAuK 연결 주소 (음색 변조 - AuK 탭)<Input value={settings.audioAukEndpoint} onChange={event => setSettings({ ...settings, audioAukEndpoint: event.target.value })} placeholder={DEFAULT_AUDIO_AUK_ENDPOINT}/></label><label className="wide-field">AudioAuK 설치 폴더 (필요 시 자동 실행)<Input value={settings.audioAukPath} onChange={event => setSettings({ ...settings, audioAukPath: event.target.value })} placeholder={DEFAULT_AUDIO_AUK_PATH}/></label><label className="wide-field">DDSP-SVC 설치 폴더 (음색 변조 - DDSP-SVC 탭)<Input value={settings.ddspSvcPath} onChange={event => setSettings({ ...settings, ddspSvcPath: event.target.value })} placeholder={DEFAULT_DDSP_SVC_PATH}/></label><label className="wide-field">Setting 폴더<Input value={settings.settingPath} onChange={event => setSettings({ ...settings, settingPath: event.target.value })} placeholder={DEFAULT_SETTING_PATH}/></label><label className="wide-field">Music 폴더<Input value={settings.musicPath} onChange={event => setSettings({ ...settings, musicPath: event.target.value })} placeholder={DEFAULT_MUSIC_PATH}/></label><label className="wide-field">예시 폴더<Input value={settings.examplesPath} onChange={event => setSettings({ ...settings, examplesPath: event.target.value })} placeholder={DEFAULT_EXAMPLES_PATH}/></label><label className="wide-field">앨범 표지 폴더<Input value={settings.coversPath} onChange={event => setSettings({ ...settings, coversPath: event.target.value })} placeholder={DEFAULT_COVERS_PATH}/></label><label className="wide-field">ABC 악보 폴더<Input value={settings.abcNotesPath} onChange={event => setSettings({ ...settings, abcNotesPath: event.target.value })} placeholder={DEFAULT_ABC_NOTES_PATH}/></label><label>저장 파일 형식<select value={settings.saveFormat} onChange={event => setSettings({ ...settings, saveFormat: event.target.value as Settings['saveFormat'] })}>{saveFormats.map(format => <option key={format.id} value={format.id}>{format.label}</option>)}</select></label><label>보기 방식<select value={settings.viewMode} onChange={event => void setViewMode(event.target.value as Settings['viewMode'])}>{viewModes.map(mode => <option key={mode.id} value={mode.id}>{mode.label}</option>)}</select></label><label className="wide-field">로그 폴더(읽기 전용)<Input value={settings.outputDirectory} readOnly/></label></div><p className="field-hint wide-field">실행 파일/스크립트/폴더는 모두 SongYUE2 폴더 기준 상대 경로입니다(절대 경로도 입력 가능). 비워두면 위 placeholder 경로가 사용되며, 폴더가 없으면 자동으로 만들어집니다. 메모리 예산은 원본 모델 생성 시 GPU VRAM 사용 한도(GiB)이며, 낮출수록 저사양 GPU에서도 동작할 가능성이 높아지지만 너무 낮으면 실패할 수 있습니다.</p><div className="settings-actions"><Button onClick={() => void storeSettings()} disabled={!!busy}><Save/>설정 저장</Button></div></section><section className="settings-section"><div className="settings-section-heading"><div className="setting-icon"><Sparkles size={21}/></div><div><h2>Music style Presets</h2><p>만들기 화면의 음악 스타일 아래에 뜨는 빠른 태그 버튼입니다. 한 줄에 하나씩 입력하세요.</p></div></div><Textarea className="style-presets-textarea" value={settings.stylePresets} onChange={event => setSettings({ ...settings, stylePresets: event.target.value })} placeholder={DEFAULT_STYLE_PRESETS}/><div className="settings-actions"><Button onClick={() => void storeSettings()} disabled={!!busy}><Save/>설정 저장</Button></div></section><section className="settings-section"><div className="settings-section-heading"><div className="setting-icon"><AudioLines size={21}/></div><div><h2>후처리 비주얼라이저</h2><p>후처리 / EQ 창의 원형 라이브 비주얼라이저 표시 여부와 모양입니다.</p></div></div><div className="settings-form"><label className="checkbox-label wide-field"><input type="checkbox" checked={settings.visualizerEnabled} onChange={event => setSettings({ ...settings, visualizerEnabled: event.target.checked })}/>비주얼라이저 표시</label><div className="wide-field visualizer-row"><label>라인 모드<select value={settings.visualizerRingMode} onChange={event => setSettings({ ...settings, visualizerRingMode: event.target.value as Settings['visualizerRingMode'] })}><option value="radial">1: 회전(R) 방향 — 같은 순간을 링마다 다른 각도로 표시</option><option value="time">2: 시간축 — 링마다 다른 과거 시점의 소리를 표시</option></select></label>{settings.visualizerRingMode === 'radial' ? <label>R 간격<Input type="number" min="0.1" max="20" step="0.1" value={settings.visualizerRingStep} onChange={event => setSettings({ ...settings, visualizerRingStep: Number(event.target.value) })}/></label> : <><label>시간 간격(초)<Input type="number" min="0.02" max="2" step="0.1" value={settings.visualizerTimeStep} onChange={event => setSettings({ ...settings, visualizerTimeStep: Number(event.target.value) })}/></label><label>가속도<Input type="number" min="0.2" max="4" step="0.1" value={settings.visualizerTimeSkew} onChange={event => setSettings({ ...settings, visualizerTimeSkew: Number(event.target.value) })}/></label></>}</div><div className="wide-field visualizer-row"><label>라인 색상(색조 0~360)<Input type="number" min="0" max="359" value={settings.visualizerHue} onChange={event => setSettings({ ...settings, visualizerHue: Number(event.target.value) })}/></label><label>라인 개수<Input type="number" min="1" max="40" value={settings.visualizerRingCount} onChange={event => setSettings({ ...settings, visualizerRingCount: Number(event.target.value) })}/></label><label>라인 굵기<Input type="number" min="0.5" max="8" step="0.5" value={settings.visualizerLineWidth} onChange={event => setSettings({ ...settings, visualizerLineWidth: Number(event.target.value) })}/></label><label>변동폭<Input type="number" min="0.1" max="10" step="0.1" value={settings.visualizerAmplitude} onChange={event => setSettings({ ...settings, visualizerAmplitude: Number(event.target.value) })}/></label><label>잔상(0~95)<Input type="number" min="0" max="95" value={settings.visualizerTrail} onChange={event => setSettings({ ...settings, visualizerTrail: Number(event.target.value) })}/></label><label>나선 정도(0~100)<Input type="number" min="0" max="100" value={settings.visualizerSpiral} onChange={event => setSettings({ ...settings, visualizerSpiral: Number(event.target.value) })}/></label></div></div><p className="field-hint wide-field">기본값: 표시 켬 · 라인 모드 1(회전) · R 간격 {DEFAULT_VISUALIZER_RING_STEP} · 시간 간격 {DEFAULT_VISUALIZER_TIME_STEP}초 · 가속도 {DEFAULT_VISUALIZER_TIME_SKEW} · 색조 {DEFAULT_VISUALIZER_HUE} · 라인 {DEFAULT_VISUALIZER_RING_COUNT}개 · 굵기 {DEFAULT_VISUALIZER_LINE_WIDTH} · 변동폭 {DEFAULT_VISUALIZER_AMPLITUDE} · 잔상 {DEFAULT_VISUALIZER_TRAIL} · 나선 정도 {DEFAULT_VISUALIZER_SPIRAL}. 라인 모드 1(회전)은 모든 링이 같은 순간의 소리를 각각 다른 반지름·각도로 보여줍니다 — R 간격은 링 사이의 반지름 차이입니다. 라인 모드 2(시간축)는 모든 링이 같은 반지름에서 서로 다른 과거 시점의 소리를 보여줍니다 — 시간 간격은 링 사이의 기본 시간 간격(초), 가속도는 그 간격이 링이 오래될수록 점점 벌어지는(&gt;1) 또는 점점 좁아지는(&lt;1) 정도입니다(1=일정한 간격). 변동폭은 소리 크기에 따라 반지름이 기본 반지름을 중심으로 얼마나 늘었다 줄었다 하는지입니다(중간 음량이면 기본 반지름 그대로, 조용하면 안쪽으로 줄어들고 크면 바깥으로 부풀어 오름 — 줄어드는 폭은 늘어나는 폭의 절반) — 키울수록 안팎으로 더 역동적으로 움직입니다. 잔상은 이전 프레임이 사라지는 속도를 늦춰 꼬리를 남깁니다(0=꼬리 없음, 높을수록 길게 남음). 나선 정도는 두 모드 모두에서 링마다 반지름과 함께 회전 위상이 어긋나는 정도입니다(0=완전한 동심원, 100=나선형).</p><div className="settings-actions"><Button onClick={() => void storeSettings()} disabled={!!busy}><Save/>설정 저장</Button></div></section></section>
     : page === 'models' ? <section className="models-page page-scroll"><div className="page-heading"><span className="eyebrow">내 스튜디오의 사운드 엔진</span><h1>모델 관리</h1><p>원본과 GGUF 모델을 보관하고, 상단에서 사용할 모델을 고르세요.</p></div><div className="download-overview"><div className="setting-icon"><ArrowDownToLine size={23}/></div><div className="download-copy"><h2>{inventory?.state === 'complete' ? '모델 다운로드 완료' : '모델 파일 준비 중'}</h2><p>{inventory ? `${gb(inventory.completedBytes)} / ${gb(inventory.totalBytes)}` : '로컬 다운로드 상태를 확인하고 있습니다.'}</p><Progress aria-label="전체 모델 다운로드" value={inventory?.totalBytes ? Math.min(100, inventory.completedBytes / inventory.totalBytes * 100) : 0}/></div><span className="small-badge">Hugging Face</span></div><div className="model-card-grid">{models.map(item => <article className={`model-detail-card ${draft.modelId === item.id ? 'selected' : ''}`} key={item.id}><div className="model-card-top"><Cpu size={23}/><span className="small-badge">{item.badge}</span></div><h2>{item.name}</h2><p>{item.detail}</p><div className="model-meta"><span>실행 방식<strong>{item.engine}</strong></span><span>본체 크기<strong>{item.size}</strong></span></div><div className="model-file-state"><span className={`status-dot ${installed(item) ? '' : 'amber'}`}/>{installed(item) ? '본체 다운로드됨' : '파일 준비 중'}<span>{item.engine === 'audio.cpp' ? '생성 지원' : '엔진 미지원'}</span></div><Button variant={draft.modelId === item.id ? 'default' : 'outline'} disabled={item.selectable === false} onClick={() => { update({ modelId: item.id }); notify(`${item.name} 모델을 선택했습니다.`); }}>{draft.modelId === item.id ? <><Check/>현재 선택한 모델</> : item.selectable === false ? '연결 대기' : '이 모델 선택'}</Button></article>)}</div><section className="repository-section"><h2>다운로드 보관함</h2>{inventory?.repositories?.map(repo => <div className="repository-row" key={repo.id}><Folder size={19}/><div><strong>{repo.id}</strong><small>{repo.files?.filter(file => file.state === 'complete').length || 0} / {repo.files?.length || 0}개 파일 · {gb(repo.completedBytes)} / {gb(repo.totalBytes)}</small></div><span className="small-badge">{repo.state === 'complete' ? '완료' : '다운로드 중'}</span></div>)}</section><div className="inline-note"><ShieldCheck size={18}/><span>모델 가중치 라이선스: CC BY-NC 4.0. 앱 배포 파일과 모델은 분리해 관리합니다. 다운로드와 실제 실행 가능 여부는 다릅니다.</span></div></section>
     : page === 'playlists' ? playlistPage()
     : page === 'abc' ? abcNotePage()
+    : page === 'restore' ? restorePage()
+    : page === 'tools' ? <AudioToolsPage notify={notify} onCreated={item => setProjects(previous => [item, ...previous])}/>
     : <section className="library-page page-scroll"><div className="page-heading library-heading"><div><span className="eyebrow">나의 음악을 한곳에</span><h1>{titles[page]}</h1><p>{page === 'projects' ? '저장할 때마다 새 버전으로 남아, 이전 아이디어를 다시 꺼낼 수 있어요.' : '가사, 스타일, 설정까지 함께 보관하는 나만의 컬렉션.'}</p></div><Button onClick={() => navigate('create')}><Plus/>노래 만들기</Button></div>{projectList()}</section>}
     <audio ref={audioRef} onEnded={playNext} onTimeUpdate={event => setPlaybackTime(event.currentTarget.currentTime)} onLoadedMetadata={event => setPlaybackDuration(event.currentTarget.duration)} hidden/>
     <input ref={coverInputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={event => void handleCoverFile(event)}/>
     <input ref={coverAudioInputRef} type="file" accept="audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/mp4,audio/ogg" hidden onChange={event => void handleCoverAudioFile(event)}/>
+    <input ref={restoreInputRef} type="file" accept="audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/mp4,audio/ogg" hidden onChange={event => void handleRestoreAudioFile(event)}/>
     <input ref={abcImportInputRef} type="file" accept=".abc,.txt,.json,text/plain,application/json" hidden onChange={event => void handleAbcImportFile(event)}/>
     {nowPlaying ? <footer className="player-bar expanded"><div className="player-seek-row"><span className="player-time">{formatTime(playbackTime)}</span><input className="player-seek" type="range" aria-label="재생 위치" min={0} max={playbackDuration || 0} step={0.1} value={Math.min(playbackTime, playbackDuration || playbackTime)} onChange={event => seekTo(Number(event.target.value))}/><span className="player-time">{formatTime(playbackDuration)}</span></div><div className="player-main-row"><div className="player-art">{nowPlaying.coverPath ? <img className="song-cover" src={coverUrl(nowPlaying)} alt=""/> : <Music2 size={20}/>}</div><div className="player-copy"><strong>{nowPlaying.title}</strong><span>{nowPlaying.style}</span></div><div className="player-controls"><Button variant="ghost" size="icon" aria-label="이전 곡" onClick={playPrev} disabled={queueIndex === 0}><SkipBack/></Button><Button variant="ghost" size="icon" aria-label="10초 뒤로" onClick={() => seekBy(-10)}><Rewind/></Button><Button variant="ghost" size="icon" aria-label={isPlaying ? '일시정지' : '재생'} onClick={togglePlay}>{isPlaying ? <Pause/> : <Play/>}</Button><Button variant="ghost" size="icon" aria-label="눌러서 앞으로 이동, 꾹 누르면 계속 이동" onMouseDown={startHoldForward} onMouseUp={stopHoldForward} onMouseLeave={stopHoldForward} onTouchStart={startHoldForward} onTouchEnd={stopHoldForward}><FastForward/></Button><Button variant="ghost" size="icon" aria-label="다음 곡" onClick={playNext} disabled={queueIndex + 1 >= queue.length}><SkipForward/></Button><Button variant="ghost" size="icon" aria-label="역재생" aria-pressed={reversePlaying} className={reversePlaying ? 'active' : ''} onClick={toggleReverse}><RotateCcw/></Button></div><div className="player-wave"><canvas ref={mainWaveCanvasRef} className="player-wave-canvas" aria-hidden="true"/></div><div className="player-extra"><button className="speed-btn" aria-label="재생 속도" onClick={cycleSpeed}>{playbackRate}x</button><Volume2 size={15}/><input className="player-volume" type="range" aria-label="볼륨" min={0} max={1} step={0.01} value={volume} onChange={event => changeVolume(Number(event.target.value))}/></div></div></footer>
     : <footer className="player-bar"><div className="player-art"><Music2 size={20}/></div><div className="player-copy"><strong>아직 재생할 노래가 없어요</strong><span>완성된 노래를 선택하면 이곳에서 재생됩니다.</span></div><div className="player-empty"><Headphones size={17}/><span>당신의 다음 곡을 기다리는 중</span></div><span className="player-time">— : —</span></footer>}</main>
@@ -1863,5 +3908,9 @@ export default function Studio() {
     <Dialog open={!!suggestion} onOpenChange={open => { if (!open) { setSuggestion(null); setEditingSuggestion(false); } }}><DialogContent className="studio-dialog detail-dialog"><DialogTitle>{suggestion?.task === 'lyrics' ? '가사 제안' : '스타일 제안'}</DialogTitle><DialogDescription>내용을 확인한 뒤 적용하세요. 필요하면 편집한 뒤 적용할 수 있어요.</DialogDescription><div className="dialog-scroll">{editingSuggestion ? <Textarea className="detail-lyrics suggestion-textarea" value={suggestion?.text || ''} onChange={event => { if (suggestion) setSuggestion({ ...suggestion, text: event.target.value }); }}/> : <pre className="detail-lyrics">{suggestion?.text}</pre>}</div><div className="dialog-actions"><Button variant="outline" onClick={() => setEditingSuggestion(!editingSuggestion)}><Pencil size={14}/>{editingSuggestion ? '편집 완료' : '편집'}</Button><Button variant="outline" onClick={() => { setSuggestion(null); setEditingSuggestion(false); }}>취소</Button><Button onClick={() => { if (suggestion) update({ [suggestion.task]: suggestion.text }); setSuggestion(null); setEditingSuggestion(false); }}>편집기에 적용</Button></div></DialogContent></Dialog>
     {postProcessTarget && <PostProcessDialog project={postProcessTarget} onClose={() => setPostProcessTarget(null)} notify={notify} visualizerEnabled={settings.visualizerEnabled} visualizerRingCount={settings.visualizerRingCount} visualizerHue={settings.visualizerHue} visualizerLineWidth={settings.visualizerLineWidth} visualizerTrail={settings.visualizerTrail} visualizerSpiral={settings.visualizerSpiral} visualizerRingMode={settings.visualizerRingMode} visualizerTimeStep={settings.visualizerTimeStep} visualizerTimeSkew={settings.visualizerTimeSkew} visualizerRingStep={settings.visualizerRingStep} visualizerAmplitude={settings.visualizerAmplitude}/>}
     {stemTarget && <StemDialog project={stemTarget.project} mode={stemTarget.mode} onClose={() => setStemTarget(null)} notify={notify} visualizerEnabled={settings.visualizerEnabled} visualizerRingCount={settings.visualizerRingCount} visualizerHue={settings.visualizerHue} visualizerLineWidth={settings.visualizerLineWidth} visualizerTrail={settings.visualizerTrail} visualizerSpiral={settings.visualizerSpiral} visualizerRingMode={settings.visualizerRingMode} visualizerTimeStep={settings.visualizerTimeStep} visualizerTimeSkew={settings.visualizerTimeSkew} visualizerRingStep={settings.visualizerRingStep} visualizerAmplitude={settings.visualizerAmplitude}/>}
+    {midiEditorTarget && <MidiEditorDialog project={midiEditorTarget} onClose={() => setMidiEditorTarget(null)} notify={notify}/>}
+    {timbreTransformOpen && <TimbreTransformDialog onClose={() => setTimbreTransformOpen(false)} notify={notify} onCreated={item => setProjects(previous => [item, ...previous])} ddspActiveJobs={ddspActiveJobs} onDdspJobStarted={(previewId, jobId) => setDdspActiveJobs(previous => ({ ...previous, [previewId]: jobId }))} onDdspJobCleared={previewId => setDdspActiveJobs(previous => { const next = { ...previous }; delete next[previewId]; return next; })}/>}
+    {restoreFile && <AudioRestoreDialog file={restoreFile} onClose={() => setRestoreFile(null)} notify={notify} onCreated={item => setProjects(previous => [item, ...previous])}/>}
+    {compareOpen && <AudioCompareDialog onClose={() => setCompareOpen(false)} notify={notify} onCreated={item => setProjects(previous => [item, ...previous])}/>}
   </div>;
 }

@@ -4,8 +4,7 @@
 
 ## Active Findings
 
-| 유형 | 발견사항 | 이동 대상 |
-|------|----------|-----------|
+(비어 있음 — 2026-09-20 코드 감사 건은 knowledge/로 flush 완료: PATTERNS 3개 신규, RULES 1개 신규, trouble-shooting 3개 신규)
 
 ---
 

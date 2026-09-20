@@ -6,6 +6,9 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import { comfyUiAlive, execute as executeComfyUi } from './comfyui.mjs';
+import { parseNoteEvents, encodeMidiFile } from './midi.mjs';
+import { submitAukJob, submitAukToolJob } from './auk.mjs';
+import { startDdspJob, killDdspJob } from './ddsp-svc.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const providers = new Set(['none', 'ollama', 'claude', 'chatgpt', 'gemini']);
@@ -27,9 +30,17 @@ const COMFYUI_MODELS = {
 const AUDIOCPP_SIDECARS = ['sidecars/yue2-model-config.json', 'sidecars/yue2-generation-config.json', 'sidecars/yue2-qwen.tiktoken', 'sidecars/yue2-vae-config.json'];
 const HTDEMUCS_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf', 'HTDemucs-GGUF', 'htdemucs-q8_0.gguf');
 const MEL_BAND_ROFORMER_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf', 'Mel-Band-RoFormer-GGUF', 'mel-band-roformer-f16.gguf');
+const AUDIOSR_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf', 'AudioSR-GGUF', 'audiosr-basic-f32.gguf');
+const MUSCRIPTOR_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf', 'MuScriptor-Small-GGUF', 'muscriptor-small-f32.gguf');
+const SEED_VC_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf', 'SeedVC-MLX-GGUF', 'seed-vc-mlx-q8_0.gguf');
+const VEVO2_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf', 'Vevo2-GGUF', 'vevo2-q8_0.gguf');
+const VOCAL_TIMBRE_ENGINES = new Set(['seed_vc', 'vevo2']);
 const STEM_MODES = {
   full: { family: 'htdemucs', modelPath: HTDEMUCS_MODEL_PATH, stems: ['vocals', 'drums', 'bass', 'other'], missingModel: 'STEM 분리 모델(HTDemucs)이 없습니다. scripts/download_models.py를 실행해 주세요.' },
   vocal: { family: 'mel_band_roformer', modelPath: MEL_BAND_ROFORMER_MODEL_PATH, stems: ['vocals', 'instrumental'], missingModel: 'STEM 분리 모델(Mel-Band RoFormer)이 없습니다. scripts/download_models.py를 실행해 주세요.' },
+  // No AI model: a plain ffmpeg L/R channel split, reusing the STEM dialog's separate-then-post-
+  // process-then-merge flow for independent per-channel EQ/FX instead of source separation.
+  channel: { stems: ['left', 'right'] },
 };
 const STEM_NAMES = [...new Set(Object.values(STEM_MODES).flatMap((mode) => mode.stems))];
 const EXAMPLE_COLORS = ['sage', 'blue', 'sand'];
@@ -40,7 +51,8 @@ const DEFAULT_EXAMPLES = [
 ];
 const GENERATE_TIMEOUT_MS = 10 * 60 * 1000;
 const SAVE_FORMATS = new Set(['wav', 'flac', 'mp3', 'mp4']);
-const AUDIO_MIME_TYPES = { '.wav': 'audio/wav', '.flac': 'audio/flac', '.mp3': 'audio/mpeg', '.mp4': 'video/mp4' };
+const AUDIO_MIME_TYPES = { '.wav': 'audio/wav', '.flac': 'audio/flac', '.mp3': 'audio/mpeg', '.mp4': 'video/mp4', '.m4a': 'audio/mp4', '.ogg': 'audio/ogg' };
+const LIBRARY_BROWSE_AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.flac', '.m4a', '.ogg']);
 const COVER_MIME = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
 const AUDIO_MIME = { 'audio/mpeg': 'mp3', 'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/wave': 'wav', 'audio/flac': 'flac', 'audio/x-flac': 'flac', 'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/ogg': 'ogg' };
 const FFMPEG_ARGS = {
@@ -61,6 +73,11 @@ const DEFAULT_COMFYUI_ENDPOINT = 'http://127.0.0.1:8190';
 // Own install under engine/ (gitignored, same as engine/audio.cpp) -- kept on a different port
 // than the sibling AudioAuK project's ComfyUI (8189) so both can run independently/concurrently.
 const DEFAULT_COMFYUI_ENGINE_PATH = path.join('engine', 'ComfyUI');
+// AudioAuK is a sibling project, not a subfolder of this repo (unlike engine/ComfyUI above), so
+// its default path is absolute rather than root-relative.
+const DEFAULT_AUDIO_AUK_ENDPOINT = 'http://127.0.0.1:4312';
+const DEFAULT_AUDIO_AUK_PATH = 'C:\\Claude\\AudioAuK';
+const DEFAULT_DDSP_SVC_PATH = path.join('test', 'DDSP-SVC');
 const COMFYUI_GENERATE_DEADLINE_MS = GENERATE_TIMEOUT_MS;
 const COMFYUI_MAX_DURATION_SECONDS = 240;
 const VOCAL_GENDERS = new Set(['', 'male', 'female', 'duet']);
@@ -125,6 +142,14 @@ function safeAbcFilename(value, fallback = 'score') {
   if (!name.toLowerCase().endsWith('.abc')) name += '.abc';
   return name.slice(0, 180);
 }
+function safeMidiFilename(value, fallback = 'midi') {
+  let name = path.basename(text(value, 240).trim() || fallback);
+  name = name.replace(/[<>:"/\\|?*\x00-\x1f]/g, ' ').replace(/\s+/g, ' ').trim().replace(/[.\s]+$/, '');
+  if (!name) name = 'midi';
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(name)) name = `_${name}`;
+  if (!name.toLowerCase().endsWith('.mid')) name += '.mid';
+  return name.slice(0, 180);
+}
 async function readJson(file, fallback) {
   try { return JSON.parse((await readFile(file, 'utf8')).replace(/^\uFEFF/, '')); }
   catch (error) { if (error.code === 'ENOENT') return fallback; throw error; }
@@ -182,6 +207,9 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     sheetSagePythonPath: text(stored.sheetSagePythonPath, 2048) || text(process.env.SHEETSAGE_PYTHON_PATH, 2048),
     comfyUiEndpoint: text(stored.comfyUiEndpoint, 2048) || text(process.env.COMFYUI_ENDPOINT, 2048),
     comfyUiEnginePath: text(stored.comfyUiEnginePath, 2048) || text(process.env.COMFYUI_ENGINE_PATH, 2048),
+    audioAukEndpoint: text(stored.audioAukEndpoint, 2048) || text(process.env.AUDIO_AUK_ENDPOINT, 2048),
+    audioAukPath: text(stored.audioAukPath, 2048) || text(process.env.AUDIO_AUK_PATH, 2048),
+    ddspSvcPath: text(stored.ddspSvcPath, 2048) || text(process.env.DDSP_SVC_PATH, 2048),
     settingPath: text(stored.settingPath, 2048) || text(process.env.SETTING_PATH, 2048),
     musicPath: text(stored.musicPath, 2048) || text(process.env.MUSIC_PATH, 2048),
     examplesPath: text(stored.examplesPath, 2048) || text(process.env.EXAMPLES_PATH, 2048),
@@ -250,7 +278,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const entries = [];
     for (const dir of [settingDir(), musicDir()]) {
       const files = await readdir(dir).catch(() => []);
-      for (const name of files.filter((entry) => entry.endsWith('.json'))) {
+      for (const name of files.filter((entry) => entry.endsWith('.json') && !entry.endsWith('.notes.json'))) {
         const project = await readJson(path.join(dir, name), null);
         if (project) entries.push({ project, file: path.join(dir, name) });
       }
@@ -269,6 +297,10 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   };
   let generating = false;
   let generationStatus = null;
+  // "음색 변조" DDSP-SVC 탭: 독립된 락/맵 -- 학습이 수십 분~수 시간 걸리므로 일반 생성(generating)을
+  // 막으면 안 되고, 다이얼로그가 닫혀도 계속 진행되며 GET /api/ddsp-jobs로 폴링 가능해야 한다.
+  let ddspActive = false;
+  const ddspJobs = new Map();
   const engineReady = async () => exists(resolveConfigPath(settings.enginePath, DEFAULT_ENGINE_PATH));
   async function finalizeToMusic(project, file, audioFile, extraFields = {}) {
     return serial(async () => {
@@ -396,18 +428,42 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     return path.join(outputDirectory, projectId, 'stems');
   }
   async function separateStems(entry, modeKey) {
+    if (!entry.project.audioPath) throw fail(404, '완성된 음원을 찾을 수 없습니다.');
+    const sourceFile = path.join(path.dirname(entry.file), entry.project.audioPath);
+    if (!(await exists(sourceFile))) throw fail(404, '음원 파일을 찾을 수 없습니다.');
+    return separateStemsCore(sourceFile, stemsDir(entry.project.id), modeKey);
+  }
+  // 프로젝트와 무관하게(예: "음색 변조" 팝업에서 라이브러리에서 자유롭게 고른 원본 오디오)
+  // 임의의 소스 파일 + 출력 디렉터리로 STEM 분리를 돌릴 수 있는 범용 코어. separateStems()는
+  // 프로젝트에서 소스 경로/캐시 디렉터리만 유도해 이 함수에 위임하는 얇은 래퍼다.
+  async function separateStemsCore(sourceFile, dir, modeKey) {
     const mode = STEM_MODES[modeKey];
     if (!mode) throw fail(400, '알 수 없는 STEM 분리 방식입니다.');
+    await rm(dir, { recursive: true, force: true });
+    await mkdir(dir, { recursive: true });
+    if (modeKey === 'channel') {
+      const probe = await new Promise((resolve, reject) => {
+        const child = spawnImpl('ffprobe', ['-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=channels', '-of', 'csv=p=0', sourceFile], { windowsHide: true });
+        const chunks = [];
+        child.stdout.on('data', (chunk) => chunks.push(chunk));
+        child.once('error', reject);
+        child.once('close', (code) => resolve({ text: Buffer.concat(chunks).toString('utf8').trim(), code }));
+      }).catch(() => { throw fail(502, '채널 정보를 읽지 못했습니다. ffmpeg(ffprobe)가 설치되어 있는지 확인해 주세요.'); });
+      if (probe.code !== 0 || Number(probe.text) !== 2) throw fail(400, '이 곡은 스테레오(2채널)가 아니라 채널 분리를 할 수 없습니다.');
+      await new Promise((resolve, reject) => {
+        const child = spawnImpl('ffmpeg', ['-y', '-i', sourceFile, '-filter_complex', '[0:a]channelsplit=channel_layout=stereo[left][right]', '-map', '[left]', path.join(dir, 'left.wav'), '-map', '[right]', path.join(dir, 'right.wav')], { windowsHide: true });
+        child.once('error', reject);
+        child.once('close', (code) => code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`)));
+      }).catch(() => { throw fail(502, '채널 분리에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
+      const missing = [];
+      for (const name of mode.stems) { if (!(await exists(path.join(dir, `${name}.wav`)))) missing.push(name); }
+      if (missing.length) throw fail(502, `채널 분리에 실패했습니다. 누락된 채널: ${missing.join(', ')}`);
+      return { stems: mode.stems };
+    }
     const engine = resolveConfigPath(settings.enginePath, DEFAULT_ENGINE_PATH);
     if (!(await exists(engine))) throw fail(400, `audio.cpp 실행 파일을 찾을 수 없습니다: ${path.relative(root, engine)}. 설정에서 경로를 확인해 주세요.`);
     const modelPath = path.join(root, mode.modelPath);
     if (!(await exists(modelPath))) throw fail(400, mode.missingModel);
-    if (!entry.project.audioPath) throw fail(404, '완성된 음원을 찾을 수 없습니다.');
-    const sourceFile = path.join(path.dirname(entry.file), entry.project.audioPath);
-    if (!(await exists(sourceFile))) throw fail(404, '음원 파일을 찾을 수 없습니다.');
-    const dir = stemsDir(entry.project.id);
-    await rm(dir, { recursive: true, force: true });
-    await mkdir(dir, { recursive: true });
     const sourceWav = path.join(dir, 'source-44k.wav');
     await new Promise((resolve, reject) => {
       const child = spawnImpl('ffmpeg', ['-y', '-i', sourceFile, '-ar', '44100', '-ac', '2', sourceWav], { windowsHide: true });
@@ -431,6 +487,544 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     for (const name of mode.stems) { if (!(await exists(path.join(dir, `${name}.wav`)))) missing.push(name); }
     if (log.code !== 0 || missing.length) throw fail(502, `STEM 분리에 실패했습니다 (종료 코드 ${log.code}). ${log.text.trim().slice(0, 500) || '알 수 없는 오류'}`);
     return { stems: mode.stems };
+  }
+  // "음색 변조" 팝업이 라이브러리에서 자유롭게 고른 "원본 audio"를 위한 스크래치 디렉터리 --
+  // stemsDir(projectId)와 같은 패턴이지만 프로젝트가 아니라 이 팝업이 열릴 때마다 생기는
+  // 세션 id로 키를 잡는다. 프로젝트 삭제 시 stemsDir가 지워지는 것과 달리 이 디렉터리는
+  // 자동으로 정리되지 않는다(DDSP-SVC 학습이 팝업을 닫은 뒤에도 vocals-original.wav를 계속
+  // 읽어야 하므로) -- runs/<projectId> 디렉터리도 마찬가지로 자동 정리되지 않는 것과 같은 수준.
+  function timbrePreviewDir(id) {
+    return path.join(outputDirectory, `timbre-preview-${id}`);
+  }
+  async function prepareTimbrePreview(sourceDataUrl) {
+    const match = typeof sourceDataUrl === 'string' && sourceDataUrl.match(/^data:(audio\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+    if (!match) throw fail(400, '원본 오디오(MP3/WAV/FLAC/M4A/OGG)를 선택해 주세요.');
+    const ext = AUDIO_MIME[match[1]];
+    if (!ext) throw fail(400, '지원하지 않는 오디오 형식입니다. MP3/WAV/FLAC/M4A/OGG 파일을 사용해 주세요.');
+    const buffer = Buffer.from(match[2], 'base64');
+    if (buffer.length > 200 * 1024 * 1024) throw fail(413, '원본 오디오 파일이 너무 큽니다. 200MB 이하로 줄여 주세요.');
+    const id = randomUUID();
+    const dir = timbrePreviewDir(id);
+    await mkdir(dir, { recursive: true });
+    const sourceRaw = path.join(dir, `source-raw.${ext}`);
+    await writeFile(sourceRaw, buffer);
+    // 항상 WAV로 통일해 재생/서빙 시 포맷 감지 없이 하나의 GET 라우트로 처리한다.
+    const sourceFile = path.join(dir, 'source.wav');
+    await new Promise((resolve, reject) => {
+      const child = spawnImpl('ffmpeg', ['-y', '-i', sourceRaw, sourceFile], { windowsHide: true });
+      child.once('error', reject);
+      child.once('close', (code) => code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`)));
+    }).catch(() => { throw fail(502, '원본 오디오 변환에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
+    const stems = path.join(dir, 'stems');
+    await separateStemsCore(sourceFile, stems, 'vocal');
+    await copyFile(path.join(stems, 'vocals.wav'), path.join(stems, 'vocals-original.wav'));
+    return id;
+  }
+  async function runAudioSr(inputWav, outputWav) {
+    const engine = resolveConfigPath(settings.enginePath, DEFAULT_ENGINE_PATH);
+    const args = ['--task', 's2s', '--family', 'audiosr', '--model', path.join(root, AUDIOSR_MODEL_PATH), '--backend', 'cuda', '--audio', inputWav, '--request-option', 'num_inference_steps=50', '--request-option', 'guidance_scale=3.5', '--request-option', 'ddim_eta=1.0', '--request-option', 'seed=42', '--out', outputWav];
+    const log = await new Promise((resolve, reject) => {
+      const child = spawnImpl(engine, args, { windowsHide: true, cwd: audioCppCwd(engine) });
+      const chunks = [];
+      let size = 0;
+      const collect = (data) => { size += data.length; if (size < 512 * 1024) chunks.push(data); };
+      child.stdout.on('data', collect);
+      child.stderr.on('data', collect);
+      const timer = setTimeout(() => child.kill(), GENERATE_TIMEOUT_MS);
+      child.once('error', (error) => { clearTimeout(timer); reject(error); });
+      child.once('close', (code, signal) => { clearTimeout(timer); resolve({ text: Buffer.concat(chunks).toString('utf8'), code, signal }); });
+    }).catch(() => { throw fail(502, 'AudioSR 엔진을 실행할 수 없습니다.'); });
+    if (log.signal) throw fail(502, '오디오 복원이 제한 시간을 넘어 중단되었습니다.');
+    if (log.code !== 0 || !(await exists(outputWav))) throw fail(502, `오디오 복원에 실패했습니다 (종료 코드 ${log.code}). ${log.text.trim().slice(0, 500) || '알 수 없는 오류'}`);
+  }
+  // AudioSR always outputs mono regardless of input channel count (model limitation, no
+  // bypass option) -- for stereo sources, restore each channel independently and remux so
+  // the result stays stereo instead of silently collapsing to mono.
+  //
+  // Split into preview (this function, keeps its workDir around instead of cleaning it up)
+  // + saveRestoredAudio (finalizes an already-restored preview) so the frontend can show a
+  // 원본/복원 waveform comparison dialog before committing to the library, matching the
+  // preview-then-save pattern used by applyVocalTimbreCore()/STEM dialogs elsewhere in the app.
+  function restorePreviewDir(id) {
+    return path.join(outputDirectory, `audiosr-${id}`);
+  }
+  async function previewRestoreAudio(dataUrl) {
+    const engine = resolveConfigPath(settings.enginePath, DEFAULT_ENGINE_PATH);
+    if (!(await exists(engine))) throw fail(400, `audio.cpp 실행 파일을 찾을 수 없습니다: ${path.relative(root, engine)}. 설정에서 경로를 확인해 주세요.`);
+    if (!(await exists(path.join(root, AUDIOSR_MODEL_PATH)))) throw fail(400, 'AudioSR 모델이 없습니다. scripts/download_models.py를 실행해 주세요.');
+    const match = typeof dataUrl === 'string' && dataUrl.match(/^data:(audio\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+    if (!match) throw fail(400, '오디오 파일(MP3/WAV/FLAC/M4A/OGG)을 선택해 주세요.');
+    const ext = AUDIO_MIME[match[1]];
+    if (!ext) throw fail(400, '지원하지 않는 오디오 형식입니다. MP3/WAV/FLAC/M4A/OGG 파일을 사용해 주세요.');
+    const buffer = Buffer.from(match[2], 'base64');
+    if (buffer.length > 100 * 1024 * 1024) throw fail(413, '오디오 파일이 너무 큽니다. 100MB 이하로 줄여 주세요.');
+    const id = randomUUID();
+    const workDir = restorePreviewDir(id);
+    await mkdir(workDir, { recursive: true });
+    try {
+      const sourceFile = path.join(workDir, `input.${ext}`);
+      await writeFile(sourceFile, buffer);
+      const sourceWav = path.join(workDir, 'source.wav');
+      await new Promise((resolve, reject) => {
+        const child = spawnImpl('ffmpeg', ['-y', '-i', sourceFile, '-ar', '48000', sourceWav], { windowsHide: true });
+        child.once('error', reject);
+        child.once('close', (code) => code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`)));
+      }).catch(() => { throw fail(502, '오디오 변환에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
+      const probe = await new Promise((resolve, reject) => {
+        const child = spawnImpl('ffprobe', ['-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=channels', '-of', 'csv=p=0', sourceWav], { windowsHide: true });
+        const chunks = [];
+        child.stdout.on('data', (chunk) => chunks.push(chunk));
+        child.once('error', reject);
+        child.once('close', (code) => resolve({ text: Buffer.concat(chunks).toString('utf8').trim(), code }));
+      }).catch(() => { throw fail(502, '채널 정보를 읽지 못했습니다. ffmpeg(ffprobe)가 설치되어 있는지 확인해 주세요.'); });
+      const channels = Number(probe.text);
+      if (probe.code !== 0 || !(channels === 1 || channels === 2)) throw fail(400, '모노 또는 스테레오 오디오만 복원할 수 있습니다.');
+      const outputWav = path.join(workDir, 'restored.wav');
+      if (channels === 1) {
+        await runAudioSr(sourceWav, outputWav);
+      } else {
+        const leftWav = path.join(workDir, 'left.wav');
+        const rightWav = path.join(workDir, 'right.wav');
+        await new Promise((resolve, reject) => {
+          const child = spawnImpl('ffmpeg', ['-y', '-i', sourceWav, '-filter_complex', '[0:a]channelsplit=channel_layout=stereo[left][right]', '-map', '[left]', leftWav, '-map', '[right]', rightWav], { windowsHide: true });
+          child.once('error', reject);
+          child.once('close', (code) => code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`)));
+        }).catch(() => { throw fail(502, '채널 분리에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
+        const leftRestored = path.join(workDir, 'left-restored.wav');
+        const rightRestored = path.join(workDir, 'right-restored.wav');
+        await runAudioSr(leftWav, leftRestored);
+        await runAudioSr(rightWav, rightRestored);
+        await new Promise((resolve, reject) => {
+          const child = spawnImpl('ffmpeg', ['-y', '-i', leftRestored, '-i', rightRestored, '-filter_complex', '[0:a][1:a]join=inputs=2:channel_layout=stereo[a]', '-map', '[a]', outputWav], { windowsHide: true });
+          child.once('error', reject);
+          child.once('close', (code) => code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`)));
+        }).catch(() => { throw fail(502, '복원된 채널을 다시 합치지 못했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
+      }
+      return { id, durationMs: await measureDurationMs(outputWav) };
+    } catch (error) {
+      await rm(workDir, { recursive: true, force: true }).catch(() => {});
+      throw error;
+    }
+  }
+  async function saveRestoredAudio(id, title) {
+    const workDir = restorePreviewDir(id);
+    const outputWav = path.join(workDir, 'restored.wav');
+    if (!(await exists(outputWav))) throw fail(404, '복원된 오디오를 찾을 수 없습니다. 새로고침 후 다시 시도해 주세요.');
+    try {
+      const pseudoProject = { id: randomUUID(), title: text(title, 200).trim() || '복원된 오디오', coverPath: null };
+      return await finalizeToMusic(pseudoProject, null, outputWav, { durationMs: await measureDurationMs(outputWav) });
+    } finally {
+      await rm(workDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+  // Shared by runSeedVcSvc()/runVevo2Svc() -- both are just "run audiocpp_cli with these args and
+  // fail clearly if it doesn't produce outputWav", differing only in the args themselves.
+  async function runSvcCli(args, engineNotRunnableMessage) {
+    const engine = resolveConfigPath(settings.enginePath, DEFAULT_ENGINE_PATH);
+    const outputWav = args[args.indexOf('--out') + 1];
+    const log = await new Promise((resolve, reject) => {
+      const child = spawnImpl(engine, args, { windowsHide: true, cwd: audioCppCwd(engine) });
+      const chunks = [];
+      let size = 0;
+      const collect = (data) => { size += data.length; if (size < 512 * 1024) chunks.push(data); };
+      child.stdout.on('data', collect);
+      child.stderr.on('data', collect);
+      const timer = setTimeout(() => child.kill(), GENERATE_TIMEOUT_MS);
+      child.once('error', (error) => { clearTimeout(timer); reject(error); });
+      child.once('close', (code, signal) => { clearTimeout(timer); resolve({ text: Buffer.concat(chunks).toString('utf8'), code, signal }); });
+    }).catch(() => { throw fail(502, engineNotRunnableMessage); });
+    if (log.signal) throw fail(502, '보컬 음색 변환이 제한 시간을 넘어 중단되었습니다.');
+    if (log.code !== 0 || !(await exists(outputWav))) throw fail(502, `보컬 음색 변환에 실패했습니다 (종료 코드 ${log.code}). ${log.text.trim().slice(0, 500) || '알 수 없는 오류'}`);
+  }
+  async function runSeedVcSvc(vocalsWav, voiceRefWav, outputWav) {
+    // f0_condition defaults to false on the v1_svc route (engine/audio.cpp/docs/models/seed_vc.md),
+    // meaning the model gets no pitch-contour guidance from the source singing -- without it the
+    // output loses the correct pitch trajectory entirely, which is what produced the "quacking"
+    // artifact reported in real testing (2026-09-16). Singing voice conversion needs this on.
+    //
+    // auto_f0_adjust and num_inference_steps=80 (upstream Plachtaa/seed-vc's own Gradio UI
+    // recommends 50-100 "for best quality", and defaults auto_f0_adjust to true -- audio.cpp's
+    // CLI defaults both to off/30) were added 2026-09-17 to match the upstream-recommended
+    // combination after a real "tearing" quality report. In direct A/B testing this combination
+    // barely moved a spectral-flatness noise measurement on the specific pathological passage that
+    // prompted the report, so it is not a fix on its own -- see the silence-gate step in
+    // applyVocalTimbreCore() and the vevo2 alternative engine for the changes that actually mattered.
+    // It is kept anyway because it matches the authors' own recommended defaults at no extra cost.
+    await runSvcCli(['--task', 'svc', '--family', 'seed_vc', '--model', path.join(root, SEED_VC_MODEL_PATH), '--backend', 'cuda', '--task-route', 'v1_svc', '--request-option', 'f0_condition=true', '--request-option', 'auto_f0_adjust=true', '--request-option', 'num_inference_steps=80', '--audio', vocalsWav, '--voice-ref', voiceRefWav, '--out', outputWav], 'Seed-VC 엔진을 실행할 수 없습니다.');
+  }
+  async function runVevo2Svc(vocalsWav, voiceRefWav, outputWav) {
+    // style_preserved_svc is vevo2's default svc route: convert the source singing to the target
+    // voice while keeping the source's own singing style/prosody (engine/audio.cpp/docs/models/vevo2.md).
+    // Zero-shot like Seed-VC (a target-voice clip, no training), added 2026-09-17 as an alternative
+    // engine after Seed-VC's SVC output kept producing artifacts regardless of reference or parameters.
+    await runSvcCli(['--task', 'svc', '--family', 'vevo2', '--model', path.join(root, VEVO2_MODEL_PATH), '--backend', 'cuda', '--task-route', 'style_preserved_svc', '--source-audio', vocalsWav, '--target-voice', voiceRefWav, '--out', outputWav], 'Vevo2 엔진을 실행할 수 없습니다.');
+  }
+  // ffmpeg's volumedetect filter is the cheapest way to read a file's average loudness without
+  // pulling in a full loudness-analysis library -- parses the "mean_volume: X dB" line it prints
+  // to stderr. Returns null (caller treats as "no adjustment") if the probe itself fails.
+  async function measureMeanVolumeDb(file) {
+    try {
+      const text = await new Promise((resolve, reject) => {
+        const chunks = [];
+        const child = spawnImpl('ffmpeg', ['-i', file, '-af', 'volumedetect', '-f', 'null', '-'], { windowsHide: true });
+        const collect = (data) => chunks.push(data);
+        child.stdout.on('data', collect);
+        child.stderr.on('data', collect);
+        child.once('error', reject);
+        child.once('close', () => resolve(Buffer.concat(chunks).toString('utf8')));
+      });
+      const match = text.match(/mean_volume:\s*(-?[\d.]+)\s*dB/);
+      return match ? Number(match[1]) : null;
+    } catch {
+      return null;
+    }
+  }
+  // ComfyUI's executeComfyUi() has no equivalent to audio.cpp's --metrics log line or the Python
+  // runner's reported audio_seconds, so runComfyUi() must measure the rendered file's length
+  // itself -- without this, finalizeToMusic() never gets a durationMs and card view silently
+  // omits the duration for every song generated with a ComfyUI model (e.g. INT8 ConvRot).
+  async function measureDurationMs(file) {
+    try {
+      const text = await new Promise((resolve, reject) => {
+        const chunks = [];
+        const child = spawnImpl('ffprobe', ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', file], { windowsHide: true });
+        const collect = (data) => chunks.push(data);
+        child.stdout.on('data', collect);
+        child.stderr.on('data', collect);
+        child.once('error', reject);
+        child.once('close', () => resolve(Buffer.concat(chunks).toString('utf8')));
+      });
+      const seconds = Number(text.trim());
+      return Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : null;
+    } catch {
+      return null;
+    }
+  }
+  // Shared by every SVC-style engine (Seed-VC, Vevo2, and later AuK/DDSP-SVC): matches the
+  // converted vocal's loudness to the pre-conversion vocal, then gates it silent wherever the
+  // source vocal is true digital silence, since none of these models pass true silence through
+  // on their own (confirmed for Seed-VC/Vevo2 in real testing 2026-09-17; DDSP-SVC/AuK are the
+  // same class of frame-aligned SVC artifact, so the fix applies unchanged). Returns the path of
+  // the final gated WAV inside workDir -- caller decides where that result gets copied to.
+  async function postProcessConvertedVocal(convertedVocalWav, originalVocalWav, workDir) {
+    const [originalDb, convertedDb] = await Promise.all([measureMeanVolumeDb(originalVocalWav), measureMeanVolumeDb(convertedVocalWav)]);
+    const gainDb = (originalDb !== null && convertedDb !== null) ? Math.max(-6, Math.min(18, originalDb - convertedDb)) : 0;
+    // A plain gain boost alone clips: this class of model's raw output already peaks close to
+    // 0dBFS despite being quiet on average, so matching the mean loudness (+7-8dB in real
+    // testing) pushed peaks past full scale and hard-clipped. alimiter (with auto-leveling
+    // disabled so it doesn't undo the gain we just asked for) compresses only the peaks that
+    // would clip, instead of chopping them flat.
+    const leveledVocals = path.join(workDir, 'leveled-vocals.wav');
+    await new Promise((resolve, reject) => {
+      const child = spawnImpl('ffmpeg', ['-y', '-i', convertedVocalWav, '-af', `volume=${gainDb}dB,alimiter=limit=0.97:level=false`, leveledVocals], { windowsHide: true });
+      child.once('error', reject);
+      child.once('close', (code) => code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`)));
+    }).catch(() => { throw fail(502, '변환된 보컬의 음량을 맞추지 못했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
+    // A sidechain noise gate keyed off the pre-conversion vocal forces the converted output
+    // silent wherever the source actually is, which is what real singing does anyway. -ar 44100
+    // also normalizes engines with a different native sample rate (e.g. vevo2's 24kHz) to match
+    // the rest of the pipeline.
+    const gatedVocals = path.join(workDir, 'gated-vocals.wav');
+    await new Promise((resolve, reject) => {
+      const child = spawnImpl('ffmpeg', ['-y', '-i', leveledVocals, '-i', originalVocalWav, '-filter_complex', 'sidechaingate=threshold=0.003:ratio=20:attack=5:release=100:range=0.02', '-ar', '44100', gatedVocals], { windowsHide: true });
+      child.once('error', reject);
+      child.once('close', (code) => code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`)));
+    }).catch(() => { throw fail(502, '변환된 보컬의 무음 구간을 정리하지 못했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
+    return gatedVocals;
+  }
+  // Seed-VC only converts a single voice track, so the completed song's vocals must be pulled out
+  // first (reusing the mel_band_roformer STEM split) -- the instrumental is left alone and mixed
+  // back in client-side by the STEM1-style editor UI (VocalTimbreDialog), not here.
+  //
+  // The separated (pre-conversion) vocal is cached as vocals-original.wav so repeated "적용" clicks
+  // with a different reference re-convert from the same clean source instead of compounding
+  // conversions, while the servable vocals.wav (read by the existing GET /stems/vocals route) is
+  // overwritten with each new conversion result -- this lets the frontend reuse the STEM dialog's
+  // existing per-stem fetch/decode/waveform code unchanged.
+  //
+  // Seed-VC's raw output measured ~7-10dB quieter than the original (pre-conversion) vocal in
+  // real testing (2026-09-16) -- quiet enough that once mixed with the instrumental it sounded
+  // like the vocal had vanished entirely, not just changed timbre. So before anything else uses
+  // the converted vocal, its level is matched to the pre-conversion vocal's measured loudness.
+  // stems: 이 소스 오디오의 스템 캐시 디렉터리(prepareTimbrePreview()가 이미 vocals-original.wav를
+  // 채워둔 상태여야 함 -- 이 함수는 더 이상 분리를 직접 하지 않는다). 프로젝트와 무관, "음색 변조"
+  // 팝업이 라이브러리에서 자유롭게 고른 원본 오디오에 대해서도 그대로 쓸 수 있다.
+  async function applyVocalTimbreCore(stems, voiceRefDataUrl, engineChoice) {
+    const svcEngine = VOCAL_TIMBRE_ENGINES.has(engineChoice) ? engineChoice : 'seed_vc';
+    const engine = resolveConfigPath(settings.enginePath, DEFAULT_ENGINE_PATH);
+    if (!(await exists(engine))) throw fail(400, `audio.cpp 실행 파일을 찾을 수 없습니다: ${path.relative(root, engine)}. 설정에서 경로를 확인해 주세요.`);
+    if (svcEngine === 'vevo2') {
+      if (!(await exists(path.join(root, VEVO2_MODEL_PATH)))) throw fail(400, 'Vevo2 모델이 없습니다. scripts/download_models.py를 실행해 주세요.');
+    } else if (!(await exists(path.join(root, SEED_VC_MODEL_PATH)))) throw fail(400, 'Seed-VC 모델이 없습니다. scripts/download_models.py를 실행해 주세요.');
+    const match = typeof voiceRefDataUrl === 'string' && voiceRefDataUrl.match(/^data:(audio\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+    if (!match) throw fail(400, '목표 음색의 참조 오디오(MP3/WAV/FLAC/M4A/OGG)를 선택해 주세요.');
+    const ext = AUDIO_MIME[match[1]];
+    if (!ext) throw fail(400, '지원하지 않는 오디오 형식입니다. MP3/WAV/FLAC/M4A/OGG 파일을 사용해 주세요.');
+    const buffer = Buffer.from(match[2], 'base64');
+    if (buffer.length > 50 * 1024 * 1024) throw fail(413, '참조 오디오 파일이 너무 큽니다. 50MB 이하로 줄여 주세요.');
+    const originalVocalsWav = path.join(stems, 'vocals-original.wav');
+    if (!(await exists(originalVocalsWav))) throw fail(502, '보컬/악기 분리 결과를 찾을 수 없습니다.');
+    const workDir = path.join(outputDirectory, `vocal-convert-${randomUUID()}`);
+    await mkdir(workDir, { recursive: true });
+    try {
+      const voiceRefSource = path.join(workDir, `voice-ref.${ext}`);
+      await writeFile(voiceRefSource, buffer);
+      // Must be a different filename from voiceRefSource -- when the reference clip is itself a
+      // .wav, both used to resolve to the same "voice-ref.wav" path, so ffmpeg was asked to read
+      // and write the same file at once ("FFmpeg cannot edit existing files in-place") and always
+      // failed with a misleading "ffmpeg가 설치되어 있는지 확인해 주세요" error (2026-09-16, real bug).
+      const voiceRefWav = path.join(workDir, 'voice-ref-normalized.wav');
+      const ffmpegLog = await new Promise((resolve, reject) => {
+        const child = spawnImpl('ffmpeg', ['-y', '-i', voiceRefSource, '-ar', '44100', '-ac', '1', voiceRefWav], { windowsHide: true });
+        const chunks = [];
+        const collect = (data) => chunks.push(data);
+        child.stdout?.on('data', collect);
+        child.stderr?.on('data', collect);
+        child.once('error', reject);
+        child.once('close', (code) => resolve({ code, text: Buffer.concat(chunks).toString('utf8') }));
+      }).catch(() => { throw fail(502, '참조 오디오 변환에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
+      if (ffmpegLog.code !== 0) throw fail(502, `참조 오디오 변환에 실패했습니다. ${ffmpegLog.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
+      const convertedVocals = path.join(workDir, 'converted-vocals.wav');
+      if (svcEngine === 'vevo2') await runVevo2Svc(originalVocalsWav, voiceRefWav, convertedVocals);
+      else await runSeedVcSvc(originalVocalsWav, voiceRefWav, convertedVocals);
+      const gatedVocals = await postProcessConvertedVocal(convertedVocals, originalVocalsWav, workDir);
+      await copyFile(gatedVocals, path.join(stems, 'vocals.wav'));
+      return { ok: true };
+    } finally {
+      await rm(workDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+  // "음색 변조" AuK 탭: referenceDataUrl과 textDescription 중 적어도 하나가 필요하다(둘 다 있으면
+  // 레퍼런스를 음색 정체성으로, 텍스트를 스타일 수식어로 함께 사용). 상세 분기 로직은 auk.mjs의
+  // submitAukJob() 주석 참고 -- 이 함수는 SongYUE2 쪽 준비(보컬 스템 확보, 참조 오디오 정규화,
+  // 결과 후처리/저장)만 담당한다.
+  // stems: prepareTimbrePreview()가 이미 채워둔 스템 캐시 디렉터리(project 무관, applyVocalTimbreCore와 같은 계약).
+  async function applyAukTimbreCore(stems, { referenceDataUrl, textDescription, checkpoint }) {
+    const description = text(textDescription, 500).trim();
+    let referenceBuffer = null;
+    let referenceExt = null;
+    if (typeof referenceDataUrl === 'string' && referenceDataUrl.length) {
+      const match = referenceDataUrl.match(/^data:(audio\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+      if (!match) throw fail(400, '지원하지 않는 참조 오디오 형식입니다.');
+      const ext = AUDIO_MIME[match[1]];
+      if (!ext) throw fail(400, '지원하지 않는 오디오 형식입니다. MP3/WAV/FLAC/M4A/OGG 파일을 사용해 주세요.');
+      referenceBuffer = Buffer.from(match[2], 'base64');
+      if (referenceBuffer.length > 50 * 1024 * 1024) throw fail(413, '참조 오디오 파일이 너무 큽니다. 50MB 이하로 줄여 주세요.');
+      referenceExt = ext;
+    }
+    if (!referenceBuffer && !description) throw fail(400, '레퍼런스 오디오나 음색 설명 중 하나는 입력해 주세요.');
+
+    const endpoint = settings.audioAukEndpoint || DEFAULT_AUDIO_AUK_ENDPOINT;
+    const audioAukPath = resolveConfigPath(settings.audioAukPath, DEFAULT_AUDIO_AUK_PATH);
+
+    const originalVocalsWav = path.join(stems, 'vocals-original.wav');
+    if (!(await exists(originalVocalsWav))) throw fail(502, '보컬/악기 분리 결과를 찾을 수 없습니다.');
+
+    const workDir = path.join(outputDirectory, `auk-convert-${randomUUID()}`);
+    await mkdir(workDir, { recursive: true });
+    try {
+      const durationMs = await measureDurationMs(originalVocalsWav);
+      // 실측 확인됨(2026-09-17~18): AuK는 짧은 클립에서는 괜찮지만 전체곡 길이(약 100초)를
+      // 넣으면 결과가 노이즈로 붕괴한다. 차단하지 않고 경고만 표시(v1 결정).
+      const warning = durationMs && durationMs > 30000
+        ? 'AuK는 긴 음원에서 결과가 노이즈로 무너지는 경향이 있습니다(실측 확인됨). 30초 이하의 짧은 곡에서 더 안정적입니다.'
+        : null;
+
+      let referenceFilePath = null;
+      if (referenceBuffer) {
+        const referenceSource = path.join(workDir, `reference.${referenceExt}`);
+        await writeFile(referenceSource, referenceBuffer);
+        referenceFilePath = path.join(workDir, 'reference-normalized.wav');
+        const ffmpegLog = await new Promise((resolve, reject) => {
+          const child = spawnImpl('ffmpeg', ['-y', '-i', referenceSource, '-ar', '44100', '-ac', '1', referenceFilePath], { windowsHide: true });
+          const chunks = [];
+          const collect = (data) => chunks.push(data);
+          child.stdout?.on('data', collect);
+          child.stderr?.on('data', collect);
+          child.once('error', reject);
+          child.once('close', (code) => resolve({ code, text: Buffer.concat(chunks).toString('utf8') }));
+        }).catch(() => { throw fail(502, '참조 오디오 변환에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
+        if (ffmpegLog.code !== 0) throw fail(502, `참조 오디오 변환에 실패했습니다. ${ffmpegLog.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
+      }
+
+      let result;
+      try {
+        result = await submitAukJob(fetchImpl, spawnImpl, endpoint, audioAukPath, {
+          referenceFilePath, textDescription: description || null, sourceVocalPath: originalVocalsWav, checkpoint,
+        });
+      } catch (error) {
+        throw fail(502, `AuK 변환에 실패했습니다. ${(error && error.message) || '알 수 없는 오류'}`);
+      }
+
+      const rawOutput = path.join(workDir, `auk-output${result.outputExt}`);
+      await writeFile(rawOutput, result.outputBuffer);
+      const convertedVocals = path.join(workDir, 'converted-vocals.wav');
+      const convertLog = await new Promise((resolve, reject) => {
+        const child = spawnImpl('ffmpeg', ['-y', '-i', rawOutput, '-ar', '44100', '-ac', '1', convertedVocals], { windowsHide: true });
+        const chunks = [];
+        const collect = (data) => chunks.push(data);
+        child.stdout?.on('data', collect);
+        child.stderr?.on('data', collect);
+        child.once('error', reject);
+        child.once('close', (code) => resolve({ code, text: Buffer.concat(chunks).toString('utf8') }));
+      }).catch(() => { throw fail(502, 'AuK 결과 오디오 변환에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
+      if (convertLog.code !== 0) throw fail(502, `AuK 결과 오디오 변환에 실패했습니다. ${convertLog.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
+
+      const gatedVocals = await postProcessConvertedVocal(convertedVocals, originalVocalsWav, workDir);
+      await copyFile(gatedVocals, path.join(stems, 'vocals.wav'));
+      return { ok: true, warning, transcript: result.transcript || null };
+    } finally {
+      await rm(workDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+  // "Tools" 메뉴: 완성곡과 무관한 독립 AuK 작업(TTS/가사 편집/피치·속도·음량/음성 변형/품질 개선).
+  // 음색 변조 AuK 탭과 달리 STEM 분리도, 사이드체인 게이트 같은 SVC 전용 후처리도 없다 -- 그냥
+  // AudioAuK 결과를 WAV로 변환해 그대로 돌려주고, 저장은 프론트가 기존 POST /audio-save로 한다.
+  async function runAukTool({ task, instruction, audioDataUrl, checkpoint, seconds }) {
+    const cleanTask = text(task, 100).trim();
+    const cleanInstruction = text(instruction, 2000).trim();
+    if (!cleanTask || !cleanInstruction) throw fail(400, '작업 종류와 지시문이 필요합니다.');
+    const endpoint = settings.audioAukEndpoint || DEFAULT_AUDIO_AUK_ENDPOINT;
+    const audioAukPath = resolveConfigPath(settings.audioAukPath, DEFAULT_AUDIO_AUK_PATH);
+    const workDir = path.join(outputDirectory, `auk-tool-${randomUUID()}`);
+    await mkdir(workDir, { recursive: true });
+    try {
+      let audioFilePath = null;
+      if (typeof audioDataUrl === 'string' && audioDataUrl.length) {
+        const match = audioDataUrl.match(/^data:(audio\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+        if (!match) throw fail(400, '지원하지 않는 오디오 형식입니다.');
+        const ext = AUDIO_MIME[match[1]];
+        if (!ext) throw fail(400, '지원하지 않는 오디오 형식입니다. MP3/WAV/FLAC/M4A/OGG 파일을 사용해 주세요.');
+        const buffer = Buffer.from(match[2], 'base64');
+        if (buffer.length > 50 * 1024 * 1024) throw fail(413, '오디오 파일이 너무 큽니다. 50MB 이하로 줄여 주세요.');
+        const source = path.join(workDir, `input.${ext}`);
+        await writeFile(source, buffer);
+        audioFilePath = path.join(workDir, 'input-normalized.wav');
+        const ffmpegLog = await new Promise((resolve, reject) => {
+          const child = spawnImpl('ffmpeg', ['-y', '-i', source, '-ar', '44100', '-ac', '1', audioFilePath], { windowsHide: true });
+          const chunks = [];
+          const collect = (data) => chunks.push(data);
+          child.stdout?.on('data', collect);
+          child.stderr?.on('data', collect);
+          child.once('error', reject);
+          child.once('close', (code) => resolve({ code, text: Buffer.concat(chunks).toString('utf8') }));
+        }).catch(() => { throw fail(502, '입력 오디오 변환에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
+        if (ffmpegLog.code !== 0) throw fail(502, `입력 오디오 변환에 실패했습니다. ${ffmpegLog.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
+      }
+
+      let result;
+      try {
+        result = await submitAukToolJob(fetchImpl, spawnImpl, endpoint, audioAukPath, { task: cleanTask, instruction: cleanInstruction, audioFilePath, checkpoint, seconds });
+      } catch (error) {
+        throw fail(502, `AuK 작업에 실패했습니다. ${(error && error.message) || '알 수 없는 오류'}`);
+      }
+
+      const rawOutput = path.join(workDir, `output${result.outputExt}`);
+      await writeFile(rawOutput, result.outputBuffer);
+      const outputWav = path.join(workDir, 'output.wav');
+      const convertLog = await new Promise((resolve, reject) => {
+        const child = spawnImpl('ffmpeg', ['-y', '-i', rawOutput, outputWav], { windowsHide: true });
+        const chunks = [];
+        const collect = (data) => chunks.push(data);
+        child.stdout?.on('data', collect);
+        child.stderr?.on('data', collect);
+        child.once('error', reject);
+        child.once('close', (code) => resolve({ code, text: Buffer.concat(chunks).toString('utf8') }));
+      }).catch(() => { throw fail(502, 'AuK 결과 오디오 변환에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
+      if (convertLog.code !== 0) throw fail(502, `AuK 결과 오디오 변환에 실패했습니다. ${convertLog.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
+
+      const wavBuffer = await readFile(outputWav);
+      return { dataUrl: `data:audio/wav;base64,${wavBuffer.toString('base64')}` };
+    } finally {
+      await rm(workDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+  // "음원 비교" 다이얼로그처럼 프로젝트와 무관하게 브라우저에서 이미 완성된(원본 그대로거나
+  // 클라이언트 측 후처리를 거친) WAV 버퍼를 그대로 라이브러리에 추가할 때 쓰는 범용 저장 경로.
+  async function saveArbitraryAudio(dataUrl, title) {
+    const match = typeof dataUrl === 'string' && dataUrl.match(/^data:audio\/wav;base64,(.+)$/);
+    if (!match) throw fail(400, '저장할 오디오(WAV) 데이터가 필요합니다.');
+    const buffer = Buffer.from(match[1], 'base64');
+    if (buffer.length > 200 * 1024 * 1024) throw fail(413, '저장할 오디오가 너무 큽니다.');
+    const workDir = path.join(outputDirectory, `audio-save-${randomUUID()}`);
+    await mkdir(workDir, { recursive: true });
+    try {
+      const wavFile = path.join(workDir, 'result.wav');
+      await writeFile(wavFile, buffer);
+      const pseudoProject = { id: randomUUID(), title: text(title, 200).trim() || '저장된 오디오', coverPath: null };
+      return await finalizeToMusic(pseudoProject, null, wavFile, { durationMs: await measureDurationMs(wavFile) });
+    } finally {
+      await rm(workDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+  async function exportMidi(entry) {
+    const engine = resolveConfigPath(settings.enginePath, DEFAULT_ENGINE_PATH);
+    if (!(await exists(engine))) throw fail(400, `audio.cpp 실행 파일을 찾을 수 없습니다: ${path.relative(root, engine)}. 설정에서 경로를 확인해 주세요.`);
+    if (!(await exists(path.join(root, MUSCRIPTOR_MODEL_PATH)))) throw fail(400, 'MuScriptor 모델이 없습니다. scripts/download_models.py를 실행해 주세요.');
+    if (!entry.project.audioPath) throw fail(404, '완성된 음원을 찾을 수 없습니다.');
+    const dir = path.dirname(entry.file);
+    const sourceFile = path.join(dir, entry.project.audioPath);
+    if (!(await exists(sourceFile))) throw fail(404, '음원 파일을 찾을 수 없습니다.');
+    const base = path.basename(entry.project.audioPath, path.extname(entry.project.audioPath));
+    const midiFile = path.join(dir, `${base}.mid`);
+    const notesFile = path.join(dir, `${base}.notes.json`);
+    const [sourceStat, midiStat, notesStat] = await Promise.all([stat(sourceFile), stat(midiFile).catch(() => null), stat(notesFile).catch(() => null)]);
+    if (midiStat && notesStat && midiStat.mtimeMs >= sourceStat.mtimeMs && notesStat.mtimeMs >= sourceStat.mtimeMs) return { midiFile, notesFile };
+    const workDir = path.join(outputDirectory, `midi-${randomUUID()}`);
+    await mkdir(workDir, { recursive: true });
+    try {
+      const sourceWav = path.join(workDir, 'source.wav');
+      await new Promise((resolve, reject) => {
+        const child = spawnImpl('ffmpeg', ['-y', '-i', sourceFile, '-ar', '44100', '-ac', '2', sourceWav], { windowsHide: true });
+        child.once('error', reject);
+        child.once('close', (code) => code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`)));
+      }).catch(() => { throw fail(502, 'MIDI 추출을 위한 오디오 변환에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
+      const tempMidi = path.join(workDir, 'result.mid');
+      const tempNotes = path.join(workDir, 'result.json');
+      const args = ['--task', 'midi', '--family', 'muscriptor', '--model', path.join(root, MUSCRIPTOR_MODEL_PATH), '--backend', 'cuda', '--audio', sourceWav, '--out', tempMidi, '--text-out', tempNotes];
+      const log = await new Promise((resolve, reject) => {
+        const child = spawnImpl(engine, args, { windowsHide: true, cwd: audioCppCwd(engine) });
+        const chunks = [];
+        let size = 0;
+        const collect = (data) => { size += data.length; if (size < 512 * 1024) chunks.push(data); };
+        child.stdout.on('data', collect);
+        child.stderr.on('data', collect);
+        const timer = setTimeout(() => child.kill(), GENERATE_TIMEOUT_MS);
+        child.once('error', (error) => { clearTimeout(timer); reject(error); });
+        child.once('close', (code, signal) => { clearTimeout(timer); resolve({ text: Buffer.concat(chunks).toString('utf8'), code, signal }); });
+      }).catch(() => { throw fail(502, 'MuScriptor 엔진을 실행할 수 없습니다.'); });
+      if (log.signal) throw fail(502, 'MIDI 추출이 제한 시간을 넘어 중단되었습니다.');
+      if (log.code !== 0 || !(await exists(tempMidi))) throw fail(502, `MIDI 추출에 실패했습니다 (종료 코드 ${log.code}). ${log.text.trim().slice(0, 500) || '알 수 없는 오류'}`);
+      const rawEvents = (await exists(tempNotes)) ? JSON.parse(await readFile(tempNotes, 'utf8')) : [];
+      const notes = parseNoteEvents(rawEvents);
+      await copyFile(tempMidi, midiFile);
+      await writeFile(notesFile, JSON.stringify(notes), 'utf8');
+      return { midiFile, notesFile };
+    } finally {
+      await rm(workDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+  function parseMidiNotes(rawNotes) {
+    return (Array.isArray(rawNotes) ? rawNotes : []).map((note, index) => {
+      const pitch = Number(note?.pitch);
+      const start = Number(note?.start);
+      const end = Number(note?.end);
+      if (!Number.isFinite(pitch) || !Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+        throw fail(400, '유효하지 않은 음표 데이터입니다.');
+      }
+      return { id: index, pitch, start, end, instrument: typeof note?.instrument === 'string' && note.instrument ? note.instrument : 'acoustic_piano' };
+    });
+  }
+  async function saveMidiNotes(entry, rawNotes) {
+    if (!entry.project.audioPath) throw fail(404, '완성된 음원을 찾을 수 없습니다.');
+    const dir = path.dirname(entry.file);
+    const base = path.basename(entry.project.audioPath, path.extname(entry.project.audioPath));
+    const midiFile = path.join(dir, `${base}.mid`);
+    const notesFile = path.join(dir, `${base}.notes.json`);
+    const notes = parseMidiNotes(rawNotes);
+    await writeFile(midiFile, encodeMidiFile(notes));
+    await writeFile(notesFile, JSON.stringify(notes), 'utf8');
+    return midiFile;
   }
   let gpuInfoCache = null;
   async function detectGpu() {
@@ -629,7 +1223,8 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     } catch (error) { throw fail(502, `ComfyUI 음악 생성에 실패했습니다: ${error.message}`); }
     const audioFile = path.join(projectRuns, `audio${path.extname(result.filename) || '.flac'}`);
     await writeFile(audioFile, result.bytes);
-    return finalizeToMusic(project, file, audioFile, {});
+    const durationMs = await measureDurationMs(audioFile);
+    return finalizeToMusic(project, file, audioFile, { durationMs });
   }
   function sheetSagePythonOrFail() {
     const python = resolveOptionalConfigPath(settings.sheetSagePythonPath);
@@ -676,7 +1271,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   }
   const publicSettings = () => {
     const env = providerFromEnv(settings.provider);
-    return { provider: settings.provider, endpoint: env.endpoint, llmModel: env.model, enginePath: settings.enginePath, pythonEnginePath: settings.pythonEnginePath, pythonScriptPath: settings.pythonScriptPath, pythonMemoryBudgetGib: settings.pythonMemoryBudgetGib, sheetSagePythonPath: settings.sheetSagePythonPath, settingPath: settings.settingPath, musicPath: settings.musicPath, examplesPath: settings.examplesPath, coversPath: settings.coversPath, abcNotesPath: settings.abcNotesPath, stylePresets: settings.stylePresets, visualizerEnabled: settings.visualizerEnabled, visualizerRingCount: settings.visualizerRingCount, visualizerHue: settings.visualizerHue, visualizerLineWidth: settings.visualizerLineWidth, visualizerTrail: settings.visualizerTrail, visualizerSpiral: settings.visualizerSpiral, visualizerRingMode: settings.visualizerRingMode, visualizerTimeStep: settings.visualizerTimeStep, visualizerTimeSkew: settings.visualizerTimeSkew, visualizerRingStep: settings.visualizerRingStep, visualizerAmplitude: settings.visualizerAmplitude, saveFormat: settings.saveFormat, viewMode: settings.viewMode, outputDirectory: path.relative(root, outputDirectory) || '.', hasApiKey: Boolean(env.apiKey), apiKey: env.apiKey ? '***' : null, apiKeyStorage: 'env' };
+    return { provider: settings.provider, endpoint: env.endpoint, llmModel: env.model, enginePath: settings.enginePath, pythonEnginePath: settings.pythonEnginePath, pythonScriptPath: settings.pythonScriptPath, pythonMemoryBudgetGib: settings.pythonMemoryBudgetGib, sheetSagePythonPath: settings.sheetSagePythonPath, comfyUiEndpoint: settings.comfyUiEndpoint, comfyUiEnginePath: settings.comfyUiEnginePath, audioAukEndpoint: settings.audioAukEndpoint, audioAukPath: settings.audioAukPath, ddspSvcPath: settings.ddspSvcPath, settingPath: settings.settingPath, musicPath: settings.musicPath, examplesPath: settings.examplesPath, coversPath: settings.coversPath, abcNotesPath: settings.abcNotesPath, stylePresets: settings.stylePresets, visualizerEnabled: settings.visualizerEnabled, visualizerRingCount: settings.visualizerRingCount, visualizerHue: settings.visualizerHue, visualizerLineWidth: settings.visualizerLineWidth, visualizerTrail: settings.visualizerTrail, visualizerSpiral: settings.visualizerSpiral, visualizerRingMode: settings.visualizerRingMode, visualizerTimeStep: settings.visualizerTimeStep, visualizerTimeSkew: settings.visualizerTimeSkew, visualizerRingStep: settings.visualizerRingStep, visualizerAmplitude: settings.visualizerAmplitude, saveFormat: settings.saveFormat, viewMode: settings.viewMode, outputDirectory: path.relative(root, outputDirectory) || '.', hasApiKey: Boolean(env.apiKey), apiKey: env.apiKey ? '***' : null, apiKeyStorage: 'env' };
   };
   async function localFile(relativePath) {
     const file = path.join(root, relativePath);
@@ -788,6 +1383,9 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           if (input.sheetSagePythonPath !== undefined) next.sheetSagePythonPath = text(input.sheetSagePythonPath, 2048);
           if (input.comfyUiEndpoint !== undefined) next.comfyUiEndpoint = text(input.comfyUiEndpoint, 2048);
           if (input.comfyUiEnginePath !== undefined) next.comfyUiEnginePath = text(input.comfyUiEnginePath, 2048);
+          if (input.audioAukEndpoint !== undefined) next.audioAukEndpoint = text(input.audioAukEndpoint, 2048);
+          if (input.audioAukPath !== undefined) next.audioAukPath = text(input.audioAukPath, 2048);
+          if (input.ddspSvcPath !== undefined) next.ddspSvcPath = text(input.ddspSvcPath, 2048);
           if (input.settingPath !== undefined) next.settingPath = text(input.settingPath, 2048);
           if (input.musicPath !== undefined) next.musicPath = text(input.musicPath, 2048);
           if (input.examplesPath !== undefined) next.examplesPath = text(input.examplesPath, 2048);
@@ -807,7 +1405,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           if (input.visualizerAmplitude !== undefined) next.visualizerAmplitude = Math.max(0.1, Math.min(10, Number.isFinite(Number(input.visualizerAmplitude)) ? Number(input.visualizerAmplitude) : DEFAULT_VISUALIZER_AMPLITUDE));
           if (input.saveFormat !== undefined) next.saveFormat = input.saveFormat;
           if (input.viewMode !== undefined) next.viewMode = input.viewMode;
-          await saveJson(settingsFile, { provider: next.provider, enginePath: next.enginePath, pythonEnginePath: next.pythonEnginePath, pythonScriptPath: next.pythonScriptPath, pythonMemoryBudgetGib: next.pythonMemoryBudgetGib, sheetSagePythonPath: next.sheetSagePythonPath, comfyUiEndpoint: next.comfyUiEndpoint, comfyUiEnginePath: next.comfyUiEnginePath, settingPath: next.settingPath, musicPath: next.musicPath, examplesPath: next.examplesPath, coversPath: next.coversPath, abcNotesPath: next.abcNotesPath, stylePresets: next.stylePresets, visualizerEnabled: next.visualizerEnabled, visualizerRingCount: next.visualizerRingCount, visualizerHue: next.visualizerHue, visualizerLineWidth: next.visualizerLineWidth, visualizerTrail: next.visualizerTrail, visualizerSpiral: next.visualizerSpiral, visualizerRingMode: next.visualizerRingMode, visualizerTimeStep: next.visualizerTimeStep, visualizerTimeSkew: next.visualizerTimeSkew, visualizerRingStep: next.visualizerRingStep, visualizerAmplitude: next.visualizerAmplitude, saveFormat: next.saveFormat, viewMode: next.viewMode });
+          await saveJson(settingsFile, { provider: next.provider, enginePath: next.enginePath, pythonEnginePath: next.pythonEnginePath, pythonScriptPath: next.pythonScriptPath, pythonMemoryBudgetGib: next.pythonMemoryBudgetGib, sheetSagePythonPath: next.sheetSagePythonPath, comfyUiEndpoint: next.comfyUiEndpoint, comfyUiEnginePath: next.comfyUiEnginePath, audioAukEndpoint: next.audioAukEndpoint, audioAukPath: next.audioAukPath, ddspSvcPath: next.ddspSvcPath, settingPath: next.settingPath, musicPath: next.musicPath, examplesPath: next.examplesPath, coversPath: next.coversPath, abcNotesPath: next.abcNotesPath, stylePresets: next.stylePresets, visualizerEnabled: next.visualizerEnabled, visualizerRingCount: next.visualizerRingCount, visualizerHue: next.visualizerHue, visualizerLineWidth: next.visualizerLineWidth, visualizerTrail: next.visualizerTrail, visualizerSpiral: next.visualizerSpiral, visualizerRingMode: next.visualizerRingMode, visualizerTimeStep: next.visualizerTimeStep, visualizerTimeSkew: next.visualizerTimeSkew, visualizerRingStep: next.visualizerRingStep, visualizerAmplitude: next.visualizerAmplitude, saveFormat: next.saveFormat, viewMode: next.viewMode });
           settings = next;
           if (input.settingPath !== undefined) await mkdir(settingDir(), { recursive: true });
           if (input.musicPath !== undefined) await mkdir(musicDir(), { recursive: true });
@@ -1072,6 +1670,33 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           return send(200, { abc: result.abc });
         } finally { generating = false; await unlink(audioFile).catch(() => {}); }
       }
+      if (req.method === 'POST' && pathname === '/api/audiosr-restore/preview') {
+        const input = await body(req, 100 * 1024 * 1024);
+        if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
+        generating = true;
+        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 60000 };
+        try { return send(200, await previewRestoreAudio(input.dataUrl)); }
+        finally { generating = false; generationStatus = null; }
+      }
+      const restorePreviewAudioMatch = pathname.match(/^\/api\/audiosr-restore\/preview\/([^/]+)\/(original|restored)$/);
+      if (restorePreviewAudioMatch && req.method === 'GET') {
+        const file = path.join(restorePreviewDir(restorePreviewAudioMatch[1]), restorePreviewAudioMatch[2] === 'original' ? 'source.wav' : 'restored.wav');
+        if (!(await exists(file))) throw fail(404, '복원 결과를 찾을 수 없습니다.');
+        const data = await readFile(file);
+        res.writeHead(200, { 'Content-Type': 'audio/wav', 'Content-Length': String(data.length), 'Cache-Control': 'no-store' });
+        return res.end(data);
+      }
+      const restorePreviewSaveMatch = pathname.match(/^\/api\/audiosr-restore\/preview\/([^/]+)\/save$/);
+      if (restorePreviewSaveMatch && req.method === 'POST') {
+        const input = await body(req);
+        return send(200, await saveRestoredAudio(restorePreviewSaveMatch[1], input.title));
+      }
+      const restorePreviewDeleteMatch = pathname.match(/^\/api\/audiosr-restore\/preview\/([^/]+)$/);
+      if (restorePreviewDeleteMatch && req.method === 'DELETE') {
+        await body(req);
+        await rm(restorePreviewDir(restorePreviewDeleteMatch[1]), { recursive: true, force: true });
+        return send(200, { ok: true });
+      }
       if (req.method === 'POST' && pathname === '/api/abc-file') {
         const input = await body(req, 512 * 1024);
         const abc = text(input.abc, 200000);
@@ -1083,6 +1708,44 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         await mkdir(dir, { recursive: true });
         await writeFile(target, abc.endsWith('\n') ? abc : `${abc}\n`, 'utf8');
         return send(200, { ok: true, folder: dir, filename, path: target });
+      }
+      // 내장 파일 탐색기(보컬 음색 변환의 참조 오디오 선택 등)가 쓰는 라우트 두 개 -- library/ 트리
+      // 밖으로는 절대 못 나가게 path.relative()로 확인한다(".." 여러 번 넣어 library 밖 파일을
+      // 읽으려는 시도를 막기 위함).
+      if (req.method === 'GET' && pathname === '/api/library/browse') {
+        const libraryRoot = path.join(root, 'library');
+        const relative = text(requestUrl.searchParams.get('path'), 2048).trim();
+        const target = path.resolve(libraryRoot, relative);
+        const rel = path.relative(libraryRoot, target);
+        if (rel.startsWith('..') || path.isAbsolute(rel)) throw fail(400, 'library 폴더 밖의 경로는 열 수 없습니다.');
+        await mkdir(libraryRoot, { recursive: true });
+        const stats = await stat(target).catch(() => null);
+        if (!stats || !stats.isDirectory()) throw fail(404, '폴더를 찾을 수 없습니다.');
+        const names = await readdir(target);
+        const entries = [];
+        for (const name of names) {
+          if (name.startsWith('.')) continue;
+          const full = path.join(target, name);
+          const entryStat = await stat(full).catch(() => null);
+          if (!entryStat) continue;
+          if (entryStat.isDirectory()) entries.push({ name, type: 'dir' });
+          else if (LIBRARY_BROWSE_AUDIO_EXTENSIONS.has(path.extname(name).toLowerCase())) entries.push({ name, type: 'file', size: entryStat.size });
+        }
+        entries.sort((a, b) => (a.type !== b.type ? (a.type === 'dir' ? -1 : 1) : a.name.localeCompare(b.name)));
+        return send(200, { path: rel.split(path.sep).join('/'), entries });
+      }
+      if (req.method === 'GET' && pathname === '/api/library/file') {
+        const libraryRoot = path.join(root, 'library');
+        const relative = text(requestUrl.searchParams.get('path'), 2048).trim();
+        const target = path.resolve(libraryRoot, relative);
+        const rel = path.relative(libraryRoot, target);
+        if (!relative || rel.startsWith('..') || path.isAbsolute(rel)) throw fail(400, '올바르지 않은 경로입니다.');
+        const ext = path.extname(target).toLowerCase();
+        if (!LIBRARY_BROWSE_AUDIO_EXTENSIONS.has(ext)) throw fail(400, '지원하지 않는 파일 형식입니다.');
+        if (!(await exists(target))) throw fail(404, '파일을 찾을 수 없습니다.');
+        const data = await readFile(target);
+        res.writeHead(200, { 'Content-Type': AUDIO_MIME_TYPES[ext] || 'application/octet-stream', 'Content-Length': String(data.length), 'Cache-Control': 'no-store' });
+        return res.end(data);
       }
       if (req.method === 'GET' && pathname === '/api/eq-presets') {
         const dir = eqPresetsDir();
@@ -1322,6 +1985,177 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         const disposition = requestUrl.searchParams.get('download') ? `attachment; filename="${encodeURIComponent(path.basename(audioFile))}"` : 'inline';
         res.writeHead(200, { 'Content-Type': AUDIO_MIME_TYPES[path.extname(audioFile)] || 'application/octet-stream', 'Content-Length': String(data.length), 'Content-Disposition': disposition, 'Cache-Control': 'no-store' });
         return res.end(data);
+      }
+      const midiNotesMatch = pathname.match(/^\/api\/projects\/([^/]+)\/midi\/notes$/);
+      if (midiNotesMatch && req.method === 'GET') {
+        const entry = await findEntry(midiNotesMatch[1]);
+        if (!entry || entry.project.status !== 'completed') throw fail(404, '완성된 음원을 찾을 수 없습니다.');
+        const { notesFile } = await exportMidi(entry);
+        const notes = JSON.parse(await readFile(notesFile, 'utf8'));
+        return send(200, { notes });
+      }
+      const midiMatch = pathname.match(/^\/api\/projects\/([^/]+)\/midi$/);
+      if (midiMatch && req.method === 'GET') {
+        const entry = await findEntry(midiMatch[1]);
+        if (!entry || entry.project.status !== 'completed') throw fail(404, '완성된 음원을 찾을 수 없습니다.');
+        const { midiFile } = await exportMidi(entry);
+        const data = await readFile(midiFile);
+        res.writeHead(200, { 'Content-Type': 'audio/midi', 'Content-Length': String(data.length), 'Content-Disposition': `attachment; filename="${encodeURIComponent(path.basename(midiFile))}"`, 'Cache-Control': 'no-store' });
+        return res.end(data);
+      }
+      if (midiMatch && req.method === 'POST') {
+        const input = await body(req);
+        const entry = await findEntry(midiMatch[1]);
+        if (!entry || entry.project.status !== 'completed') throw fail(404, '완성된 음원을 찾을 수 없습니다.');
+        await saveMidiNotes(entry, input.notes);
+        return send(200, { ok: true });
+      }
+      // Download is independent of save: it encodes whatever note array the editor sends right now
+      // (possibly unsaved edits) and streams it back without touching the cached .mid/.notes.json.
+      // That's what makes both "edit, download without saving" and "save, then download" work as
+      // expected -- the latter just happens to match because save already refreshed the cache.
+      const midiRenderMatch = pathname.match(/^\/api\/projects\/([^/]+)\/midi\/render$/);
+      if (midiRenderMatch && req.method === 'POST') {
+        const input = await body(req);
+        const entry = await findEntry(midiRenderMatch[1]);
+        if (!entry || entry.project.status !== 'completed') throw fail(404, '완성된 음원을 찾을 수 없습니다.');
+        const notes = parseMidiNotes(input.notes);
+        const data = encodeMidiFile(notes);
+        const filename = safeMidiFilename(entry.project.title, entry.project.title || 'midi');
+        res.writeHead(200, { 'Content-Type': 'audio/midi', 'Content-Length': String(data.length), 'Content-Disposition': `attachment; filename="${encodeURIComponent(filename)}"`, 'Cache-Control': 'no-store' });
+        return res.end(data);
+      }
+      const midiSaveToFolderMatch = pathname.match(/^\/api\/projects\/([^/]+)\/midi\/save-to-folder$/);
+      if (midiSaveToFolderMatch && req.method === 'POST') {
+        const input = await body(req);
+        const entry = await findEntry(midiSaveToFolderMatch[1]);
+        if (!entry || entry.project.status !== 'completed') throw fail(404, '완성된 음원을 찾을 수 없습니다.');
+        const notes = parseMidiNotes(input.notes);
+        const data = encodeMidiFile(notes);
+        const folderInput = text(input.folder, 2048).trim() || 'library/midi';
+        const dir = path.resolve(root, folderInput);
+        const filename = safeMidiFilename(input.filename, entry.project.title || 'midi');
+        const target = path.join(dir, filename);
+        await mkdir(dir, { recursive: true });
+        await writeFile(target, data);
+        return send(200, { ok: true, folder: dir, filename, path: target });
+      }
+      // "음색 변조" 팝업: 라이브러리에서 자유롭게 고른 "원본 audio"를 위한 프로젝트 무관 라우트 묶음.
+      // prepare가 스템 분리까지 미리 끝내두면, 이후 세 엔진(legacy/auk/ddsp)이 같은 previewId로
+      // vocals-original.wav를 공유해서 쓴다 -- 예전 project.id 스코프 라우트들과 완전히 같은 흐름을
+      // previewId 기준으로 옮긴 것뿐이다(옛 /projects/:id/vocal-timbre/apply 등은 제거됨).
+      if (req.method === 'POST' && pathname === '/api/timbre-transform/prepare') {
+        const input = await body(req, 200 * 1024 * 1024);
+        const previewId = await prepareTimbrePreview(input.sourceDataUrl);
+        return send(200, { previewId });
+      }
+      const timbreAudioMatch = pathname.match(/^\/api\/timbre-transform\/([^/]+)\/audio$/);
+      if (timbreAudioMatch && req.method === 'GET') {
+        const file = path.join(timbrePreviewDir(timbreAudioMatch[1]), 'source.wav');
+        if (!(await exists(file))) throw fail(404, '원본 오디오를 찾을 수 없습니다.');
+        const data = await readFile(file);
+        res.writeHead(200, { 'Content-Type': 'audio/wav', 'Content-Length': String(data.length), 'Cache-Control': 'no-store' });
+        return res.end(data);
+      }
+      const timbreStemMatch = pathname.match(/^\/api\/timbre-transform\/([^/]+)\/stems\/([a-z]+)$/);
+      if (timbreStemMatch && req.method === 'GET') {
+        if (!STEM_NAMES.includes(timbreStemMatch[2])) throw fail(404, '알 수 없는 STEM입니다.');
+        const file = path.join(timbrePreviewDir(timbreStemMatch[1]), 'stems', `${timbreStemMatch[2]}.wav`);
+        if (!(await exists(file))) throw fail(404, 'STEM 파일을 찾을 수 없습니다.');
+        const data = await readFile(file);
+        res.writeHead(200, { 'Content-Type': 'audio/wav', 'Content-Length': String(data.length), 'Cache-Control': 'no-store' });
+        return res.end(data);
+      }
+      const timbreLegacyApplyMatch = pathname.match(/^\/api\/timbre-transform\/([^/]+)\/legacy\/apply$/);
+      if (timbreLegacyApplyMatch && req.method === 'POST') {
+        const input = await body(req, 50 * 1024 * 1024);
+        const dir = timbrePreviewDir(timbreLegacyApplyMatch[1]);
+        if (!(await exists(dir))) throw fail(404, '원본 오디오 준비 정보를 찾을 수 없습니다. 원본을 다시 선택해 주세요.');
+        if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
+        generating = true;
+        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 60000 };
+        try { return send(200, await applyVocalTimbreCore(path.join(dir, 'stems'), input.dataUrl, input.engine)); }
+        finally { generating = false; generationStatus = null; }
+      }
+      const timbreAukApplyMatch = pathname.match(/^\/api\/timbre-transform\/([^/]+)\/auk\/apply$/);
+      if (timbreAukApplyMatch && req.method === 'POST') {
+        const input = await body(req, 50 * 1024 * 1024);
+        const dir = timbrePreviewDir(timbreAukApplyMatch[1]);
+        if (!(await exists(dir))) throw fail(404, '원본 오디오 준비 정보를 찾을 수 없습니다. 원본을 다시 선택해 주세요.');
+        if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
+        generating = true;
+        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 90000 };
+        try { return send(200, await applyAukTimbreCore(path.join(dir, 'stems'), { referenceDataUrl: input.referenceDataUrl, textDescription: input.textDescription, checkpoint: input.checkpoint })); }
+        finally { generating = false; generationStatus = null; }
+      }
+      // "Tools" 메뉴: 완성곡과 무관한 독립 AuK 작업. /projects/:id 스코프가 아니라 /audio-save와
+      // 같은 층위의 범용 라우트 -- 결과는 저장하지 않고 dataUrl로 돌려주며, 저장 여부는 프론트가
+      // 기존 POST /audio-save로 별도 결정한다.
+      if (req.method === 'POST' && pathname === '/api/audio-tools/auk') {
+        const input = await body(req, 50 * 1024 * 1024);
+        if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
+        generating = true;
+        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 60000 };
+        try { return send(200, await runAukTool({ task: input.task, instruction: input.instruction, audioDataUrl: input.audioDataUrl, checkpoint: input.checkpoint, seconds: input.seconds })); }
+        finally { generating = false; generationStatus = null; }
+      }
+      // job.child(ChildProcess)는 JSON으로 못 보내니 제외하고 나머지 상태만 프론트에 노출한다.
+      const publicDdspJob = (job) => ({ id: job.id, projectId: job.projectId, status: job.status, targetStep: job.targetStep, currentStep: job.currentStep, currentLoss: job.currentLoss, createdAt: job.createdAt, updatedAt: job.updatedAt, skippedRefs: job.skippedRefs, error: job.error });
+      const timbreDdspStartMatch = pathname.match(/^\/api\/timbre-transform\/([^/]+)\/ddsp\/start$/);
+      if (timbreDdspStartMatch && req.method === 'POST') {
+        const input = await body(req, 200 * 1024 * 1024);
+        const previewId = timbreDdspStartMatch[1];
+        const dir = timbrePreviewDir(previewId);
+        if (!(await exists(dir))) throw fail(404, '원본 오디오 준비 정보를 찾을 수 없습니다. 원본을 다시 선택해 주세요.');
+        if (ddspActive) throw fail(409, '이미 다른 DDSP-SVC 학습이 진행 중입니다. 완료 후 다시 시도해 주세요.');
+        const references = Array.isArray(input.referenceDataUrls) ? input.referenceDataUrls : [];
+        if (!references.length) throw fail(400, '레퍼런스 오디오를 1개 이상 선택해 주세요.');
+        const targetStep = Math.max(100, Math.min(500000, Math.round(Number(input.targetStep)) || 40000));
+        const stems = path.join(dir, 'stems');
+        const originalVocalsWav = path.join(stems, 'vocals-original.wav');
+        if (!(await exists(originalVocalsWav))) throw fail(502, '보컬/악기 분리 결과를 찾을 수 없습니다.');
+        const jobId = randomUUID();
+        const jobWorkDir = path.join(outputDirectory, `ddsp-job-${jobId}`);
+        await mkdir(jobWorkDir, { recursive: true });
+        const referenceFiles = [];
+        for (let index = 0; index < references.length; index += 1) {
+          const match = typeof references[index] === 'string' && references[index].match(/^data:(audio\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+          if (!match) continue;
+          const ext = AUDIO_MIME[match[1]];
+          if (!ext) continue;
+          const buffer = Buffer.from(match[2], 'base64');
+          const filePath = path.join(jobWorkDir, `ref-${index}.${ext}`);
+          await writeFile(filePath, buffer);
+          referenceFiles.push(filePath);
+        }
+        if (!referenceFiles.length) { await rm(jobWorkDir, { recursive: true, force: true }).catch(() => {}); throw fail(400, '유효한 레퍼런스 오디오가 없습니다.'); }
+        const job = { id: jobId, projectId: previewId, status: 'preparing', targetStep, currentStep: 0, currentLoss: null, createdAt: Date.now(), updatedAt: Date.now(), expdir: null, configPath: null, child: null, skippedRefs: [], error: null };
+        ddspJobs.set(jobId, job);
+        ddspActive = true;
+        const ddspSvcRoot = resolveConfigPath(settings.ddspSvcPath, DEFAULT_DDSP_SVC_PATH);
+        // 의도적으로 await하지 않는다 -- 이 HTTP 요청은 jobId만 즉시 돌려주고, 실제 학습은
+        // 백그라운드에서 계속 진행되며 GET /api/ddsp-jobs로 폴링한다(다이얼로그가 닫혀도 유지).
+        startDdspJob(ddspSvcRoot, job, referenceFiles, {
+          spawnImpl,
+          sourceVocalPath: originalVocalsWav,
+          postProcess: (convertedVocalPath, workDir) => postProcessConvertedVocal(convertedVocalPath, originalVocalsWav, workDir),
+        }).then(async (gatedVocalPath) => {
+          if (gatedVocalPath) await copyFile(gatedVocalPath, path.join(stems, 'vocals.wav'));
+        }).catch(() => {}) // 실패 사유는 이미 job.error에 기록됨 (startDdspJob 내부)
+          .finally(async () => { ddspActive = false; await rm(jobWorkDir, { recursive: true, force: true }).catch(() => {}); });
+        return send(200, { jobId });
+      }
+      if (req.method === 'GET' && pathname === '/api/ddsp-jobs') return send(200, [...ddspJobs.values()].map(publicDdspJob));
+      const ddspJobCancelMatch = pathname.match(/^\/api\/ddsp-jobs\/([^/]+)\/cancel$/);
+      if (ddspJobCancelMatch && req.method === 'POST') {
+        const job = ddspJobs.get(ddspJobCancelMatch[1]);
+        if (!job) throw fail(404, '학습 작업을 찾을 수 없습니다.');
+        killDdspJob(job);
+        return send(200, publicDdspJob(job));
+      }
+      if (req.method === 'POST' && pathname === '/api/audio-save') {
+        const input = await body(req, 200 * 1024 * 1024);
+        return send(200, await saveArbitraryAudio(input.dataUrl, input.title));
       }
       const stemsMatch = pathname.match(/^\/api\/projects\/([^/]+)\/stems$/);
       if (stemsMatch && req.method === 'POST') {

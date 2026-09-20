@@ -1,0 +1,150 @@
+/* Timbre transform dialog layout only. Shared waveform, chart, transport,
+   and save controls keep using the existing audio-compare.css/studio.css classes. */
+
+.timbre-transform-dialog .timbre-transform-body {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  min-height: 0;
+}
+
+.timbre-transform-dialog .timbre-left-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 0 0 230px;
+  padding-right: 12px;
+  border-right: 1px solid var(--border, #2a2a2a);
+}
+
+.timbre-transform-dialog .timbre-section-heading {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  opacity: 0.65;
+  margin-top: 10px;
+}
+
+.timbre-transform-dialog .timbre-section-heading:first-child {
+  margin-top: 0;
+}
+
+.timbre-transform-dialog .timbre-model-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.timbre-transform-dialog .timbre-model-btn {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #2a2a2a);
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.timbre-transform-dialog .timbre-model-btn:hover {
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+
+.timbre-transform-dialog .timbre-model-btn.active {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  border-color: color-mix(in srgb, currentColor 25%, transparent);
+  font-weight: 600;
+}
+
+.timbre-transform-dialog .timbre-model-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.timbre-transform-dialog .timbre-engine-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.timbre-transform-dialog .timbre-apply-row {
+  margin-top: 14px;
+}
+
+.timbre-transform-dialog .timbre-apply-row .btn,
+.timbre-transform-dialog .timbre-apply-row button {
+  width: 100%;
+}
+
+.timbre-transform-dialog .timbre-progress-block {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: #9db08d;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.timbre-transform-dialog .timbre-main-panel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.timbre-transform-dialog .pp-dialog-actions {
+  align-items: center;
+  gap: 10px;
+}
+
+.timbre-transform-dialog .pp-dialog-actions-right {
+  margin-left: auto;
+}
+
+/* Long library filenames read better when icon and text start from the left edge. */
+.timbre-transform-dialog .timbre-left-panel .voice-convert-file-btn {
+  justify-content: flex-start;
+  max-width: none;
+}
+
+/* Nested flex rows can collapse the generic bar waveform unless its minimum
+   block size is explicit. SVG compare waveforms keep their own taller height. */
+.timbre-transform-dialog .pp-waveform {
+  min-height: 44px;
+}
+
+/* Legacy Seed-VC/Vevo rows stay horizontal (icon left, waveform filling the
+   rest). audio-compare.css forces .stem-row into a column layout for the
+   AuK/DDSP compare charts, so the legacy-only class opts back to one line. */
+.timbre-transform-dialog .stem-list.timbre-legacy-list .stem-row {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+}
+
+.timbre-transform-dialog .compare-waveform {
+  min-height: 56px;
+}
+
+@media (max-width: 700px) {
+  .timbre-transform-dialog .timbre-transform-body {
+    flex-direction: column;
+  }
+  .timbre-transform-dialog .timbre-left-panel {
+    flex: 0 0 auto;
+    border-right: none;
+    border-bottom: 1px solid var(--border, #2a2a2a);
+    padding-right: 0;
+    padding-bottom: 12px;
+  }
+  .timbre-transform-dialog .pp-dialog-actions-right {
+    width: 100%;
+    margin-left: 0;
+  }
+}

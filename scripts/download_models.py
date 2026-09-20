@@ -16,14 +16,21 @@ REPOS = {
     "m-a-p/YuE2-Vae-legacy": "5ddd12f79acb90d24b3a672dcd2ebf88da7c92a9",
     "audio-cpp/Yue2-3B-GGUF": "9c31f1c64f73d36799693aa89295b410c76928c3",
     # audio.cpp-gguf hosts 60+ unrelated model families in one repo; "prefixes" keeps
-    # this to just the packages SongYUE2's stem-separation feature uses (HTDemucs for
-    # the 4-way vocals/drums/bass/other split, Mel-Band RoFormer for the cleaner 2-way
-    # vocals/instrumental split), instead of pulling everything in the repo.
+    # this to just the packages SongYUE2 uses (HTDemucs for the 4-way vocals/drums/
+    # bass/other stem split, Mel-Band RoFormer for the cleaner 2-way vocals/instrumental
+    # split, AudioSR for the "음원 복원" low-quality audio restoration feature, MuScriptor
+    # for "MIDI로 내보내기", Seed-VC and Vevo2 -- two alternative engines -- for the
+    # "보컬 음색 변환" singing voice conversion feature), instead of pulling everything
+    # in the repo.
     "audio-cpp/audio.cpp-gguf": {
         "revision": "6d5436fc85f7a20c2e9f4e472b7f3a532f686444",
         "prefixes": [
             "HTDemucs-GGUF/htdemucs-q8_0.gguf",
             "Mel-Band-RoFormer-GGUF/mel-band-roformer-f16.gguf",
+            "AudioSR-GGUF/audiosr-basic-f32.gguf",
+            "MuScriptor-Small-GGUF/muscriptor-small-f32.gguf",
+            "SeedVC-MLX-GGUF/seed-vc-mlx-q8_0.gguf",
+            "Vevo2-GGUF/vevo2-q8_0.gguf",
         ],
     },
 }

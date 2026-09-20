@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-09-14T15:00:19Z",
+  "updatedAt": "2026-09-16T03:59:13Z",
   "state": "complete",
-  "totalBytes": 23833380883,
-  "completedBytes": 23833380883,
+  "totalBytes": 33543954419,
+  "completedBytes": 33543954419,
   "repositories": [
     {
       "id": "m-a-p/YuE2-3B",
@@ -372,9 +372,16 @@
       "revision": "6d5436fc85f7a20c2e9f4e472b7f3a532f686444",
       "path": "models/audio-cpp/audio.cpp-gguf",
       "state": "complete",
-      "totalBytes": 518455584,
-      "completedBytes": 518455584,
+      "totalBytes": 10229029120,
+      "completedBytes": 10229029120,
       "files": [
+        {
+          "path": "AudioSR-GGUF/audiosr-basic-f32.gguf",
+          "size": 6177855616,
+          "sha256": "bf92d26c638e82f5051dfd8cf5899798d64ce5366ff63bad8b5930a82fce5bff",
+          "state": "complete",
+          "completedBytes": 6177855616
+        },
         {
           "path": "HTDemucs-GGUF/htdemucs-q8_0.gguf",
           "size": 61940768,
@@ -388,6 +395,20 @@
           "sha256": "cbdf174dc716615dcd304678f67fc1d2ac6286fbc647e72837b5a6d447a07add",
           "state": "complete",
           "completedBytes": 456514816
+        },
+        {
+          "path": "MuScriptor-Small-GGUF/muscriptor-small-f32.gguf",
+          "size": 411908672,
+          "sha256": "4bff6f1c45b445e144c176434fbe27614ad6c4686e03f99ee11b17e15163fba2",
+          "state": "complete",
+          "completedBytes": 411908672
+        },
+        {
+          "path": "SeedVC-MLX-GGUF/seed-vc-mlx-q8_0.gguf",
+          "size": 3120809248,
+          "sha256": "d4a1ecf951cb7c2ebb55347a174a286a3b23825d58f8835707d21d754762ca7f",
+          "state": "complete",
+          "completedBytes": 3120809248
         }
       ]
     }
