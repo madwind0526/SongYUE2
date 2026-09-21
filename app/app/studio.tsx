@@ -3,6 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import './audio-compare.css';
 import './timbre-transform.css';
+import './audio-tools.css';
 import * as ABCJS from 'abcjs';
 import { AudioLines, ArrowDownToLine, ArrowRight, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Combine, Cpu, Dices, Disc3, Download, FastForward, FileText, Folder, FolderOpen, GitCompare, Guitar, Headphones, Heart, Home, Image as ImageIcon, Layers, LayoutGrid, ListMusic, ListPlus, LoaderCircle, Menu, Mic, MoreVertical, Music2, Pause, Pencil, Play, Plus, Power, RefreshCw, Rewind, RotateCcw, Save, Search, Settings2, ShieldCheck, SkipBack, SkipForward, SlidersHorizontal, Sparkles, Square, Trash2, Upload, Volume2, WandSparkles, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -18,6 +19,15 @@ type SaveFilePickerFn = (options?: { suggestedName?: string; types?: { descripti
 const RANDOMIZE_SEED_KEY = 'songyue2-randomize-seed';
 function loadRandomizeSeed(): boolean {
   try { return localStorage.getItem(RANDOMIZE_SEED_KEY) === '1'; } catch { return false; }
+}
+// 모듈 공용: Blob(파일/재취득 응답)을 data: URL로 읽는다. 음색 변조/오디오 도구 업로드에 쓴다.
+function readFileAsDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
 }
 function AbcPreview({ abc, large, controlsSlot }: { abc: string; large?: boolean; controlsSlot?: HTMLElement | null }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -349,7 +359,7 @@ function computeWaveformPeaks(buffer: AudioBuffer, buckets: number): number[] {
 
 function formatSeekTime(seconds: number) { if (!Number.isFinite(seconds) || seconds < 0) return '0:00'; const mins = Math.floor(seconds / 60); const secs = Math.floor(seconds % 60); return `${mins}:${String(secs).padStart(2, '0')}`; }
 
-function Waveform({ peaks, playedFraction, variant }: { peaks: number[]; playedFraction?: number; variant?: 'processed' }) {
+function Waveform({ peaks, playedFraction, variant }: { peaks: number[]; playedFraction?: number; variant?: 'processed' | 'source' | 'reference' }) {
   return <div className={variant ? `pp-waveform pp-waveform-${variant}` : 'pp-waveform'}>{peaks.map((peak, index) => <span key={index} className={playedFraction !== undefined && index / peaks.length <= playedFraction ? 'played' : ''} style={{ height: `${Math.max(4, peak * 100)}%` }}/>)}</div>;
 }
 
@@ -1239,6 +1249,9 @@ function StemDialog({ project, mode, onClose, notify, visualizerEnabled, visuali
     const ctx = audioCtxRef.current;
     const buffer = bufferForKey(key);
     if (!ctx || !buffer) return;
+    // A suspended context (created after an await) stays silent until resumed from a
+    // user gesture. Every play click is such a gesture, so resume before starting.
+    if (ctx.state !== 'running') void ctx.resume();
     const position = atPosition !== undefined ? atPosition : currentPosition();
     const clamped = Math.max(0, Math.min(position, Math.max(0, buffer.duration - 0.02)));
     currentSourceRef.current?.stop();
@@ -1913,9 +1926,12 @@ function useAudioTransport() {
     return playOffsetRef.current + (ctx.currentTime - playStartCtxTimeRef.current) * rateRef.current;
   }
   function playKey(key: string, atPosition?: number) {
-    const ctx = audioCtxRef.current;
+    const ctx = audioCtxRef.current || ensureAudioContext();
     const buffer = bufferForKey(key);
-    if (!ctx || !buffer) return;
+    if (!buffer) return;
+    // A suspended context (created after an await) stays silent until resumed from a
+    // user gesture. Every play click is such a gesture, so resume before starting.
+    if (ctx.state !== 'running') void ctx.resume();
     const position = atPosition !== undefined ? atPosition : currentPosition();
     const clamped = Math.max(0, Math.min(position, Math.max(0, buffer.duration - 0.02)));
     currentSourceRef.current?.stop();
@@ -2016,8 +2032,42 @@ function TransportControls({ t, disabled }: { t: AudioTransport; disabled: boole
 // instruction()은 AuKInstructionBuilder 노드가 하는 "템플릿에 필드 채우기"를 프론트에서 그대로
 // 재현한 것 -- AudioAuK의 POST /api/jobs는 이 instruction 문자열을 그대로 받는 자유 텍스트라,
 // 서버는 이 문자열을 검증 없이 전달만 한다.
-type AukToolField = { key: string; label: string; type: 'text' | 'number'; placeholder: string };
-type AukTool = { id: string; label: string; category: string; audio: 'none' | 'optional' | 'required'; audioLabel: string; fields: AukToolField[]; instruction: (values: Record<string, string>) => string };
+type AukField = { key: string; label: string; placeholder: string; type?: 'text' | 'number' | 'textarea'; hint?: string };
+type AukTool = { id: string; label: string; category: string; audio: 'none' | 'optional' | 'required'; audioLabel: string; showSeconds?: boolean; fields: AukField[]; description: string; instruction: (values: Record<string, string>) => string };
+// The position field is a 0-1 fraction of the picked audio's length (0 = start, 1 = end).
+// It is multiplied by the decoded audio duration, so "0.5" always means halfway through the
+// audio no matter how long it is, and the AuK instruction says "at N seconds".
+function nonverbalInstruction(values: Record<string, string>, audioSeconds: number): string {
+  const raw = Number(values.position);
+  const pos = Number.isFinite(raw) ? raw : 0;
+  const fraction = Math.min(1, Math.max(0, pos));
+  if (audioSeconds <= 0) {
+    return `Add a ${values.sound} at about ${Math.round(fraction * 100)}% of the way through the speech.`;
+  }
+  const absolute = Math.round(fraction * audioSeconds);
+  return absolute > 0
+    ? `Add a ${values.sound} at about ${Math.min(absolute, audioSeconds)} seconds into the speech.`
+    : `Add a ${values.sound} at the beginning of the speech.`;
+}
+// Estimates how long it takes to say the given text aloud at a normal adult pace: Korean
+// ≈235 syllables/min (midpoint of the typical 210-260 SPM range) and English ≈2.5 words/sec
+// (the AuK node guidance, which is safer than the 180-200 WPM human range because the engine
+// drops words when the duration budget runs short). Minimum 1 second, capped at 1 hour.
+function estimateSpeechSeconds(text: string): number {
+  const trimmed = (text || '').trim();
+  const koreanSyllables = (trimmed.match(/[\uAC00-\uD7A3]/g) || []).length;
+  const englishWords = (trimmed.match(/[A-Za-z0-9]+(?:['′-][A-Za-z0-9]+)*/g) || []).length;
+  const minutes = koreanSyllables / 235 + englishWords / 150;
+  return Math.max(1, Math.min(3600, Math.round(minutes * 60)));
+}
+// The AuK engine echoes the instruction's dominant language into the speech it generates, so the
+// instruction scaffolding must be written in the language of the spoken text (English scaffolding +
+// Korean text falls back to Chinese). Pick ko/en scaffolding from whichever script wins.
+function usesKorean(text: string): boolean {
+  const hangul = (text || '').match(/[\uAC00-\uD7A3]/g) || [];
+  const latin = (text || '').match(/[A-Za-z]/g) || [];
+  return hangul.length >= latin.length && hangul.length > 0;
+}
 const AUK_TOOL_CATEGORIES = [
   { id: 'tts', label: 'TTS 생성' },
   { id: 'edit', label: '가사/대사 편집' },
@@ -2026,93 +2076,180 @@ const AUK_TOOL_CATEGORIES = [
   { id: 'quality', label: '품질 개선' },
 ];
 const AUK_TOOLS: AukTool[] = [
-  { id: 'voice-description-tts', label: '설명으로 TTS 생성', category: 'tts', audio: 'none', audioLabel: '',
-    fields: [{ key: 'description', label: '음색 설명', type: 'text', placeholder: 'Warm, clear voice' }, { key: 'text', label: '말할 내용', type: 'text', placeholder: 'Hello, welcome to AuK.' }],
-    instruction: v => `Generate speech based on the following description: "${v.description}". The content to speak is: "${v.text}".` },
-  { id: 'voice-cloning', label: '목소리 복제 TTS', category: 'tts', audio: 'required', audioLabel: '복제할 목소리 레퍼런스',
-    fields: [{ key: 'text', label: '말할 내용', type: 'text', placeholder: 'Hello, welcome to AuK.' }],
-    instruction: v => `Say the following with the same voice: "${v.text}".` },
-  { id: 'replace-speech', label: '가사/대사 교체', category: 'edit', audio: 'required', audioLabel: '수정할 오디오',
-    fields: [{ key: 'original', label: '원래 구절', type: 'text', placeholder: 'old words' }, { key: 'replacement', label: '바꿀 구절', type: 'text', placeholder: 'new words' }],
-    instruction: v => `Replace '${v.original}' with '${v.replacement}'.` },
-  { id: 'insert-before', label: '구절 삽입(앞)', category: 'edit', audio: 'required', audioLabel: '수정할 오디오',
-    fields: [{ key: 'text', label: '삽입할 구절', type: 'text', placeholder: 'new words' }, { key: 'anchor', label: '기준 구절', type: 'text', placeholder: 'existing words' }],
-    instruction: v => `Add '${v.text}' before '${v.anchor}'.` },
-  { id: 'insert-after', label: '구절 삽입(뒤)', category: 'edit', audio: 'required', audioLabel: '수정할 오디오',
-    fields: [{ key: 'text', label: '삽입할 구절', type: 'text', placeholder: 'new words' }, { key: 'anchor', label: '기준 구절', type: 'text', placeholder: 'existing words' }],
-    instruction: v => `Add '${v.text}' after '${v.anchor}'.` },
-  { id: 'remove-speech', label: '구절 삭제', category: 'edit', audio: 'required', audioLabel: '수정할 오디오',
-    fields: [{ key: 'text', label: '삭제할 구절', type: 'text', placeholder: 'words to remove' }],
-    instruction: v => `Remove '${v.text}'.` },
+  { id: 'voice-description-tts', label: 'TTS (T2S)', category: 'tts', audio: 'none', audioLabel: '', showSeconds: true,
+    fields: [
+      { key: 'description', label: '음색 설명', type: 'text', placeholder: '예) 따뜻하고 부드러운 남성 재즈 보컬' },
+      { key: 'text', label: '말할 내용', type: 'textarea', placeholder: '여러 줄로 입력해 주세요. 실제 발화할 텍스트입니다.' },
+    ],
+    instruction: v => usesKorean(v.text) ? `아래 내용을 소리 내어 읽어 주세요. 실제 말할 내용: "${v.text}". 목소리는 "${v.description}"으로 설명됩니다.` : `Speak the text below aloud. The content to speak is: "${v.text}". The speaker's voice is described as "${v.description}".`, description: 'Text를 음색 설명에 맞는 목소리(sound)로 변경합니다.' },
+  { id: 'voice-cloning', label: 'TTS 생성 (Ref-T2S)', category: 'tts', audio: 'required', audioLabel: '참조 목소리', showSeconds: true,
+    fields: [{ key: 'text', label: '말할 내용', type: 'textarea', placeholder: '여러 줄로 입력해 주세요. 실제 발화할 텍스트입니다.' }],
+    instruction: v => usesKorean(v.text) ? `다음 내용을 같은 목소리로 읽어 주세요: "${v.text}".` : `Say the following with the same voice: "${v.text}".`, description: 'Text를 참조 목소리(sound)로 변경합니다.' },
+  { id: 'edit-lyrics', label: '가사/대사 편집', category: 'edit', audio: 'required', audioLabel: '변경할 오디오', fields: [],
+    instruction: () => '', description: '선택한 Function에 따라 가사/대사를 수정합니다.' },
   { id: 'raise-pitch', label: '피치 올리기', category: 'adjust', audio: 'required', audioLabel: '수정할 오디오',
     fields: [{ key: 'semitones', label: '반음 수', type: 'number', placeholder: '2' }],
-    instruction: v => `Raise the pitch by ${v.semitones} semitones.` },
+    instruction: v => `Raise the pitch by ${v.semitones} semitones.`, description: '목소리 음높이를 반음만큼 올립니다.' },
   { id: 'lower-pitch', label: '피치 내리기', category: 'adjust', audio: 'required', audioLabel: '수정할 오디오',
     fields: [{ key: 'semitones', label: '반음 수', type: 'number', placeholder: '2' }],
-    instruction: v => `Lower the pitch by ${v.semitones} semitones.` },
+    instruction: v => `Lower the pitch by ${v.semitones} semitones.`, description: '목소리 음높이를 반음만큼 내립니다.' },
   { id: 'change-speed', label: '속도 조절', category: 'adjust', audio: 'required', audioLabel: '수정할 오디오',
     fields: [{ key: 'factor', label: '배속', type: 'number', placeholder: '1.25' }],
-    instruction: v => `Adjust the speech speed to ${v.factor}x.` },
+    instruction: v => `Adjust the speech speed to ${v.factor}x.`, description: '말하는 속도를 배수로 조절합니다.' },
   { id: 'increase-volume', label: '음량 올리기', category: 'adjust', audio: 'required', audioLabel: '수정할 오디오',
     fields: [{ key: 'decibels', label: 'dB', type: 'number', placeholder: '5' }],
-    instruction: v => `Increase the volume by ${v.decibels} dB.` },
+    instruction: v => `Increase the volume by ${v.decibels} dB.`, description: '오디오 음량을 dB만큼 올립니다.' },
   { id: 'decrease-volume', label: '음량 내리기', category: 'adjust', audio: 'required', audioLabel: '수정할 오디오',
     fields: [{ key: 'decibels', label: 'dB', type: 'number', placeholder: '5' }],
-    instruction: v => `Decrease the volume by ${v.decibels} dB.` },
+    instruction: v => `Decrease the volume by ${v.decibels} dB.`, description: '오디오 음량을 dB만큼 내립니다.' },
   { id: 'change-emotion', label: '감정 바꾸기', category: 'adjust', audio: 'required', audioLabel: '수정할 오디오',
-    fields: [{ key: 'description', label: '감정 설명', type: 'text', placeholder: 'happy' }],
-    instruction: v => `Change the emotion to ${v.description}.` },
+    fields: [{ key: 'description', label: '감정 설명', type: 'text', placeholder: '기쁨/슬픔/차분함 등 원하는 감정' }],
+    instruction: v => `Change the emotion to ${v.description}.`, description: '말하는 감정을 설명한 감정으로 바꿉니다.' },
   { id: 'convert-to-whisper', label: '속삭임으로 변환', category: 'transform', audio: 'required', audioLabel: '수정할 오디오', fields: [],
-    instruction: () => 'Say this in a quiet, whispering voice, keeping the same words.' },
+    instruction: () => 'Say this in a quiet, whispering voice, keeping the same words.', description: '평범한 발화를 소곤소곤 속삭이듯 바꿉니다.' },
   { id: 'whisper-to-speech', label: '속삭임 → 일반 발화', category: 'transform', audio: 'required', audioLabel: '수정할 오디오', fields: [],
-    instruction: () => 'Convert this whispered speech into a normal speaking voice while preserving the speaker and content.' },
+    instruction: () => 'Convert this whispered speech into a normal speaking voice while preserving the speaker and content.', description: '속삭이는 목소리를 일반 발화로 되돌립니다.' },
   { id: 'remove-accent', label: '억양 제거', category: 'transform', audio: 'required', audioLabel: '수정할 오디오', fields: [],
-    instruction: () => "Remove the regional accent while preserving the speaker's voice and content." },
+    instruction: () => "Remove the regional accent while preserving the speaker's voice and content.", description: '지역 억양을 빼고 표준 어투로 바꿉니다.' },
   { id: 'add-nonverbal', label: '비언어음 추가', category: 'transform', audio: 'required', audioLabel: '수정할 오디오',
-    fields: [{ key: 'sound', label: '소리', type: 'text', placeholder: 'cough' }, { key: 'position', label: '위치', type: 'text', placeholder: 'beginning' }],
-    instruction: v => `Add a ${v.sound} at the ${v.position} of the speech.` },
+    fields: [{ key: 'sound', label: '소리', type: 'text', placeholder: 'cough, laughter, sigh, gasp, yawn, sniff, throat clearing, lip smack, tongue click' }, { key: 'position', label: '위치 (0~1)', type: 'number', placeholder: '예: 0.5 (=오디오 길이의 절반)', hint: '0은 시작, 1은 끝입니다. 입력한 숫자 × 오디오 길이로 위치가 정해집니다.' }],
+    instruction: v => {
+      const position = Number(v.position);
+      const pos = Number.isFinite(position) ? position : 0;
+      return pos <= 1
+        ? `Add a ${v.sound} at about ${Math.round(pos * 100)}% of the way through the speech.`
+        : `Add a ${v.sound} at about ${Math.round(pos)} seconds into the speech.`;
+    }, description: '음성에 기침·웃음 같은 소리를 원하는 위치에 추가합니다.' },
   { id: 'remove-nonverbal', label: '비언어음 제거', category: 'transform', audio: 'required', audioLabel: '수정할 오디오',
-    fields: [{ key: 'sound', label: '소리', type: 'text', placeholder: 'breaths' }],
-    instruction: v => `Remove all ${v.sound} from the audio.` },
+    fields: [{ key: 'sound', label: '소리', type: 'text', placeholder: 'cough, laughter, sigh, gasp, yawn, sniff, throat clearing, lip smack, tongue click' }],
+    instruction: v => `Remove all ${v.sound} from the audio.`, description: '음성에 섞인 비언어음(숨소리 등)을 제거합니다.' },
   { id: 'enhance-speech', label: '음성 향상(종합)', category: 'quality', audio: 'required', audioLabel: '복원할 오디오', fields: [],
-    instruction: () => 'Preserve all speakers, remove noise and reverberation, and output clean speech of the same length.' },
+    instruction: () => 'Preserve all speakers, remove noise and reverberation, and output clean speech of the same length.', description: '노이즈와 잔향을 함께 제거해 깨끗한 음성으로 복원합니다.' },
   { id: 'denoise-only', label: '노이즈만 제거', category: 'quality', audio: 'required', audioLabel: '복원할 오디오', fields: [],
-    instruction: () => 'Remove only the background noise, preserve everything else, and output audio of the same length.' },
+    instruction: () => 'Remove only the background noise, preserve everything else, and output audio of the same length.', description: '배경 노이즈만 골라 제거합니다.' },
   { id: 'dereverberate-only', label: '잔향만 제거', category: 'quality', audio: 'required', audioLabel: '복원할 오디오', fields: [],
-    instruction: () => 'Remove only the room reverberation, preserve everything else, and output audio of the same length.' },
+    instruction: () => 'Remove only the room reverberation, preserve everything else, and output audio of the same length.', description: '방 안 울림(잔향)만 골라 제거합니다.' },
   { id: 'repair-quality', label: '음질 결함 복구', category: 'quality', audio: 'required', audioLabel: '복원할 오디오',
-    fields: [{ key: 'defect', label: '결함 설명', type: 'text', placeholder: 'telephone effect' }],
-    instruction: v => `Repair the ${v.defect} and restore natural, clear speech.` },
+    fields: [{ key: 'defect', label: '결함 설명', type: 'text', placeholder: 'telephone effect, clicks, crackle, distortion' }],
+    instruction: v => `Repair the ${v.defect} and restore natural, clear speech.`, description: '음질 결함(전화 음질·잡음 등)을 복구합니다.' },
 ];
+// 가사/대사 편집 탭: 하나의 편집 작업(AuK 잡)에 적용할 Function을 체크박스로 고르면 그에 맞는
+// 입력 2개(삭제는 1개)가 아래에 나타난다. 선택한 Function마다 프론트에서 instruction을 조립한다.
+const EDIT_FUNCTIONS: { id: 'replace' | 'insert-before' | 'insert-after' | 'remove'; label: string; description: string; fields: AukField[] }[] = [
+  { id: 'replace', label: '교체', description: '기존 가사/대사 구절을 새 내용으로 바꿉니다.', fields: [{ key: 'original', label: '원래 구절', placeholder: '기존 가사/대사' }, { key: 'replacement', label: '바꿀 구절', placeholder: '새 가사/대사' }] },
+  { id: 'insert-before', label: '삽입(앞)', description: '기준 구절 바로 앞에 새 구절을 추가합니다.', fields: [{ key: 'text', label: '삽입할 구절', placeholder: '새 가사/대사' }, { key: 'anchor', label: '기준 구절', placeholder: '기존 가사/대사' }] },
+  { id: 'insert-after', label: '삽입(뒤)', description: '기준 구절 바로 뒤에 새 구절을 추가합니다.', fields: [{ key: 'text', label: '삽입할 구절', placeholder: '새 가사/대사' }, { key: 'anchor', label: '기준 구절', placeholder: '기존 가사/대사' }] },
+  { id: 'remove', label: '삭제', description: '지정한 가사/대사 구절을 오디오에서 제거합니다.', fields: [{ key: 'text', label: '삭제할 구절', placeholder: '지울 가사/대사' }] },
+];
+function editInstruction(functionId: string, values: Record<string, string>): string {
+  if (functionId === 'replace') return `Replace '${values.original}' with '${values.replacement}'.`;
+  if (functionId === 'insert-before') return `Add '${values.text}' before '${values.anchor}'.`;
+  if (functionId === 'insert-after') return `Add '${values.text}' after '${values.anchor}'.`;
+  return `Remove '${values.text}'.`;
+}
 
 // 사이드바 "오디오 도구 (실험적)" 페이지 -- 완성곡과 무관하게 AudioAuK의 TTS/편집/조절/변형/품질개선
-// 작업을 독립적으로 실행한다. 카테고리 → 도구 선택 → (도구별) 동적 입력창 → 실행 → 결과 미리듣기+저장.
+// 작업을 독립적으로 실행한다. 카테고리 탭 → 도구 탭 → (도구별) 동적 입력창은 좌측 30%에, 실행 결과는
+// 우측 70%에 "음원 비교" 스타일(파형+스펙트로그램+seek bar+재생 컨트롤+취소/저장)로 표시한다.
 function AudioToolsPage({ notify, onCreated }: { notify: (text: string, error?: boolean) => void; onCreated: (project: Project) => void }) {
+  const t = useAudioTransport();
   const [categoryId, setCategoryId] = useState(AUK_TOOL_CATEGORIES[0].id);
   const toolsInCategory = AUK_TOOLS.filter(tool => tool.category === categoryId);
   const [toolId, setToolId] = useState(toolsInCategory[0].id);
   const tool = AUK_TOOLS.find(item => item.id === toolId) || toolsInCategory[0];
+  const [editFunctionId, setEditFunctionId] = useState<'replace' | 'insert-before' | 'insert-after' | 'remove'>('replace');
+  const editFunction = EDIT_FUNCTIONS.find(item => item.id === editFunctionId) || EDIT_FUNCTIONS[0];
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const [seconds, setSeconds] = useState(10);
-  const [checkpoint, setCheckpoint] = useState<'flash' | 'base'>('flash');
+  const [checkpoint, setCheckpoint] = useState<'flash' | 'base'>('base');
   const [audioName, setAudioName] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [saving, setSaving] = useState(false);
   const [errorText, setErrorText] = useState('');
-  const [resultUrl, setResultUrl] = useState<string | null>(null);
+  const [transcribing, setTranscribing] = useState(false);
+  const [transcript, setTranscript] = useState<string | null>(null);
+  const [transcribeLanguage, setTranscribeLanguage] = useState<'auto' | 'korean' | 'english'>('auto');
+  const [whisperModel, setWhisperModel] = useState('large-v3');
+  const [qualitySelection, setQualitySelection] = useState<string[]>(['enhance-speech']);
+  const [editSourceSeconds, setEditSourceSeconds] = useState(0);
+  const [pickedAudioSeconds, setPickedAudioSeconds] = useState(0);
   const audioBlobRef = useRef<Blob | null>(null);
   const resultDataUrlRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const resultBuffer = t.bufferForKey('output');
+  const sourceBuffer = t.bufferForKey('source');
+  const atRowClass = (key: string, kind: 'dry' | 'wet') => `at-result-row${t.activeKey === key && t.isPlaying ? (kind === 'wet' ? ' pp-row-playing-processed' : ' pp-row-playing-original') : ''}`;
+  useEffect(() => () => t.closeContext(), [] /* eslint-disable-line react-hooks/exhaustive-deps */);
 
+  const isEdit = categoryId === 'edit';
+  function defaultsFor(fields: AukField[]): Record<string, string> {
+    return Object.fromEntries(fields.map(field => [field.key, field.type === 'number' ? '0' : '']));
+  }
+  function setField(field: AukField, value: string) { setFieldValues(previous => ({ ...previous, [field.key]: value })); }
   function selectCategory(nextCategoryId: string) {
     setCategoryId(nextCategoryId);
     const first = AUK_TOOLS.find(item => item.category === nextCategoryId);
-    if (first) { setToolId(first.id); setFieldValues({}); }
+    setToolId(first?.id || '');
+    if (nextCategoryId === 'quality' && first) setQualitySelection([first.id]);
+    if (first) {
+      setFieldValues(defaultsFor(first.fields));
+      setSeconds(first.audio === 'none' ? 10 : 0);
+    }
+    setErrorText('');
+  }
+  function toggleQuality(nextId: string) {
+    // 종합 음성 향상은 노이즈/잔향 제거를 모두 포함하므로, 선택하면 나머지 둘은 자동 해제한다.
+    const base = nextId === 'enhance-speech'
+      ? qualitySelection.filter(id => id !== 'denoise-only' && id !== 'dereverberate-only')
+      : qualitySelection;
+    const next = base.includes(nextId)
+      ? base.filter(id => id !== nextId)
+      : [...base, nextId];
+    setQualitySelection(next);
+    const activeId = next[next.length - 1] || '';
+    setToolId(activeId);
+    const toolDef = AUK_TOOLS.find(item => item.id === activeId);
+    if (toolDef) setFieldValues(previous => ({ ...defaultsFor(toolDef.fields), ...previous }));
+    setErrorText('');
+  }
+  function summarizeRun() {
+    if (isEdit) {
+      const runValues = { ...defaultsFor(editFunction.fields), ...fieldValues };
+      const extras = editFunction.fields.map(field => {
+        const text = String(runValues[field.key] ?? '').trim();
+        return text ? `${field.label.replace(' 구절', '')}: ${text}` : null;
+      }).filter(Boolean).join(', ');
+      return `실행: ${editFunction.label} — ${editFunction.description}${extras ? ` (${extras})` : ''}`;
+    }
+    const summaryTools = categoryId === 'quality'
+      ? qualitySelection.map(id => AUK_TOOLS.find(item => item.id === id)).filter((item): item is AukTool => !!item)
+      : [tool];
+    const parts = summaryTools.map(runTool => {
+      const runValues = { ...defaultsFor(runTool.fields), ...fieldValues };
+      const extras = runTool.fields.map(field => {
+        const text = String(runValues[field.key] ?? '').trim();
+        if (!text) return null;
+        if (field.type === 'number' && Number(text) === 0) return null;
+        return `${field.label}: ${text}`;
+      }).filter(Boolean).join(', ');
+      if (categoryId === 'tts') {
+        return extras ? `${runTool.description} (${extras})` : runTool.description;
+      }
+      return extras ? `${runTool.label} (${extras})` : `${runTool.label} — ${runTool.description}`;
+    });
+    if (!parts.length) return '';
+    return categoryId === 'quality' ? `실행 순서: ${parts.join(' → ')}` : `실행: ${parts.join(' → ')}`;
   }
   function selectTool(nextTool: AukTool) {
     setToolId(nextTool.id);
-    setFieldValues(Object.fromEntries(nextTool.fields.map(field => [field.key, field.placeholder])));
-    setResultUrl(null);
+    setFieldValues(defaultsFor(nextTool.fields));
+    setSeconds(nextTool.audio === 'none' ? 10 : 0);
+    setErrorText('');
+  }
+  function selectEditFunction(next: typeof editFunctionId) {
+    setEditFunctionId(next);
+    const nextFn = EDIT_FUNCTIONS.find(item => item.id === next);
+    if (nextFn) setFieldValues(previous => ({ ...defaultsFor(nextFn.fields), ...previous }));
     setErrorText('');
   }
   function handlePickFile(event: React.ChangeEvent<HTMLInputElement>) {
@@ -2121,79 +2258,195 @@ function AudioToolsPage({ notify, onCreated }: { notify: (text: string, error?: 
     if (!file) return;
     audioBlobRef.current = file;
     setAudioName(file.name);
+    const ctx = t.ensureAudioContext();
+    file.arrayBuffer().then(bytes => ctx.decodeAudioData(bytes)).then(decoded => { t.setBuffer('source', decoded); setPickedAudioSeconds(Math.round(decoded.duration)); if (isEdit) setEditSourceSeconds(Math.round(decoded.duration)); }).catch(() => {});
+    if (isEdit) void transcribePickedFile(file);
   }
-
+  async function transcribePickedFile(file: Blob) {
+    setTranscript(null);
+    setTranscribing(true);
+    setErrorText('');
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      const result = await api<{ transcript: string | null }>('/audio-tools/transcribe', 'POST', { audioDataUrl: dataUrl, checkpoint, language: transcribeLanguage, whisper: whisperModel });
+      setTranscript(result.transcript || null);
+    } catch (error) { setTranscript(null); setErrorText(`텍스트 인식에 실패했습니다. ${(error as Error).message}`); }
+    finally { setTranscribing(false); }
+  }
   async function run() {
-    if (tool.audio === 'required' && !audioBlobRef.current) { setErrorText(`${tool.audioLabel}를 먼저 선택해 주세요.`); return; }
+    const runTools = categoryId === 'quality'
+      ? qualitySelection.map(id => AUK_TOOLS.find(item => item.id === id)).filter((item): item is AukTool => !!item)
+      : [tool];
+    if (!runTools.length) { setErrorText('실행할 기능을 선택해 주세요.'); return; }
+    if (runTools[0].audio === 'required' && !audioBlobRef.current) { setErrorText(`${runTools[0].audioLabel}를 먼저 선택해 주세요.`); return; }
+    if (isEdit) {
+      const runValues = { ...defaultsFor(editFunction.fields), ...fieldValues };
+      for (const field of editFunction.fields) {
+        if (field.type !== 'number' && !(runValues[field.key] || '').trim()) { setErrorText(`'${field.label}'를 입력해 주세요.`); return; }
+      }
+    } else {
+      for (const runTool of runTools) {
+        const runValues = { ...defaultsFor(runTool.fields), ...fieldValues };
+        for (const field of runTool.fields) {
+          if (field.type !== 'number' && !(runValues[field.key] || '').trim()) { setErrorText(`'${field.label}'를 입력해 주세요.`); return; }
+        }
+      }
+    }
     setRunning(true);
     setErrorText('');
-    setResultUrl(null);
+    t.stopPlayback();
     try {
-      const values = { ...Object.fromEntries(tool.fields.map(field => [field.key, field.placeholder])), ...fieldValues };
-      const instruction = tool.instruction(values);
       let audioDataUrl: string | undefined;
-      if (audioBlobRef.current) {
-        audioDataUrl = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result as string);
-          reader.onerror = () => reject(reader.error);
-          reader.readAsDataURL(audioBlobRef.current as Blob);
-        });
+      if (audioBlobRef.current) audioDataUrl = await readFileAsDataUrl(audioBlobRef.current);
+      for (const runTool of runTools) {
+        const runValues = { ...defaultsFor(runTool.fields), ...fieldValues };
+        const instruction = isEdit ? editInstruction(editFunctionId, runValues) : runTool.id === 'add-nonverbal' ? nonverbalInstruction(runValues, pickedAudioSeconds) : runTool.instruction(runValues);
+        // TTS output length: 0 means "let the normal human speaking pace decide", estimated
+        // from the text length. AudioAuK rejects seconds=0 when no reference audioId exists,
+        // so a computed positive value is sent whenever the user left it at 0.
+        const resolvedSeconds = runTool.showSeconds ? (seconds > 0 ? seconds : estimateSpeechSeconds(runValues.text || instruction)) : 0;
+        const result = await api<{ dataUrl: string }>('/audio-tools/auk', 'POST', { task: 'tts', instruction, audioDataUrl, checkpoint, seconds: resolvedSeconds });
+        audioDataUrl = result.dataUrl;
       }
-      // AudioAuK는 audioId(참고 음성)가 없는 순수 텍스트 TTS에는 반드시 양의 출력 길이(초)가 필요하다
-      // (0="원본 길이만큼"인데 원본이 없으니 거부됨) -- 오디오가 있는 작업은 0(원본과 동일 길이) 그대로.
-      const result = await api<{ dataUrl: string }>('/audio-tools/auk', 'POST', { task: 'tts', instruction, audioDataUrl, checkpoint, seconds: tool.audio === 'none' ? seconds : 0 });
-      resultDataUrlRef.current = result.dataUrl;
-      setResultUrl(result.dataUrl);
+      const finalUrl = audioDataUrl;
+      if (!finalUrl) throw new Error('결과 오디오가 없습니다.');
+      const ctx = t.ensureAudioContext();
+      const response = await fetch(finalUrl);
+      if (!response.ok) throw new Error('결과 오디오를 내려받지 못했습니다.');
+      const buffer = await ctx.decodeAudioData(await response.arrayBuffer());
+      t.setBuffer('output', buffer);
+      resultDataUrlRef.current = finalUrl;
     } catch (error) { setErrorText((error as Error).message); }
     finally { setRunning(false); }
   }
-
+  function handleCancel() {
+    t.stopPlayback();
+    t.setBuffer('output', null);
+    resultDataUrlRef.current = null;
+  }
   async function handleSave() {
     if (!resultDataUrlRef.current) return;
     setSaving(true);
     try {
-      const completed = await api<Project>('/audio-save', 'POST', { dataUrl: resultDataUrlRef.current, title: `오디오 도구 - ${tool.label}` });
+      const completed = await api<Project>('/audio-save', 'POST', { dataUrl: resultDataUrlRef.current, title: `Tools - ${tool.label}` });
       onCreated(completed);
       notify('결과를 라이브러리에 추가했습니다.');
     } catch (error) { setErrorText((error as Error).message); }
     finally { setSaving(false); }
   }
+  function renderField(field: AukField) {
+    const value = fieldValues[field.key] ?? '';
+    if (field.type === 'textarea') {
+      return <label className="at-field" key={field.key}>{field.label}<Textarea rows={5} className="at-textarea" value={value} onChange={event => setField(field, event.target.value)} placeholder={field.placeholder} disabled={running}/>{field.hint && <span className="field-hint">{field.hint}</span>}</label>;
+    }
+    return <label className="at-field" key={field.key}>{field.label}<Input type={field.type === 'number' ? 'number' : 'text'} value={value} onChange={event => setField(field, event.target.value)} placeholder={field.placeholder} disabled={running}/>{field.hint && <span className="field-hint">{field.hint}</span>}</label>;
+  }
 
   return <section className="library-page page-scroll">
     <div className="page-heading library-heading">
-      <div><span className="eyebrow">AudioAuK 기반</span><h1>오디오 도구<span className="small-badge">실험적</span></h1><p>완성곡과 무관하게 텍스트→음성 생성, 가사/대사 편집, 피치·속도·음량 조절, 음성 변형, 품질 개선을 바로 실행합니다.</p></div>
+      <div><span className="eyebrow">AudioAuK 기반</span><h1>Tools<span className="small-badge">실험적</span></h1><p>완성곡과 무관하게 텍스트→음성 생성, 가사/대사 편집, 피치·속도·음량 조절, 음성 변형, 품질 개선을 바로 실행합니다.</p></div>
     </div>
-    <div className="inline-note warning"><CircleHelp size={17}/><span>실험적 기능입니다 — AudioAuK(별도 로컬 서버)가 필요합니다. 처음 실행 시 자동으로 기동을 시도하며 시간이 걸릴 수 있습니다.</span></div>
-    <div className="form-section idea-section">
-      <div className="mode-switch" aria-label="도구 카테고리">
-        {AUK_TOOL_CATEGORIES.map(category => <button key={category.id} className={categoryId === category.id ? 'active' : ''} aria-pressed={categoryId === category.id} onClick={() => selectCategory(category.id)}>{category.label}</button>)}
+    <div className="audio-tools-tabs" role="tablist" aria-label="도구 카테고리">
+      {AUK_TOOL_CATEGORIES.map(category => <button key={category.id} type="button" className={categoryId === category.id ? 'active' : ''} aria-pressed={categoryId === category.id} onClick={() => selectCategory(category.id)}>{category.label}</button>)}
+    </div>
+    <div className="audio-tools-panel">
+      <div className="audio-tools-inputs">
+        <div className="at-section-head">모델 선택</div>
+        <div className="audio-tools-model-switch" role="group" aria-label="AuK 체크포인트">
+          <button type="button" className={checkpoint === 'flash' ? 'active' : ''} aria-pressed={checkpoint === 'flash'} onClick={() => setCheckpoint('flash')} disabled={running}>Flash</button>
+          <button type="button" className={checkpoint === 'base' ? 'active' : ''} aria-pressed={checkpoint === 'base'} onClick={() => setCheckpoint('base')} disabled={running}>Base</button>
+        </div>
+        <span className="field-hint">Flash는 빠르지만 지시문(말할 내용)을 덜 따릅니다. 문장이 섞여 나오면 Base를 선택하세요. 정확한 목소리가 필요하면 참조 목소리를 쓰는 TTS 생성 (Ref-T2S) 쪽이 안정적입니다.</span>
+        {tool.audio !== 'none' && isEdit && <div>
+          <div className="at-transcribe-options-head">Whisper Option 결정</div>
+          <div className="at-transcribe-options"><label>전사 언어<select value={transcribeLanguage} onChange={event => setTranscribeLanguage(event.target.value as typeof transcribeLanguage)} aria-label="전사 언어"><option value="auto">자동 감지</option><option value="korean">한국어</option><option value="english">영어</option></select></label><label>Whisper 모델<select value={whisperModel} onChange={event => setWhisperModel(event.target.value)} aria-label="Whisper 모델"><option value="tiny">tiny</option><option value="base">base</option><option value="small">small</option><option value="medium">medium</option><option value="large-v3">large-v3</option><option value="large-v3-turbo">large-v3-turbo</option></select></label></div>
+          <div className="at-section-head" style={{ marginTop: 18 }}>{tool.audioLabel} 선택</div>
+          <div className="voice-convert-topbar">
+            <Button variant="outline" className="voice-convert-file-btn" onClick={() => fileInputRef.current?.click()} disabled={running} title={audioName || undefined}>
+              <Upload size={14}/><span className="voice-convert-file-name">{audioName || `${tool.audioLabel} 선택${tool.audio === 'optional' ? ' (선택)' : ''}`}</span>
+            </Button>
+            <input ref={fileInputRef} type="file" accept="audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/mp4,audio/ogg" hidden onChange={handlePickFile}/>
+          </div>
+        </div>}
+        {tool.audio !== 'none' && !isEdit && categoryId !== 'tts' && <div>
+          <div className="at-section-head" style={{ marginTop: 18 }}>{tool.audioLabel} 선택</div>
+          <div className="voice-convert-topbar">
+            <Button variant="outline" className="voice-convert-file-btn" onClick={() => fileInputRef.current?.click()} disabled={running} title={audioName || undefined}>
+              <Upload size={14}/><span className="voice-convert-file-name">{audioName || `${tool.audioLabel} 선택${tool.audio === 'optional' ? ' (선택)' : ''}`}</span>
+            </Button>
+            <input ref={fileInputRef} type="file" accept="audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/mp4,audio/ogg" hidden onChange={handlePickFile}/>
+          </div>
+        </div>}
+        {categoryId !== 'edit' && <>
+          <div className="at-section-head">{categoryId === 'tts' ? 'Function 선택' : '기능 선택'}</div>
+          <div className="at-function-row" role="group" aria-label="기능 선택">
+            {toolsInCategory.map(item => <label key={item.id} className={`at-function${categoryId === 'quality' && (item.id === 'denoise-only' || item.id === 'dereverberate-only') && qualitySelection.includes('enhance-speech') ? ' blocked' : ''}`}><input type="checkbox" checked={categoryId === 'quality' ? qualitySelection.includes(item.id) : toolId === item.id} onChange={() => categoryId === 'quality' ? toggleQuality(item.id) : selectTool(item)} disabled={running || (categoryId === 'quality' && (item.id === 'denoise-only' || item.id === 'dereverberate-only') && qualitySelection.includes('enhance-speech'))}/>{item.label}</label>)}
+          </div>
+          {categoryId === 'quality' && <span className="field-hint">여러 기능을 함께 선택하면 선택한 순서대로 연속 실행됩니다.</span>}
+        </>}
+        {tool.audio !== 'none' && !isEdit && categoryId === 'tts' && <div>
+          <div className="at-section-head" style={{ marginTop: 18 }}>{tool.audioLabel} 선택</div>
+          <div className="voice-convert-topbar">
+            <Button variant="outline" className="voice-convert-file-btn" onClick={() => fileInputRef.current?.click()} disabled={running} title={audioName || undefined}>
+              <Upload size={14}/><span className="voice-convert-file-name">{audioName || `${tool.audioLabel} 선택${tool.audio === 'optional' ? ' (선택)' : ''}`}</span>
+            </Button>
+            <input ref={fileInputRef} type="file" accept="audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/mp4,audio/ogg" hidden onChange={handlePickFile}/>
+          </div>
+        </div>}
+        {isEdit && <>
+          <div className="at-section-head">기능 선택</div>
+          <div className="at-function-row" role="group" aria-label="편집 기능">
+            {EDIT_FUNCTIONS.map(fn => <label key={fn.id} className="at-function"><input type="checkbox" checked={editFunctionId === fn.id} onChange={() => selectEditFunction(fn.id)} disabled={running}/>{fn.label}</label>)}
+          </div>
+          <div className="at-function-fields">{editFunction.fields.map(field => renderField(field))}</div>
+        </>}
+        {tool.fields.map(field => renderField(field))}
+        {tool.showSeconds && <label className="at-field">출력 길이(초)<Input type="number" min={0} max={3600} value={seconds} onChange={event => setSeconds(Math.min(3600, Math.max(0, Number(event.target.value) || 0)))} disabled={running}/><span className="field-hint">0을 넣으면 일반적인 말하기 속도를 기준으로 텍스트 길이에서 시간을 계산하고, 숫자를 넣으면 그 길이(초)에 맞춰 만듭니다. 10초를 넘어가면 음성 환각(관련 없는 소리, 구절 반복 등)이 생길 수 있습니다.{(() => { const est = estimateSpeechSeconds(fieldValues.text || ''); return est > 10 ? ` 현재 텍스트는 약 ${est}초로 추정되니 문단 단위로 나눠 생성하세요.` : ''; })()}</span></label>}
+        {isEdit && <div className="at-field">
+          <span className="at-field-label">감지된 텍스트 (전사)</span>
+          {transcribing ? <div className="at-transcribing"><LoaderCircle className="spin"/>텍스트 인식 중...</div> : <Textarea rows={6} readOnly className="at-textarea at-readonly" value={transcript || '오디오를 선택하면 이곳에 인식된 가사/대사가 표시됩니다.'}/>}
+          <span className="field-hint">선택한 오디오의 내용을 미리 확인하고 편집 대상을 정확히 정할 수 있습니다.</span>
+        </div>}
+        {summarizeRun() && <p className="field-hint at-run-summary">{summarizeRun()}</p>}
+        {isEdit && editSourceSeconds > 20 && <p className="field-hint warning">선택한 오디오가 약 {editSourceSeconds}초입니다. AuK 편집은 20초 이하에서 안정적이며, 더 길면 결과가 노이즈/왜곡으로 무너질 수 있습니다. 편집할 구간만 잘라 사용해 주세요.</p>}
+        <Button onClick={() => void run()} disabled={running || (isEdit && transcribing)}>{running ? <LoaderCircle className="spin"/> : <Sparkles size={14}/>}{running ? '작업 중...' : '실행'}</Button>
+        {errorText && <p className="field-hint warning">{errorText}</p>}
       </div>
-      <div className="voice-convert-engine-switch" role="group" aria-label="도구 선택">
-        {toolsInCategory.map(item => <Button key={item.id} variant={toolId === item.id ? undefined : 'outline'} size="sm" onClick={() => selectTool(item)} disabled={running}>{item.label}</Button>)}
+      <div className="audio-tools-result">
+        {!sourceBuffer && !resultBuffer ? <div className="audio-tools-result-empty"><CircleHelp size={18}/><p>왼쪽에서 조건을 입력하고 "실행"을 누르면<br/>결과 오디오가 이곳에 표시됩니다.</p></div> : <>
+          {sourceBuffer && <div className={atRowClass('source', 'dry')}>
+            <div className="audio-compare-toolbar">
+              <button type="button" className="pp-waveform-label" aria-label="원본 재생/일시정지" onClick={() => t.handleKeyClick('source')}>{t.activeKey === 'source' && t.isPlaying ? <Pause size={15}/> : <Play size={15}/>}</button>
+              <span className="stem-label audio-compare-label"><strong>원본</strong>{audioName && <small title={audioName}>{audioName}</small>}<span className="small-badge">입력</span></span>
+              <span className="pp-seek-time audio-compare-duration">{formatSeekTime(sourceBuffer.duration)}</span>
+            </div>
+            <div className="audio-compare-charts">
+              <CompareWaveform peaks={t.peaksForKey('source')} fraction={t.positionSeconds / (sourceBuffer.duration || 1)} processed={false}/>
+              <CompareSpectrogram buffer={sourceBuffer} fraction={t.positionSeconds / (sourceBuffer.duration || 1)}/>
+            </div>
+          </div>}
+          <div className={atRowClass('output', 'wet')}>
+            <div className="audio-compare-toolbar">
+              <button type="button" className="pp-waveform-label" aria-label="처리본 재생/일시정지" onClick={() => t.handleKeyClick('output')} disabled={!resultBuffer}>{t.activeKey === 'output' && t.isPlaying ? <Pause size={15}/> : <Play size={15}/>}</button>
+              <span className="stem-label audio-compare-label"><strong>처리본</strong><small>{tool.label}</small>{resultBuffer ? <span className="small-badge">완료</span> : <span className="small-badge">대기</span>}</span>
+              {resultBuffer && <span className="pp-seek-time audio-compare-duration">{formatSeekTime(resultBuffer.duration)}</span>}
+            </div>
+            <div className="audio-compare-charts">
+              <CompareWaveform peaks={t.peaksForKey('output')} fraction={t.positionSeconds / (resultBuffer?.duration || 1)} processed/>
+              <CompareSpectrogram buffer={resultBuffer} fraction={t.positionSeconds / (resultBuffer?.duration || 1)}/>
+            </div>
+            {!resultBuffer && <span className="field-hint audio-tools-pending-hint">아직 결과가 없습니다. 왼쪽에서 "실행"을 누르면 처리본이 여기에 표시됩니다.</span>}
+          </div>
+          <SeekRow t={t}/>
+          <div className="dialog-actions pp-dialog-actions">
+            <TransportControls t={t} disabled={!sourceBuffer && !resultBuffer}/>
+            <div className="pp-dialog-actions-right">
+              <Button variant="outline" onClick={handleCancel} disabled={saving}>취소</Button>
+              <Button onClick={() => void handleSave()} disabled={saving || !resultBuffer}>{saving ? <LoaderCircle className="spin"/> : <Save size={15}/>}저장</Button>
+            </div>
+          </div>
+        </>}
       </div>
-      {tool.fields.map(field => <label className="wide-field" key={field.key}>{field.label}
-        <Input type={field.type === 'number' ? 'number' : 'text'} value={fieldValues[field.key] ?? field.placeholder} onChange={event => setFieldValues({ ...fieldValues, [field.key]: event.target.value })} disabled={running}/>
-      </label>)}
-      {tool.audio === 'none' && <label className="wide-field">출력 길이(초) -- 참고할 오디오가 없어 직접 정해야 합니다
-        <Input type="number" min={1} max={3600} value={seconds} onChange={event => setSeconds(Math.max(1, Number(event.target.value) || 1))} disabled={running}/>
-      </label>}
-      {tool.audio !== 'none' && <div className="voice-convert-topbar">
-        <Button variant="outline" className="voice-convert-file-btn" onClick={() => fileInputRef.current?.click()} disabled={running} title={audioName || undefined}>
-          <Upload size={14}/><span className="voice-convert-file-name">{audioName || `${tool.audioLabel} 선택${tool.audio === 'optional' ? ' (선택)' : ''}`}</span>
-        </Button>
-        <input ref={fileInputRef} type="file" accept="audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/mp4,audio/ogg" hidden onChange={handlePickFile}/>
-      </div>}
-      <div className="voice-convert-engine-switch" role="group" aria-label="AuK 체크포인트">
-        <Button variant={checkpoint === 'flash' ? undefined : 'outline'} size="sm" onClick={() => setCheckpoint('flash')} disabled={running}>Flash</Button>
-        <Button variant={checkpoint === 'base' ? undefined : 'outline'} size="sm" onClick={() => setCheckpoint('base')} disabled={running}>Base</Button>
-      </div>
-      <Button onClick={() => void run()} disabled={running}>{running ? <LoaderCircle className="spin"/> : <Sparkles size={14}/>}실행</Button>
-      {errorText && <p className="field-hint warning">{errorText}</p>}
-      {resultUrl && <div className="form-section">
-        <audio src={resultUrl} controls/>
-        <Button onClick={() => void handleSave()} disabled={saving}>{saving ? <LoaderCircle className="spin"/> : <Save size={15}/>}라이브러리에 저장</Button>
-      </div>}
     </div>
   </section>;
 }
@@ -2294,6 +2547,8 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
   const [preparing, setPreparing] = useState(false);
   const [engine, setEngine] = useState<TimbreEngine>('seed_vc');
   const [checkpoint, setCheckpoint] = useState<'flash' | 'base'>('flash');
+  const [whisperModel, setWhisperModel] = useState('large-v3');
+  const [aukLanguage, setAukLanguage] = useState<'auto' | 'korean' | 'english'>('auto');
   const [textDescription, setTextDescription] = useState('');
   const [ddspReferencePaths, setDdspReferencePaths] = useState<string[]>([]);
   const [ddspTargetStep, setDdspTargetStep] = useState(40000);
@@ -2307,7 +2562,13 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
   const [errorText, setErrorText] = useState('');
   const [warningText, setWarningText] = useState('');
   const [transcript, setTranscript] = useState<string | null>(null);
+  // 앱에서 만든 곡이면 오디오 옆 {제목}.json에 그대로 저장된 가사가 있다 -- Whisper 전사(환각 발생)
+  // 대신 이 가사를 AuK에 전달하고 표시 용도로도 쓴다. 외부 오디오면 null로 두고 전사에 의존한다.
+  const [sourceLyrics, setSourceLyrics] = useState<string | null>(null);
   const [ddspJob, setDdspJob] = useState<DdspJobStatus | null>(null);
+  const [separatingRef, setSeparatingRef] = useState(false);
+  const [refVocalError, setRefVocalError] = useState<string | null>(null);
+  const referenceSepTokenRef = useRef(0);
   const ddspResultLoadedRef = useRef<string | null>(null);
   useEffect(() => () => t.closeContext(), []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -2353,15 +2614,6 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ddspJob, previewId]);
 
-  async function readFileAsDataUrl(blob: Blob): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result as string);
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(blob);
-    });
-  }
-
   async function pickSource(relPath: string) {
     setErrorText('');
     t.setBuffer('result', null); t.setBuffer('source-vocal', null); t.setBuffer('source-instrumental', null);
@@ -2370,6 +2622,11 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
     setDdspJob(null);
     ddspResultLoadedRef.current = null;
     setPreparing(true);
+    setTranscript(null);
+    setSourceLyrics(null);
+    // 앱에서 만든 저장곡이면 오디오와 나란한 {제목}.json에 가사가 있다 -- 있으면 AuK 전사를 건너뛴다.
+    const jsonPath = relPath.replace(/\.[^.]+$/, '.json');
+    api<{ lyrics: string | null }>(`/library/meta?path=${encodeURIComponent(jsonPath)}`).then(meta => { if (meta.lyrics) setSourceLyrics(meta.lyrics); }).catch(() => {});
     try {
       const response = await fetch(`/api/library/file?path=${encodeURIComponent(relPath)}`);
       if (!response.ok) throw new Error('파일을 불러오지 못했습니다.');
@@ -2410,7 +2667,29 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
         const buffer = await ctx.decodeAudioData(await blob.arrayBuffer());
         t.setBuffer('reference', buffer);
       } catch { t.setBuffer('reference', null); }
+      void separateReferenceVocal(blob);
     } catch (error) { setErrorText((error as Error).message); }
+  }
+  // "참조 보컬" 행용: 참조 오디오를 서버에서 STEM 분리해 vocals만 로드한다. 분리 실패는 치명적이지
+  // 않으므로 조용히 참조 보컬 행만 비워 두고, 연속 클릭 시 마지막 선택만 적용되도록 토큰으로 거른다.
+  async function separateReferenceVocal(blob: Blob) {
+    const token = ++referenceSepTokenRef.current;
+    t.setBuffer('reference-vocal', null);
+    setRefVocalError(null);
+    setSeparatingRef(true);
+    try {
+      const dataUrl = await readFileAsDataUrl(blob);
+      const result = await api<{ vocalsDataUrl: string }>('/timbre-transform/reference/separate', 'POST', { referenceDataUrl: dataUrl });
+      if (token !== referenceSepTokenRef.current) return;
+      const ctx = t.ensureAudioContext();
+      const buffer = await ctx.decodeAudioData(await (await fetch(result.vocalsDataUrl)).arrayBuffer());
+      t.setBuffer('reference-vocal', buffer);
+    } catch (error) {
+      if (token !== referenceSepTokenRef.current) return;
+      t.setBuffer('reference-vocal', null);
+      setRefVocalError((error as Error).message || '참조 보컬 분리에 실패했습니다.');
+    }
+    finally { if (token === referenceSepTokenRef.current) setSeparatingRef(false); }
   }
 
   // Seed-VC/Vevo2/AuK 적용은 서버가 실시간 %를 안 주므로(DDSP-SVC처럼 스텝 단위 진행이 없음),
@@ -2463,7 +2742,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
     try {
       await withEstimatedProgress(async () => {
         const referenceDataUrl = referenceBlobRef.current ? await readFileAsDataUrl(referenceBlobRef.current) : undefined;
-        const result = await api<{ ok: boolean; warning: string | null; transcript: string | null }>(`/timbre-transform/${previewId}/auk/apply`, 'POST', { referenceDataUrl, textDescription: textDescription.trim() || undefined, checkpoint });
+        const result = await api<{ ok: boolean; warning: string | null; transcript: string | null }>(`/timbre-transform/${previewId}/auk/apply`, 'POST', { referenceDataUrl, textDescription: textDescription.trim() || undefined, checkpoint, lyrics: sourceLyrics || undefined, whisper: whisperModel, language: aukLanguage });
         setWarningText(result.warning || '');
         setTranscript(result.transcript);
         const ctx = t.ensureAudioContext();
@@ -2529,10 +2808,15 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
     : !!previewId && !!referenceName;
   const resultBuffer = t.bufferForKey('result');
   const ddspProgress = ddspJob?.targetStep ? Math.min(100, Math.round(ddspJob.currentStep / ddspJob.targetStep * 100)) : 0;
+  // 레거시 목록은 원곡/참고곡/변환곡을 색으로 구분하므로, 재생 중 글로우도 그 가족 색을 따르게 한다.
+  const legacyRowClass = (key: string, base: string) => {
+    const family = key === 'source' || key === 'source-vocal' || key === 'source-instrumental' ? 'source' : key === 'reference' || key === 'reference-vocal' ? 'reference' : 'processed';
+    return `${base}${t.activeKey === key && t.isPlaying ? ` pp-row-playing-${family}` : ''}`;
+  };
 
   return <Dialog open onOpenChange={next => { if (!next) onClose(); }}>
     <DialogContent className="studio-dialog audio-compare-dialog timbre-transform-dialog">
-      <DialogTitle>음색 변조 (실험적)</DialogTitle>
+      <DialogTitle>음색 변조 (평가중)</DialogTitle>
       <DialogDescription>라이브러리에서 원본과 참조 audio를 고르고, 모델을 골라 음색을 바꿔 보세요.</DialogDescription>
       <div className="timbre-transform-body">
         <div className="timbre-left-panel">
@@ -2550,10 +2834,14 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
           </div>
 
           {engine === 'auk' && <div className="timbre-engine-options">
+            <div className="timbre-auk-option-head" style={{ marginTop: 18 }}>모델 결정</div>
             <div className="voice-convert-engine-switch" role="group" aria-label="AuK 체크포인트">
               <Button variant={checkpoint === 'flash' ? undefined : 'outline'} size="sm" onClick={() => setCheckpoint('flash')} disabled={busy}>Flash</Button>
               <Button variant={checkpoint === 'base' ? undefined : 'outline'} size="sm" onClick={() => setCheckpoint('base')} disabled={busy}>Base</Button>
             </div>
+            <div className="timbre-auk-option-head" style={{ marginTop: 16 }}>Whisper Option 결정</div>
+            <div className="timbre-transcribe-options">전사 언어<select value={aukLanguage} onChange={event => setAukLanguage(event.target.value as 'auto' | 'korean' | 'english')} aria-label="전사 언어" disabled={busy}><option value="auto">자동 감지</option><option value="korean">한국어</option><option value="english">영어</option></select>Whisper 모델<select value={whisperModel} onChange={event => setWhisperModel(event.target.value)} aria-label="Whisper 모델" disabled={busy}><option value="tiny">tiny</option><option value="base">base</option><option value="small">small</option><option value="medium">medium</option><option value="large-v3">large-v3</option><option value="large-v3-turbo">large-v3-turbo</option></select></div>
+            <p className="field-hint">가사가 저장된 곡은 전사 없이 그대로 쓰므로 이 전사 선택은 가사가 없는 외부 오디오에서만 적용됩니다.</p>
             <Textarea value={textDescription} onChange={event => setTextDescription(event.target.value)} placeholder="목표 음색 텍스트 설명 (예: 따뜻하고 부드러운 남성 재즈 보컬) -- 참조가 없으면 필수, 있으면 스타일 수식어로 함께 사용됩니다" disabled={busy} rows={3}/>
             <p className="field-hint">주의: 참조 audio를 쓰면 결과는 원곡 멜로디가 아니라 그 목소리로 가사를 다시 말하는(TTS) 형태입니다. 30초를 넘는 긴 곡에서는 결과가 불안정할 수 있습니다.</p>
           </div>}
@@ -2582,46 +2870,48 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
           {preparing && <div className="stem-loading"><LoaderCircle className="spin"/>원본 오디오 준비 중(보컬/악기 분리)...</div>}
           {errorText && <p className="field-hint warning">{errorText}</p>}
           {warningText && <p className="field-hint warning">{warningText}</p>}
-          {transcript && <p className="field-hint">AuK가 인식한 원곡 가사: {transcript}</p>}
+          {(sourceLyrics || transcript) && <p className="field-hint">{sourceLyrics ? '원곡 가사 (저장된 가사)' : 'AuK가 인식한 원곡 가사'}: {sourceLyrics || transcript}</p>}
         </div>
 
         <div className="timbre-main-panel">
           {!sourceName ? <p className="field-hint">왼쪽에서 "원본 audio"를 먼저 골라 주세요.</p> : <>
             {isLegacy ? <div className="stem-list timbre-legacy-list">
-              <div className={t.rowClass('source', 'stem-row')}>
+              <div className={legacyRowClass('source', 'stem-row')}>
                 <button type="button" className="pp-waveform-label" aria-label="원곡 재생/일시정지" onClick={() => t.handleKeyClick('source')} disabled={!t.peaksForKey('source').length}>{t.activeKey === 'source' && t.isPlaying ? <Pause size={15}/> : <AudioLines size={15}/>}</button>
                 <span className="stem-label">원곡</span>
-                <Waveform peaks={t.peaksForKey('source')} playedFraction={t.playedFraction}/>
+                <Waveform peaks={t.peaksForKey('source')} playedFraction={t.playedFraction} variant="source"/>
               </div>
-              <div className={t.rowClass('source-vocal', 'stem-row stem-row-sub')}>
+              <div className={legacyRowClass('source-vocal', 'stem-row stem-row-sub')}>
                 <button type="button" className="pp-waveform-label" aria-label="원곡 보컬 재생/일시정지" onClick={() => t.handleKeyClick('source-vocal')} disabled={!t.peaksForKey('source-vocal').length}>{t.activeKey === 'source-vocal' && t.isPlaying ? <Pause size={15}/> : <Mic size={15}/>}</button>
                 <span className="stem-label">원곡 보컬</span>
-                <Waveform peaks={t.peaksForKey('source-vocal')} playedFraction={t.playedFraction}/>
+                <Waveform peaks={t.peaksForKey('source-vocal')} playedFraction={t.playedFraction} variant="source"/>
               </div>
-              <div className={t.rowClass('source-instrumental', 'stem-row stem-row-sub')}>
+              <div className={legacyRowClass('source-instrumental', 'stem-row stem-row-sub')}>
                 <button type="button" className="pp-waveform-label" aria-label="원곡 악기 재생/일시정지" onClick={() => t.handleKeyClick('source-instrumental')} disabled={!t.peaksForKey('source-instrumental').length}>{t.activeKey === 'source-instrumental' && t.isPlaying ? <Pause size={15}/> : <Guitar size={15}/>}</button>
                 <span className="stem-label">원곡 악기</span>
-                <Waveform peaks={t.peaksForKey('source-instrumental')} playedFraction={t.playedFraction}/>
+                <Waveform peaks={t.peaksForKey('source-instrumental')} playedFraction={t.playedFraction} variant="source"/>
               </div>
-              <div className={t.rowClass('reference', 'stem-row')}>
+              <div className={legacyRowClass('reference', 'stem-row')}>
                 <button type="button" className="pp-waveform-label" aria-label="참고곡 재생/일시정지" onClick={() => t.handleKeyClick('reference')} disabled={!t.peaksForKey('reference').length}>{t.activeKey === 'reference' && t.isPlaying ? <Pause size={15}/> : <Mic size={15}/>}</button>
                 <span className="stem-label">참고곡</span>
-                <Waveform peaks={t.peaksForKey('reference')} playedFraction={t.playedFraction}/>
+                <Waveform peaks={t.peaksForKey('reference')} playedFraction={t.playedFraction} variant="reference"/>
               </div>
-              <div className={t.rowClass('result', 'stem-row')}>
+              <div className={legacyRowClass('reference-vocal', 'stem-row stem-row-sub')}>
+                <button type="button" className="pp-waveform-label" aria-label="참조 보컬 재생/일시정지" onClick={() => t.handleKeyClick('reference-vocal')} disabled={!t.peaksForKey('reference-vocal').length}>{t.activeKey === 'reference-vocal' && t.isPlaying ? <Pause size={15}/> : <Mic size={15}/>}</button>
+                <span className="stem-label">참조 보컬</span>
+                {separatingRef && !t.peaksForKey('reference-vocal').length ? <span className="stem-separating-note"><LoaderCircle className="spin"/>보컬 분리 중...</span>
+                  : refVocalError ? <span className="stem-separating-note stem-separating-error"><X size={13}/>{refVocalError}</span>
+                  : <Waveform peaks={t.peaksForKey('reference-vocal')} playedFraction={t.playedFraction} variant="reference"/>}
+              </div>
+              <div className={legacyRowClass('result', 'stem-row')}>
                 <button type="button" className="pp-waveform-label" aria-label="변환곡 재생/일시정지" onClick={() => t.handleKeyClick('result')} disabled={!t.peaksForKey('result').length}>{t.activeKey === 'result' && t.isPlaying ? <Pause size={15}/> : <Combine size={15}/>}</button>
                 <span className="stem-label">변환곡</span>
                 <Waveform peaks={t.peaksForKey('result')} playedFraction={t.playedFraction} variant="processed"/>
               </div>
-              <div className={t.rowClass('result-vocal', 'stem-row stem-row-sub')}>
+              <div className={legacyRowClass('result-vocal', 'stem-row stem-row-sub')}>
                 <button type="button" className="pp-waveform-label" aria-label="변환곡 보컬 재생/일시정지" onClick={() => t.handleKeyClick('result-vocal')} disabled={!t.peaksForKey('result-vocal').length}>{t.activeKey === 'result-vocal' && t.isPlaying ? <Pause size={15}/> : <Mic size={15}/>}</button>
                 <span className="stem-label">변환곡 보컬</span>
                 <Waveform peaks={t.peaksForKey('result-vocal')} playedFraction={t.playedFraction} variant="processed"/>
-              </div>
-              <div className={t.rowClass('result-instrumental', 'stem-row stem-row-sub')}>
-                <button type="button" className="pp-waveform-label" aria-label="변환곡 악기 재생/일시정지" onClick={() => t.handleKeyClick('result-instrumental')} disabled={!t.peaksForKey('result-instrumental').length}>{t.activeKey === 'result-instrumental' && t.isPlaying ? <Pause size={15}/> : <Guitar size={15}/>}</button>
-                <span className="stem-label">변환곡 악기</span>
-                <Waveform peaks={t.peaksForKey('result-instrumental')} playedFraction={t.playedFraction} variant="processed"/>
               </div>
             </div> : <div className="stem-list">
               <div className={t.rowClass('source', 'stem-row')}>
@@ -2779,9 +3069,12 @@ function AudioRestoreDialog({ file, onClose, notify, onCreated }: { file: File; 
     return playOffsetRef.current + (ctx.currentTime - playStartCtxTimeRef.current) * rateRef.current;
   }
   function playKey(key: string, atPosition?: number) {
-    const ctx = audioCtxRef.current;
+    const ctx = audioCtxRef.current || ensureAudioContext();
     const buffer = bufferForKey(key);
-    if (!ctx || !buffer) return;
+    if (!buffer) return;
+    // A suspended context (created after an await) stays silent until resumed from a
+    // user gesture. Every play click is such a gesture, so resume before starting.
+    if (ctx.state !== 'running') void ctx.resume();
     const position = atPosition !== undefined ? atPosition : currentPosition();
     const clamped = Math.max(0, Math.min(position, Math.max(0, buffer.duration - 0.02)));
     currentSourceRef.current?.stop();
@@ -3004,6 +3297,9 @@ function AudioCompareDialog({ onClose, notify, onCreated }: { onClose: () => voi
     const ctx = audioCtxRef.current;
     const buffer = bufferForKey(key);
     if (!ctx || !buffer) return;
+    // A suspended context (created after an await) stays silent until resumed from a
+    // user gesture. Every play click is such a gesture, so resume before starting.
+    if (ctx.state !== 'running') void ctx.resume();
     const position = atPosition !== undefined ? atPosition : currentPosition();
     const clamped = Math.max(0, Math.min(position, Math.max(0, buffer.duration - 0.02)));
     currentSourceRef.current?.stop();
@@ -3868,7 +4164,7 @@ export default function Studio() {
     return <section className="library-page page-scroll"><div className="page-heading library-heading"><div><span className="eyebrow">심볼릭 작곡 보관함</span><h1>ABC 악보</h1><p>열기로 검사·수정하고, 더블 클릭하면 지금 곡에 바로 불러옵니다.</p></div><div className="playlist-detail-actions"><Button variant="ghost" size="icon" aria-label={settings.viewMode === 'card' ? '목록 보기' : '카드 보기'} onClick={() => void setViewMode(settings.viewMode === 'card' ? 'list' : 'card')}>{settings.viewMode === 'card' ? <ListMusic/> : <LayoutGrid/>}</Button><Button onClick={() => navigate('create')}><Plus/>만들기로 이동</Button></div></div>{abcNotes.length ? <div className={`project-list ${settings.viewMode === 'card' ? 'card-view' : ''}`}>{abcNotes.map(note => <article className="song-card status-abc" key={note.id}><button className="song-symbol status-abc" aria-label={`${note.title} 열기`} onDoubleClick={() => loadAbcNote(note)} onClick={() => openAbcNote(note)}>{note.coverPath ? <img className="song-cover" src={abcNoteCoverUrl(note)} alt=""/> : <FileText size={24}/>}</button><button className="song-info" onDoubleClick={() => loadAbcNote(note)} onClick={() => openAbcNote(note)}><strong>{note.title}</strong><p>{new Date(note.createdAt).toLocaleDateString('ko-KR')}</p></button><Popover><PopoverTrigger render={<Button variant="ghost" size="icon" aria-label={`${note.title} 더보기`}/>}><MoreVertical/></PopoverTrigger><PopoverContent className="song-menu" align="end"><button className="song-menu-item" onClick={() => openAbcNote(note)}><Pencil size={15}/>열기</button><button className="song-menu-item" onClick={() => loadAbcNote(note)}><ArrowRight size={15}/>불러오기</button><button className="song-menu-item" onClick={() => openAbcNoteCoverPicker(note)}><ImageIcon size={15}/>앨범 표지 {note.coverPath ? '변경' : '등록'}</button>{note.coverPath && <button className="song-menu-item" onClick={() => void deleteAbcNoteCover(note)}><X size={15}/>앨범 표지 삭제</button>}<button className="song-menu-item danger" onClick={() => void deleteAbcNote(note)}><Trash2 size={15}/>삭제</button></PopoverContent></Popover></article>)}</div> : <div className="empty-library"><div className="empty-icon"><FileText size={42} strokeWidth={1.25}/></div><h2>저장된 악보가 없어요</h2><p>만들기 화면에서 심볼릭 작곡을 만들고 "라이브러리에 저장"을 눌러 보세요.</p></div>}</section>;
   }
   return <div className="studio-shell">
-    <aside className={`sidebar ${mobileNav ? 'mobile-open' : ''}`}><button className="brand" onClick={() => navigate('create')} aria-label="SongYUE2 만들기로 이동"><span className="brand-symbol"><AudioLines size={25}/></span><span>Song<b>YUE2</b><small>by madwind</small></span></button><div className="sidebar-main"><nav aria-label="주 메뉴">{([{ id: 'create', icon: Sparkles }, { id: 'home', icon: Home }, { id: 'projects', icon: Folder }, { id: 'library', icon: ListMusic }, { id: 'playlists', icon: ListPlus }, { id: 'abc', icon: FileText }, { id: 'favorites', icon: Heart }] as const).map(({ id, icon: Icon }) => <button className={`nav-item ${page === id ? 'active' : ''}`} onClick={() => navigate(id)} key={id} aria-current={page === id ? 'page' : undefined}><Icon size={19}/><span>{titles[id]}</span>{id === 'create' && <Plus size={15} className="nav-plus"/>}</button>)}</nav><div className="sidebar-divider"/><div className="sidebar-subhead"><span>최근 프로젝트</span><button aria-label="프로젝트 보기" onClick={() => navigate('projects')}><Plus size={14}/></button></div>{(() => { const recentDrafts = projects.filter(item => item.status === 'draft').slice(0, 4); return recentDrafts.length ? recentDrafts.map(item => <button className="recent-item" key={item.id} onClick={() => loadProject(item)}><span className="recent-dot"/>{item.title}</button>) : <p className="sidebar-empty">새로운 아이디어가<br/>음악이 되는 곳.</p>; })()}</div><div className="sidebar-bottom"><nav aria-label="도구 메뉴"><button className="nav-item" onClick={() => { setCompareOpen(true); setMobileNav(false); }}><GitCompare size={18}/>음원 비교</button><button className={`nav-item ${page === 'restore' ? 'active' : ''}`} onClick={() => navigate('restore')}><Upload size={18}/>음원 복원 (실험적)</button><button className="nav-item" onClick={() => { setTimbreTransformOpen(true); setMobileNav(false); }}><WandSparkles size={18}/>음색 변조 (실험적)</button><button className={`nav-item ${page === 'tools' ? 'active' : ''}`} onClick={() => navigate('tools')}><SlidersHorizontal size={18}/>오디오 도구 (실험적)</button><button className={`nav-item ${page === 'models' ? 'active' : ''}`} onClick={() => navigate('models')}><Cpu size={18}/>모델 관리</button><button className={`nav-item ${page === 'settings' ? 'active' : ''}`} onClick={() => navigate('settings')}><Settings2 size={18}/>설정</button><button className="nav-item" onClick={() => { setHelp(true); setMobileNav(false); }}><CircleHelp size={18}/>도움말</button></nav><div className="profile"><span className="avatar"><Headphones size={18}/></span><div>나의 스튜디오<small>로컬 워크스페이스</small></div><span className="version">0.1</span></div></div></aside>
+    <aside className={`sidebar ${mobileNav ? 'mobile-open' : ''}`}><button className="brand" onClick={() => navigate('create')} aria-label="SongYUE2 만들기로 이동"><span className="brand-symbol"><AudioLines size={25}/></span><span>Song<b>YUE2</b><small>by madwind</small></span></button><div className="sidebar-main"><nav aria-label="주 메뉴">{([{ id: 'create', icon: Sparkles }, { id: 'home', icon: Home }, { id: 'projects', icon: Folder }, { id: 'library', icon: ListMusic }, { id: 'playlists', icon: ListPlus }, { id: 'abc', icon: FileText }, { id: 'favorites', icon: Heart }] as const).map(({ id, icon: Icon }) => <button className={`nav-item ${page === id ? 'active' : ''}`} onClick={() => navigate(id)} key={id} aria-current={page === id ? 'page' : undefined}><Icon size={19}/><span>{titles[id]}</span>{id === 'create' && <Plus size={15} className="nav-plus"/>}</button>)}</nav><div className="sidebar-divider"/><div className="sidebar-subhead"><span>최근 프로젝트</span><button aria-label="프로젝트 보기" onClick={() => navigate('projects')}><Plus size={14}/></button></div>{(() => { const recentDrafts = projects.filter(item => item.status === 'draft').slice(0, 4); return recentDrafts.length ? recentDrafts.map(item => <button className="recent-item" key={item.id} onClick={() => loadProject(item)}><span className="recent-dot"/>{item.title}</button>) : <p className="sidebar-empty">새로운 아이디어가<br/>음악이 되는 곳.</p>; })()}</div><div className="sidebar-bottom"><nav aria-label="도구 메뉴"><button className="nav-item" onClick={() => { setCompareOpen(true); setMobileNav(false); }}><GitCompare size={18}/>음원 비교</button><button className={`nav-item ${page === 'restore' ? 'active' : ''}`} onClick={() => navigate('restore')}><Upload size={18}/>음원 복원 (실험적)</button><button className="nav-item" onClick={() => { setTimbreTransformOpen(true); setMobileNav(false); }}><WandSparkles size={18}/>음색 변조 (평가중)</button><button className={`nav-item ${page === 'tools' ? 'active' : ''}`} onClick={() => navigate('tools')}><SlidersHorizontal size={18}/>Tools (실험적)</button><button className={`nav-item ${page === 'models' ? 'active' : ''}`} onClick={() => navigate('models')}><Cpu size={18}/>모델 관리</button><button className={`nav-item ${page === 'settings' ? 'active' : ''}`} onClick={() => navigate('settings')}><Settings2 size={18}/>설정</button><button className="nav-item" onClick={() => { setHelp(true); setMobileNav(false); }}><CircleHelp size={18}/>도움말</button></nav><div className="profile"><span className="avatar"><Headphones size={18}/></span><div>나의 스튜디오<small>로컬 워크스페이스</small></div><span className="version">0.1</span></div></div></aside>
     {mobileNav && <button className="nav-scrim" aria-label="메뉴 닫기" onClick={() => setMobileNav(false)}/>}
     <main className="main-shell"><header className="topbar"><div className="topbar-title"><Button variant="ghost" size="icon" className="mobile-menu" aria-label="메뉴 열기" onClick={() => setMobileNav(true)}><Menu/></Button><span className="breadcrumb">작업 공간</span><ChevronRight size={14}/><strong>{titles[page]}</strong></div><Popover open={modelOpen} onOpenChange={setModelOpen}><PopoverTrigger render={<Button variant="outline" className="model-trigger" aria-label="음악 모델 선택"/>}><AudioLines size={17}/><span>{model.name}</span><span className="model-recommended">{model.id === 'yue2-q4' ? '추천' : model.engine}</span><ChevronDown size={15}/></PopoverTrigger><PopoverContent className="model-menu" align="start"><div className="menu-heading">음악 생성 모델<span>새 작업에 적용할 모델을 선택하세요</span></div>{models.map(item => <button key={item.id} className={`model-option ${draft.modelId === item.id ? 'selected' : ''}`} disabled={item.selectable === false} onClick={() => { if (item.selectable === false) return; update({ modelId: item.id }); setModelOpen(false); }}><Cpu size={18}/><span><strong>{item.name}<em>{item.badge}</em></strong><small>{item.detail} · {item.size}</small></span>{draft.modelId === item.id && <Check size={17}/>}</button>)}<div className="model-menu-footer">모델 파일과 실행 엔진의 준비 상태는 별도로 확인합니다.<button onClick={() => { navigate('models'); setModelOpen(false); }}>모델 관리 <ArrowRight size={13}/></button></div></PopoverContent></Popover><div className="device-status"><span className={`status-dot ${online ? '' : 'offline'}`}/><span>{online ? '로컬 연결됨' : '로컬 연결 대기'}</span><span className="device-divider"/><Cpu size={14}/><span>RTX 5070 <span className="muted">· 12 GB</span></span></div></header>
     {page === 'create' ? <div className="creation-layout"><section className="composer" aria-label="노래 편집기"><div className="composer-scroll"><div className="composer-heading"><div><h1>어떤 노래를 만들까요?</h1></div><Music2 size={24}/></div><div className="mode-switch" aria-label="제작 모드"><button className={draft.mode === 'simple' ? 'active' : ''} aria-pressed={draft.mode === 'simple'} onClick={() => update({ mode: 'simple' })}>간편 모드</button><button className={draft.mode === 'custom' ? 'active' : ''} aria-pressed={draft.mode === 'custom'} onClick={() => update({ mode: 'custom' })}>직접 만들기<SlidersHorizontal size={14}/></button></div><div className="mode-switch vocal-mode-switch" aria-label="보컬 여부"><button className={!draft.instrumental ? 'active' : ''} aria-pressed={!draft.instrumental} onClick={() => update({ instrumental: false })}><Mic size={14}/>보컬+악기</button><button className={draft.instrumental ? 'active' : ''} aria-pressed={draft.instrumental} onClick={() => update({ instrumental: true })}><Guitar size={14}/>악기만</button></div>

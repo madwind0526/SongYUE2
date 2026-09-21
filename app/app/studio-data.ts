@@ -62,7 +62,7 @@ export const providers: { id: Provider; label: string; mark: string; description
   { id: 'gemini', label: 'Gemini', mark: '✦', description: 'Google AI API' },
 ];
 export type Example = { id: string; title: string; genre?: string; caption?: string; color?: string; style: string; lyrics: string; createdAt?: string };
-export const titles: Record<Page, string> = { create: '만들기', home: '내 홈', library: '내 라이브러리', projects: '프로젝트', favorites: '좋아요', playlists: '재생목록', abc: 'ABC 악보', restore: '음원 복원', tools: '오디오 도구', models: '모델 관리', settings: '설정' };
+export const titles: Record<Page, string> = { create: '만들기', home: '내 홈', library: '내 라이브러리', projects: '프로젝트', favorites: '좋아요', playlists: '재생목록', abc: 'ABC 악보', restore: '음원 복원', tools: 'Tools', models: '모델 관리', settings: '설정' };
 export const gb = (bytes = 0) => `${(bytes / 1e9).toFixed(2)} GB`;
 export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   const sending = method !== 'GET';

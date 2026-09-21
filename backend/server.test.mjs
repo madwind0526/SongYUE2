@@ -1238,6 +1238,31 @@ test('음색 변조 - 기존 방식(Seed-VC) 탭: prepare가 원본을 한 번�
   assert.match(noModel.data.error, /Seed-VC/);
 });
 
+test('음색 변조 - 참조 보컬: 참조 오디오를 mel_band_roformer로 분리해 vocals dataUrl을 돌려준다 (오디오 없음 400)', async t => {
+  resetEnv();
+  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-timbre-ref-vocal-'));
+  const { enginePath } = await setUpEngine(root);
+  const fakeSpawn = makeFakeSpawn();
+  const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}), spawnImpl: fakeSpawn.spawnImpl });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const call = async (route, method = 'GET', payload) => fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) });
+  const callJson = async (route, method, payload) => { const response = await call(route, method, payload); return { status: response.status, data: await response.json() }; };
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+
+  await callJson('/api/settings', 'PUT', { enginePath });
+
+  const missing = await callJson('/api/timbre-transform/reference/separate', 'POST', {});
+  assert.equal(missing.status, 400);
+
+  const referenceDataUrl = `data:audio/wav;base64,${Buffer.from('fake-reference-song').toString('base64')}`;
+  const result = await callJson('/api/timbre-transform/reference/separate', 'POST', { referenceDataUrl });
+  assert.equal(result.status, 200);
+  assert.match(result.data.vocalsDataUrl, /^data:audio\/wav;base64,/);
+  assert.ok(fakeSpawn.calls.some(c => c.args.includes('mel_band_roformer')), 'expected the reference to be STEM-split with mel_band_roformer');
+  assert.ok(!fakeSpawn.calls.some(c => c.args.includes('seed_vc')), 'expected reference separation to never run a Seed-VC conversion');
+});
+
 test('음색 변조 - 기존 방식: engine:\'vevo2\'를 보내면 Seed-VC 대신 Vevo2(style_preserved_svc)로 변환하고, 모델이 없으면 Seed-VC와 무관하게 Vevo2 전용 에러를 준다', async t => {
   resetEnv();
   const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-vevo2-'));
@@ -1369,14 +1394,26 @@ test('음색 변조 - AuK 탭: 레퍼런스만 있으면 소스를 전사해 그
   assert.equal(JSON.parse(settingsCallRef.body).engine.model, 'auk_flash_w4a8.safetensors', 'expected the "flash" checkpoint choice to reach AudioAuK');
   const ttsJobCallRef = auk.calls.filter(c => c.pathname === '/api/jobs' && c.method === 'POST').at(-1);
   const ttsBodyRef = JSON.parse(ttsJobCallRef.body);
-  assert.match(ttsBodyRef.instruction, /^Say the following with the same voice: "가짜로 인식된 가사입니다"\.$/);
+  assert.match(ttsBodyRef.instruction, /^다음 내용을 같은 목소리로 읽어 주세요: "가짜로 인식된 가사입니다"\.$/);
 
   // both reference and text: clone the reference's voice, but fold the text in as a style qualifier
   const both = await callJson(`/api/timbre-transform/${previewId}/auk/apply`, 'POST', { referenceDataUrl, textDescription: 'warm and smooth', checkpoint: 'flash' });
   assert.equal(both.status, 200);
   const ttsJobCallBoth = auk.calls.filter(c => c.pathname === '/api/jobs' && c.method === 'POST').at(-1);
   const ttsBodyBoth = JSON.parse(ttsJobCallBoth.body);
-  assert.match(ttsBodyBoth.instruction, /^Say the following with the same voice, warm and smooth: "가짜로 인식된 가사입니다"\.$/);
+  assert.match(ttsBodyBoth.instruction, /^다음 내용을 읽어 주세요: "가짜로 인식된 가사입니다"\. 목소리 설명: warm and smooth\.$/);
+
+  // 앱에서 만든 저장곡이면: json에 그대로 있던 가사를 쓰고 Whisper STT 단계를 건너뛴다. AuK의
+  // instruction에는 [Verse]/[Chorus] 같은 구간 표기를 제거해 넘기고, 응답 transcript는 그대로 남긴다.
+  const callsBeforeLyrics = auk.calls.length;
+  const storedLyrics = '[Verse]\n낮은 목소리로 부른 원곡 가사\n[Chorus]\n후렴은 크게';
+  const withLyrics = await callJson(`/api/timbre-transform/${previewId}/auk/apply`, 'POST', { referenceDataUrl, lyrics: storedLyrics, checkpoint: 'flash' });
+  assert.equal(withLyrics.status, 200);
+  assert.equal(withLyrics.data.transcript, storedLyrics, 'expected the display transcript to be the untouched stored lyrics');
+  assert.ok(!auk.calls.slice(callsBeforeLyrics).some(c => c.pathname === '/api/transcribe'), 'expected stored lyrics to skip the Whisper STT step entirely');
+  const ttsJobCallLyrics = auk.calls.filter(c => c.pathname === '/api/jobs' && c.method === 'POST').at(-1);
+  const ttsBodyLyrics = JSON.parse(ttsJobCallLyrics.body);
+  assert.match(ttsBodyLyrics.instruction, /^다음 내용을 같은 목소리로 읽어 주세요: "낮은 목소리로 부른 원곡 가사 후렴은 크게"\.$/);
 
   // the sidechain silence-gate (shared postProcessConvertedVocal helper) still runs on AuK's output, same as Seed-VC/Vevo2
   assert.ok(fakeSpawn.calls.some(c => c.engine === 'ffmpeg' && c.args.some(arg => typeof arg === 'string' && arg.includes('sidechaingate'))), 'expected the shared post-processing chain to run on the AuK result too');
@@ -1522,6 +1559,36 @@ test('Tools 메뉴 - AuK 작업: 완성곡과 무관하게 독립 오디오(선�
   const saved = await callJson('/api/audio-save', 'POST', { dataUrl: withAudio.data.dataUrl, title: 'Tools 결과' });
   assert.equal(saved.status, 200);
   assert.equal(saved.data.status, 'completed');
+});
+
+test('Tools 메뉴 - 전사: 오디오를 업로드해 Whisper STT로 전사하고 transcript를 돌려준다 (오디오 없음 400)', async t => {
+  resetEnv();
+  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-audio-tools-transcribe-'));
+  const fakeSpawn = makeFakeSpawn();
+  const auk = makeFakeAudioAuk();
+  const server = await createStudioServer({ root, fetchImpl: auk.fetchImpl, spawnImpl: fakeSpawn.spawnImpl });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const call = async (route, method = 'GET', payload) => fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) });
+  const callJson = async (route, method, payload) => { const response = await call(route, method, payload); return { status: response.status, data: await response.json() }; };
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+
+  await callJson('/api/settings', 'PUT', { audioAukEndpoint: 'http://fake-auk.local' });
+
+  // 오디오 없음은 명확한 400, AudioAuK 호출 없음
+  const missing = await callJson('/api/audio-tools/transcribe', 'POST', {});
+  assert.equal(missing.status, 400);
+  assert.ok(!auk.calls.some(c => c.pathname === '/api/transcribe'), 'expected no AudioAuK transcription call without audio');
+
+  // 오디오를 업로드해 전사하고 transcript를 돌려준다 -- 결과 저장 없음
+  const audioDataUrl = `data:audio/wav;base64,${Buffer.from('fake-edit-clip').toString('base64')}`;
+  const result = await callJson('/api/audio-tools/transcribe', 'POST', { audioDataUrl, checkpoint: 'base' });
+  assert.equal(result.status, 200);
+  assert.equal(result.data.transcript, '가짜로 인식된 가사입니다');
+  assert.ok(auk.calls.some(c => c.pathname === '/api/audio' && c.method === 'POST'), 'expected the audio to be uploaded to AudioAuK');
+  assert.ok(auk.calls.some(c => c.pathname === '/api/transcribe' && c.method === 'POST'), 'expected a transcription job on AudioAuK');
+  const settingsCall = auk.calls.filter(c => c.pathname === '/api/settings' && c.method === 'PUT').at(-1);
+  assert.equal(JSON.parse(settingsCall.body).engine.model, 'auk_base_w4a8.safetensors', 'expected the checkpoint choice to reach AudioAuK');
 });
 
 test('음색 변조 - DDSP-SVC 탭: 목표 스텝에 도달하면 실제로 학습 프로세스를 죽이고(방치 사고 재발 방지), 그 체크포인트로 추론+후처리까지 끝난다', async t => {
@@ -1673,5 +1740,15 @@ test('보컬 음색 변환의 내장 파일 탐색기: library/ 트리 안 어�
   assert.equal((await call('/api/library/file?path=audio-ref/notes.txt')).status, 400);
   assert.equal((await call('/api/library/file?path=../outside.mp3')).status, 400);
   assert.equal((await call('/api/library/file?path=audio-ref/missing.mp3')).status, 404);
+
+  // an in-app-created song keeps a {제목}.json next to its audio -- the meta route surfaces the
+  // stored lyrics (used by the 음색 변조 AuK tab to skip Whisper STT) alongside title/style
+  await writeFile(path.join(root, 'library', 'music', 'song.json'), JSON.stringify({ title: '저장된 곡', lyrics: '[Verse] 실제로 적은 가사', style: '밝은 팝' }));
+  const meta = await callJson('/api/library/meta?path=music/song.json');
+  assert.equal(meta.status, 200);
+  assert.deepEqual(meta.data, { title: '저장된 곡', lyrics: '[Verse] 실제로 적은 가사', style: '밝은 팝' });
+  assert.equal((await call('/api/library/meta?path=audio-ref/voice-a.mp3')).status, 400, 'expected the meta route to only read json files');
+  assert.equal((await call('/api/library/meta?path=music/없는.json')).status, 404);
+  assert.equal((await call('/api/library/meta?path=../outside.json')).status, 400);
 });
 

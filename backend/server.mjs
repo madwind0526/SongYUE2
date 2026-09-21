@@ -7,7 +7,7 @@ import { spawn } from 'node:child_process';
 import os from 'node:os';
 import { comfyUiAlive, execute as executeComfyUi } from './comfyui.mjs';
 import { parseNoteEvents, encodeMidiFile } from './midi.mjs';
-import { submitAukJob, submitAukToolJob } from './auk.mjs';
+import { submitAukJob, submitAukToolJob, transcribeAukAudio } from './auk.mjs';
 import { startDdspJob, killDdspJob } from './ddsp-svc.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -520,6 +520,34 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     await copyFile(path.join(stems, 'vocals.wav'), path.join(stems, 'vocals-original.wav'));
     return id;
   }
+  // "음색 변조" 팝업의 "참조 보컬" 표시용: 참조 오디오를 mel_band_roformer로 한 번 더 분리해
+  // vocals를 dataUrl로 돌려준다. 원본(prepare)과 달리 preview 캐시가 없어 선택할 때마다 다시
+  // 돌리며, 결과는 보관하지 않는다.
+  async function separateReferenceVocal(referenceDataUrl) {
+    const match = typeof referenceDataUrl === 'string' && referenceDataUrl.match(/^data:(audio\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+    if (!match) throw fail(400, '지원하지 않는 참조 오디오 형식입니다.');
+    const ext = AUDIO_MIME[match[1]];
+    if (!ext) throw fail(400, '지원하지 않는 오디오 형식입니다. MP3/WAV/FLAC/M4A/OGG 파일을 사용해 주세요.');
+    const buffer = Buffer.from(match[2], 'base64');
+    if (buffer.length > 200 * 1024 * 1024) throw fail(413, '참조 오디오 파일이 너무 큽니다. 200MB 이하로 줄여 주세요.');
+    const workDir = path.join(outputDirectory, `timbre-ref-${randomUUID()}`);
+    await mkdir(workDir, { recursive: true });
+    try {
+      const sourceRaw = path.join(workDir, `source-raw.${ext}`);
+      await writeFile(sourceRaw, buffer);
+      const sourceFile = path.join(workDir, 'source.wav');
+      await new Promise((resolve, reject) => {
+        const child = spawnImpl('ffmpeg', ['-y', '-i', sourceRaw, sourceFile], { windowsHide: true });
+        child.once('error', reject);
+        child.once('close', (code) => code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`)));
+      }).catch(() => { throw fail(502, '참조 오디오 변환에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
+      await separateStemsCore(sourceFile, path.join(workDir, 'stems'), 'vocal');
+      const vocals = await readFile(path.join(workDir, 'stems', 'vocals.wav'));
+      return { vocalsDataUrl: `data:audio/wav;base64,${vocals.toString('base64')}` };
+    } finally {
+      await rm(workDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
   async function runAudioSr(inputWav, outputWav) {
     const engine = resolveConfigPath(settings.enginePath, DEFAULT_ENGINE_PATH);
     const args = ['--task', 's2s', '--family', 'audiosr', '--model', path.join(root, AUDIOSR_MODEL_PATH), '--backend', 'cuda', '--audio', inputWav, '--request-option', 'num_inference_steps=50', '--request-option', 'guidance_scale=3.5', '--request-option', 'ddim_eta=1.0', '--request-option', 'seed=42', '--out', outputWav];
@@ -799,7 +827,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   // submitAukJob() 주석 참고 -- 이 함수는 SongYUE2 쪽 준비(보컬 스템 확보, 참조 오디오 정규화,
   // 결과 후처리/저장)만 담당한다.
   // stems: prepareTimbrePreview()가 이미 채워둔 스템 캐시 디렉터리(project 무관, applyVocalTimbreCore와 같은 계약).
-  async function applyAukTimbreCore(stems, { referenceDataUrl, textDescription, checkpoint }) {
+  async function applyAukTimbreCore(stems, { referenceDataUrl, textDescription, checkpoint, lyrics, whisper, language }) {
     const description = text(textDescription, 500).trim();
     let referenceBuffer = null;
     let referenceExt = null;
@@ -819,6 +847,11 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
 
     const originalVocalsWav = path.join(stems, 'vocals-original.wav');
     if (!(await exists(originalVocalsWav))) throw fail(502, '보컬/악기 분리 결과를 찾을 수 없습니다.');
+
+    // 앱에서 만든 곡이면 저장된 가사가 있어 전사(Whisper STT, 혼합음에서 환각 자주 발생)를 건너뛴다.
+    // 표시용으로는 원본 그대로, AuK에 줄 instruction에는 [Verse]/[Chorus] 같은 구간 표기를 제거한다.
+    const storedLyrics = typeof lyrics === 'string' ? lyrics.trim() : '';
+    const spokenLyrics = storedLyrics ? storedLyrics.replace(/\[[^\]]+\]/g, ' ').replace(/\s+/g, ' ').trim() : undefined;
 
     const workDir = path.join(outputDirectory, `auk-convert-${randomUUID()}`);
     await mkdir(workDir, { recursive: true });
@@ -850,7 +883,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       let result;
       try {
         result = await submitAukJob(fetchImpl, spawnImpl, endpoint, audioAukPath, {
-          referenceFilePath, textDescription: description || null, sourceVocalPath: originalVocalsWav, checkpoint,
+          referenceFilePath, textDescription: description || null, sourceVocalPath: originalVocalsWav, checkpoint, lyrics: spokenLyrics, whisper, language,
         });
       } catch (error) {
         throw fail(502, `AuK 변환에 실패했습니다. ${(error && error.message) || '알 수 없는 오류'}`);
@@ -872,7 +905,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
 
       const gatedVocals = await postProcessConvertedVocal(convertedVocals, originalVocalsWav, workDir);
       await copyFile(gatedVocals, path.join(stems, 'vocals.wav'));
-      return { ok: true, warning, transcript: result.transcript || null };
+      return { ok: true, warning, transcript: storedLyrics || result.transcript || null };
     } finally {
       await rm(workDir, { recursive: true, force: true }).catch(() => {});
     }
@@ -880,6 +913,30 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   // "Tools" 메뉴: 완성곡과 무관한 독립 AuK 작업(TTS/가사 편집/피치·속도·음량/음성 변형/품질 개선).
   // 음색 변조 AuK 탭과 달리 STEM 분리도, 사이드체인 게이트 같은 SVC 전용 후처리도 없다 -- 그냥
   // AudioAuK 결과를 WAV로 변환해 그대로 돌려주고, 저장은 프론트가 기존 POST /audio-save로 한다.
+  // dataUrl 오디오(MP3/WAV/FLAC/M4A/OGG, 50MB 이하)를 작업 폴더에 저장한 뒤 ffmpeg로 모노 44.1kHz
+  // WAV로 정규화한다. runAukTool과 /api/audio-tools/transcribe가 공유한다.
+  async function normalizeInputAudio(workDir, audioDataUrl) {
+    const match = typeof audioDataUrl === 'string' && audioDataUrl.match(/^data:(audio\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+    if (!match) throw fail(400, '지원하지 않는 오디오 형식입니다.');
+    const ext = AUDIO_MIME[match[1]];
+    if (!ext) throw fail(400, '지원하지 않는 오디오 형식입니다. MP3/WAV/FLAC/M4A/OGG 파일을 사용해 주세요.');
+    const buffer = Buffer.from(match[2], 'base64');
+    if (buffer.length > 50 * 1024 * 1024) throw fail(413, '오디오 파일이 너무 큽니다. 50MB 이하로 줄여 주세요.');
+    const source = path.join(workDir, `input.${ext}`);
+    await writeFile(source, buffer);
+    const audioFilePath = path.join(workDir, 'input-normalized.wav');
+    const ffmpegLog = await new Promise((resolve, reject) => {
+      const child = spawnImpl('ffmpeg', ['-y', '-i', source, '-ar', '44100', '-ac', '1', audioFilePath], { windowsHide: true });
+      const chunks = [];
+      const collect = (data) => chunks.push(data);
+      child.stdout?.on('data', collect);
+      child.stderr?.on('data', collect);
+      child.once('error', reject);
+      child.once('close', (code) => resolve({ code, text: Buffer.concat(chunks).toString('utf8') }));
+    }).catch(() => { throw fail(502, '입력 오디오 변환에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
+    if (ffmpegLog.code !== 0) throw fail(502, `입력 오디오 변환에 실패했습니다. ${ffmpegLog.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
+    return audioFilePath;
+  }
   async function runAukTool({ task, instruction, audioDataUrl, checkpoint, seconds }) {
     const cleanTask = text(task, 100).trim();
     const cleanInstruction = text(instruction, 2000).trim();
@@ -891,25 +948,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     try {
       let audioFilePath = null;
       if (typeof audioDataUrl === 'string' && audioDataUrl.length) {
-        const match = audioDataUrl.match(/^data:(audio\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
-        if (!match) throw fail(400, '지원하지 않는 오디오 형식입니다.');
-        const ext = AUDIO_MIME[match[1]];
-        if (!ext) throw fail(400, '지원하지 않는 오디오 형식입니다. MP3/WAV/FLAC/M4A/OGG 파일을 사용해 주세요.');
-        const buffer = Buffer.from(match[2], 'base64');
-        if (buffer.length > 50 * 1024 * 1024) throw fail(413, '오디오 파일이 너무 큽니다. 50MB 이하로 줄여 주세요.');
-        const source = path.join(workDir, `input.${ext}`);
-        await writeFile(source, buffer);
-        audioFilePath = path.join(workDir, 'input-normalized.wav');
-        const ffmpegLog = await new Promise((resolve, reject) => {
-          const child = spawnImpl('ffmpeg', ['-y', '-i', source, '-ar', '44100', '-ac', '1', audioFilePath], { windowsHide: true });
-          const chunks = [];
-          const collect = (data) => chunks.push(data);
-          child.stdout?.on('data', collect);
-          child.stderr?.on('data', collect);
-          child.once('error', reject);
-          child.once('close', (code) => resolve({ code, text: Buffer.concat(chunks).toString('utf8') }));
-        }).catch(() => { throw fail(502, '입력 오디오 변환에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
-        if (ffmpegLog.code !== 0) throw fail(502, `입력 오디오 변환에 실패했습니다. ${ffmpegLog.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
+        audioFilePath = await normalizeInputAudio(workDir, audioDataUrl);
       }
 
       let result;
@@ -1747,6 +1786,24 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         res.writeHead(200, { 'Content-Type': AUDIO_MIME_TYPES[ext] || 'application/octet-stream', 'Content-Length': String(data.length), 'Cache-Control': 'no-store' });
         return res.end(data);
       }
+      // 앱에서 만든 곡의 메타데이터: 오디오와 나란히 저장된 <제목>.json(가사/스타일/제목)을 돌려준다.
+      // 외부 오디오처럼 json이 없는 파일이면 404 -- 호출자는 그때 전사(Whisper STT)로 가사를 다시 만든다.
+      if (req.method === 'GET' && pathname === '/api/library/meta') {
+        const libraryRoot = path.join(root, 'library');
+        const relative = text(requestUrl.searchParams.get('path'), 2048).trim();
+        const target = path.resolve(libraryRoot, relative);
+        const rel = path.relative(libraryRoot, target);
+        if (!relative || rel.startsWith('..') || path.isAbsolute(rel)) throw fail(400, '올바르지 않은 경로입니다.');
+        if (path.extname(target).toLowerCase() !== '.json') throw fail(400, '메타데이터는 JSON 파일에서만 읽을 수 있습니다.');
+        if (!(await exists(target))) throw fail(404, '메타데이터를 찾을 수 없습니다.');
+        const project = await readJson(target, null);
+        if (!project || typeof project !== 'object') throw fail(400, '메타데이터를 읽을 수 없습니다.');
+        return send(200, {
+          title: typeof project.title === 'string' ? project.title : null,
+          lyrics: typeof project.lyrics === 'string' ? project.lyrics : null,
+          style: typeof project.style === 'string' ? project.style : null,
+        });
+      }
       if (req.method === 'GET' && pathname === '/api/eq-presets') {
         const dir = eqPresetsDir();
         const files = await readdir(dir).catch(() => []);
@@ -2049,6 +2106,15 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         const previewId = await prepareTimbrePreview(input.sourceDataUrl);
         return send(200, { previewId });
       }
+      // "음색 변조" 참조 보컬: 참조 오디오를 즉석 분리해 vocals dataUrl만 돌려준다.
+      if (req.method === 'POST' && pathname === '/api/timbre-transform/reference/separate') {
+        const input = await body(req, 200 * 1024 * 1024);
+        if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
+        generating = true;
+        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 60000 };
+        try { return send(200, await separateReferenceVocal(input.referenceDataUrl)); }
+        finally { generating = false; generationStatus = null; }
+      }
       const timbreAudioMatch = pathname.match(/^\/api\/timbre-transform\/([^/]+)\/audio$/);
       if (timbreAudioMatch && req.method === 'GET') {
         const file = path.join(timbrePreviewDir(timbreAudioMatch[1]), 'source.wav');
@@ -2085,7 +2151,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
         generating = true;
         generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 90000 };
-        try { return send(200, await applyAukTimbreCore(path.join(dir, 'stems'), { referenceDataUrl: input.referenceDataUrl, textDescription: input.textDescription, checkpoint: input.checkpoint })); }
+        try { return send(200, await applyAukTimbreCore(path.join(dir, 'stems'), { referenceDataUrl: input.referenceDataUrl, textDescription: input.textDescription, checkpoint: input.checkpoint, lyrics: input.lyrics, whisper: input.whisper, language: input.language })); }
         finally { generating = false; generationStatus = null; }
       }
       // "Tools" 메뉴: 완성곡과 무관한 독립 AuK 작업. /projects/:id 스코프가 아니라 /audio-save와
@@ -2098,6 +2164,28 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 60000 };
         try { return send(200, await runAukTool({ task: input.task, instruction: input.instruction, audioDataUrl: input.audioDataUrl, checkpoint: input.checkpoint, seconds: input.seconds })); }
         finally { generating = false; generationStatus = null; }
+      }
+      // "Tools" 메뉴(가사/대사 편집 탭): 선택한 오디오를 AudioAuK Whisper STT로 전사해 가사 후보를
+      // 돌려준다. 오디오는 업로드만 하고 결과는 저장하지 않는다 -- 프론트가 편집 UI에 표시한다.
+      if (req.method === 'POST' && pathname === '/api/audio-tools/transcribe') {
+        const input = await body(req, 50 * 1024 * 1024);
+        if (!(typeof input.audioDataUrl === 'string' && input.audioDataUrl.length)) throw fail(400, '전사할 오디오가 필요합니다.');
+        if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
+        generating = true;
+        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 60000 };
+        try {
+          const endpoint = settings.audioAukEndpoint || DEFAULT_AUDIO_AUK_ENDPOINT;
+          const audioAukPath = resolveConfigPath(settings.audioAukPath, DEFAULT_AUDIO_AUK_PATH);
+          const workDir = path.join(outputDirectory, `auk-transcribe-${randomUUID()}`);
+          await mkdir(workDir, { recursive: true });
+          try {
+            const audioFilePath = await normalizeInputAudio(workDir, input.audioDataUrl);
+            const transcript = await transcribeAukAudio(fetchImpl, spawnImpl, endpoint, audioAukPath, { audioFilePath, checkpoint: input.checkpoint, language: input.language, whisper: input.whisper });
+            return send(200, { transcript });
+          } finally {
+            await rm(workDir, { recursive: true, force: true }).catch(() => {});
+          }
+        } finally { generating = false; generationStatus = null; }
       }
       // job.child(ChildProcess)는 JSON으로 못 보내니 제외하고 나머지 상태만 프론트에 노출한다.
       const publicDdspJob = (job) => ({ id: job.id, projectId: job.projectId, status: job.status, targetStep: job.targetStep, currentStep: job.currentStep, currentLoss: job.currentLoss, createdAt: job.createdAt, updatedAt: job.updatedAt, skippedRefs: job.skippedRefs, error: job.error });

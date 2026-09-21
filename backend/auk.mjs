@@ -16,6 +16,7 @@
 // missing feature on this module's part -- see the "음색 변조" plan for the UI warning this pairs with.
 
 import { readFile } from 'node:fs/promises';
+import { randomInt } from 'node:crypto';
 import path from 'node:path';
 
 const AUK_JOB_POLL_INTERVAL_MS = 1500;
@@ -77,6 +78,11 @@ async function pollAukJob(fetchImpl, endpoint, jobId) {
   throw new Error('AudioAuK 작업이 제한 시간을 넘어 중단되었습니다.');
 }
 
+// Every AuK job gets a fresh random seed so retries do not reproduce the same generation --
+// the engine's multilingual TTS occasionally mixes languages on one pass, so a rerun should be
+// able to land a cleaner take.
+function freshSeed() { return randomInt(0, 2147483647); }
+
 async function selectAukCheckpoint(fetchImpl, endpoint, checkpoint) {
   const model = AUK_CHECKPOINTS[checkpoint] || AUK_CHECKPOINTS.flash;
   await aukFetchJson(fetchImpl, endpoint, '/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ engine: { model } }) });
@@ -103,7 +109,10 @@ async function runAukJob(fetchImpl, endpoint, jobBody) {
 // sourceVocalPath: the completed song's isolated (pre-conversion) vocal, always needed -- either
 // as the thing AuK transcribes+clones-into (reference branch) or as the thing AuK edits directly
 // (text-only branch).
-export async function submitAukJob(fetchImpl, spawnImpl, endpoint, audioAukPath, { referenceFilePath, textDescription, sourceVocalPath, checkpoint }) {
+// lyrics: the source vocal's real lyrics when they are known in advance (an in-app-created song has
+// them stored next to its audio). Whisper STT hallucinates on dense mixes ("아 아 아" filler), so
+// whenever real lyrics exist we skip transcription entirely.
+export async function submitAukJob(fetchImpl, spawnImpl, endpoint, audioAukPath, { referenceFilePath, textDescription, sourceVocalPath, checkpoint, lyrics, whisper, language }) {
   await ensureAudioAukRunning(fetchImpl, spawnImpl, endpoint, audioAukPath);
   await selectAukCheckpoint(fetchImpl, endpoint, checkpoint);
 
@@ -112,16 +121,19 @@ export async function submitAukJob(fetchImpl, spawnImpl, endpoint, audioAukPath,
   let jobBody;
   if (referenceFilePath) {
     const referenceAudioId = await uploadAukAudio(fetchImpl, endpoint, referenceFilePath, path.basename(referenceFilePath));
-    const transcribeJob = await aukFetchJson(fetchImpl, endpoint, '/api/transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audioId: sourceAudioId }) });
-    const transcribed = await pollAukJob(fetchImpl, endpoint, transcribeJob.id);
-    transcript = (transcribed.transcript || '').trim();
+    transcript = typeof lyrics === 'string' ? lyrics.trim() : '';
+    if (!transcript) {
+      const transcribeJob = await aukFetchJson(fetchImpl, endpoint, '/api/transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audioId: sourceAudioId, model: whisper, language }) });
+      const transcribed = await pollAukJob(fetchImpl, endpoint, transcribeJob.id);
+      transcript = (transcribed.transcript || '').trim();
+    }
     if (!transcript) throw new Error('AudioAuK가 소스 보컬의 가사를 인식하지 못했습니다.');
     const instruction = textDescription
-      ? `Say the following with the same voice, ${textDescription}: "${transcript}".`
-      : `Say the following with the same voice: "${transcript}".`;
-    jobBody = { task: 'tts', instruction, audioId: referenceAudioId, seconds: 0, seed: 0 };
+      ? `다음 내용을 읽어 주세요: "${transcript}". 목소리 설명: ${textDescription}.`
+      : `다음 내용을 같은 목소리로 읽어 주세요: "${transcript}".`;
+    jobBody = { task: 'tts', instruction, audioId: referenceAudioId, seconds: 0, seed: freshSeed() };
   } else {
-    jobBody = { task: 'tts', instruction: `Keep the spoken content unchanged and change the timbre to: "${textDescription}".`, audioId: sourceAudioId, seconds: 0, seed: 0 };
+    jobBody = { task: 'tts', instruction: `Keep the spoken content unchanged and change the timbre to: "${textDescription}".`, audioId: sourceAudioId, seconds: 0, seed: freshSeed() };
   }
   const result = await runAukJob(fetchImpl, endpoint, jobBody);
   return { ...result, transcript };
@@ -135,5 +147,17 @@ export async function submitAukToolJob(fetchImpl, spawnImpl, endpoint, audioAukP
   await ensureAudioAukRunning(fetchImpl, spawnImpl, endpoint, audioAukPath);
   await selectAukCheckpoint(fetchImpl, endpoint, checkpoint);
   const audioId = audioFilePath ? await uploadAukAudio(fetchImpl, endpoint, audioFilePath, path.basename(audioFilePath)) : undefined;
-  return runAukJob(fetchImpl, endpoint, { task, instruction, audioId, seconds: seconds ?? 0, seed: 0 });
+  return runAukJob(fetchImpl, endpoint, { task, instruction, audioId, seconds: seconds ?? 0, seed: freshSeed() });
+}
+
+// "Tools" 메뉴(가사/대사 편집 탭): 선택한 오디오를 AudioAuK의 Whisper STT로 전사해 가사 후보를
+// 돌려준다. 음색 변조 AuK 탭의 reference 분기(submitAukJob)와 동일한 /api/transcribe 경로를
+// 그대로 재사용한다 -- 결과는 저장하지 않고 transcript 문자열만 반환한다.
+export async function transcribeAukAudio(fetchImpl, spawnImpl, endpoint, audioAukPath, { audioFilePath, checkpoint, language, whisper }) {
+  await ensureAudioAukRunning(fetchImpl, spawnImpl, endpoint, audioAukPath);
+  await selectAukCheckpoint(fetchImpl, endpoint, checkpoint);
+  const audioId = await uploadAukAudio(fetchImpl, endpoint, audioFilePath, path.basename(audioFilePath));
+  const transcribeJob = await aukFetchJson(fetchImpl, endpoint, '/api/transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audioId, language, model: whisper }) });
+  const transcribed = await pollAukJob(fetchImpl, endpoint, transcribeJob.id);
+  return (transcribed.transcript || '').trim() || null;
 }

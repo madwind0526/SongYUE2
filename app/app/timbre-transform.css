@@ -68,6 +68,38 @@
   gap: 8px;
 }
 
+.timbre-transform-dialog .timbre-transcribe-options {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #c5d1bb;
+  flex-wrap: wrap;
+}
+
+.timbre-transform-dialog .timbre-transcribe-options select {
+  background: #232b23;
+  color: #e4ece0;
+  border: 1px solid #3b493d;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.timbre-transform-dialog .timbre-transcribe-options select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.timbre-transform-dialog .timbre-transcribe-options .field-hint {
+  color: #8a978c;
+  font-size: 11px;
+  font-weight: 500;
+  margin: 0;
+}
+
 .timbre-transform-dialog .timbre-apply-row {
   margin-top: 14px;
 }
@@ -127,6 +159,39 @@
   gap: 10px;
   padding: 7px 0;
 }
+
+/* 각 행이 [아이콘(고정 30px)][라벨(고정 84px)][파형(flex)] 세 개 열로 나뉘므로,
+   하위 행의 24px 들여쓰기만 빼면 모든 행의 파형 왼쪽 edge와 길이가 일치한다. */
+.timbre-transform-dialog .stem-list.timbre-legacy-list .stem-row-sub {
+  margin-left: 0;
+}
+
+/* 참조 보컬 분리는 GPU 작업이라 몇 초 걸린다 -- 분리 중임을 파형 자리에 표시한다. */
+.timbre-transform-dialog .stem-list.timbre-legacy-list .stem-separating-note {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #8a978c;
+  font-size: 11px;
+}
+
+.timbre-transform-dialog .stem-list.timbre-legacy-list .stem-separating-error {
+  color: #e07b7b;
+  line-height: 1.4;
+}
+
+/* 원곡/참고곡/변환곡이 각각 다른 파형 색으로 보이도록 구분한다:
+   원곡=초록(#7fd6a0), 참고곡=파랑(#7fb8e0), 변환곡=호박(#f2c94c, 기존 processed). */
+.timbre-transform-dialog .stem-list.timbre-legacy-list .pp-waveform-source span { background: #3f6a47; }
+.timbre-transform-dialog .stem-list.timbre-legacy-list .pp-waveform-source span.played { background: #7fd6a0; }
+.timbre-transform-dialog .stem-list.timbre-legacy-list .pp-waveform-reference span { background: #3a5a7a; }
+.timbre-transform-dialog .stem-list.timbre-legacy-list .pp-waveform-reference span.played { background: #7fb8e0; }
+.timbre-transform-dialog .stem-list.timbre-legacy-list .pp-row-playing-source .pp-waveform-label { border-color: #7fd6a0; color: #d9eadf; }
+.timbre-transform-dialog .stem-list.timbre-legacy-list .pp-row-playing-source .pp-waveform { border-color: #7fd6a0; box-shadow: 0 0 0 1px #7fd6a0, 0 0 14px #7fd6a044; }
+.timbre-transform-dialog .stem-list.timbre-legacy-list .pp-row-playing-reference .pp-waveform-label { border-color: #7fb8e0; color: #e0edf9; }
+.timbre-transform-dialog .stem-list.timbre-legacy-list .pp-row-playing-reference .pp-waveform { border-color: #7fb8e0; box-shadow: 0 0 0 1px #7fb8e0, 0 0 14px #7fb8e044; }
 
 .timbre-transform-dialog .compare-waveform {
   min-height: 56px;
