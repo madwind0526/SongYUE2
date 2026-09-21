@@ -792,7 +792,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   // stems: 이 소스 오디오의 스템 캐시 디렉터리(prepareTimbrePreview()가 이미 vocals-original.wav를
   // 채워둔 상태여야 함 -- 이 함수는 더 이상 분리를 직접 하지 않는다). 프로젝트와 무관, "음색 변조"
   // 팝업이 라이브러리에서 자유롭게 고른 원본 오디오에 대해서도 그대로 쓸 수 있다.
-  async function applyVocalTimbreCore(stems, voiceRefDataUrl, engineChoice) {
+  async function applyVocalTimbreCore(stems, voiceRefDataUrl, engineChoice, onProgress) {
     const svcEngine = VOCAL_TIMBRE_ENGINES.has(engineChoice) ? engineChoice : 'seed_vc';
     const engine = resolveConfigPath(settings.enginePath, DEFAULT_ENGINE_PATH);
     if (!(await exists(engine))) throw fail(400, `audio.cpp 실행 파일을 찾을 수 없습니다: ${path.relative(root, engine)}. 설정에서 경로를 확인해 주세요.`);
@@ -827,12 +827,64 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         child.once('close', (code) => resolve({ code, text: Buffer.concat(chunks).toString('utf8') }));
       }).catch(() => { throw fail(502, '참조 오디오 변환에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
       if (ffmpegLog.code !== 0) throw fail(502, `참조 오디오 변환에 실패했습니다. ${ffmpegLog.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
+
+      // 긴 보컬은 AuK와 같은 방식으로 겹치는 10초 창으로 나눠 처리한다. Seed-VC/Vevo2는 소스
+      // 전체를 한 번에 변환할 때 길어질수록 점점 노이즈/변형으로 무너지는 것이 실제 테스트로
+      // 확인됐다(10초는 들을 만한데 2분이 되면 이상한 소리만 나오는 증상, 2026-09-22). 참조
+      // 목소리(voiceRefWav)는 조각과 무관해 모든 조각에 같은 것을 사용하며, 겹친 양 끝을 1초씩
+      // 잘라 이어붙인다 -- AuK text-only 분기와 완전히 같은 패턴을 SVC CLI 경로에 적용한 것.
+      const durationMs = await measureDurationMs(originalVocalsWav);
+      const durationSeconds = durationMs ? durationMs / 1000 : 0;
+      const useChunking = durationSeconds > AUK_CHUNK_SECONDS;
+      const chunkPlan = useChunking ? buildAukChunkPlan(durationSeconds) : [];
+      const warning = useChunking
+        ? `긴 보컬을 ${AUK_CHUNK_SECONDS}초 단위(겹침 ${AUK_OVERLAP_SECONDS}초)로 ${chunkPlan.length}개로 나눠 같은 참조 목소리로 변환한 뒤 연결했습니다. 조각 경계 부근에서 음색 전환이 어색할 수 있습니다.`
+        : null;
+
       const convertedVocals = path.join(workDir, 'converted-vocals.wav');
-      if (svcEngine === 'vevo2') await runVevo2Svc(originalVocalsWav, voiceRefWav, convertedVocals);
-      else await runSeedVcSvc(originalVocalsWav, voiceRefWav, convertedVocals);
+      const runFfmpeg = async (args, label) => {
+        const log = await new Promise((resolve, reject) => {
+          const child = spawnImpl('ffmpeg', args, { windowsHide: true });
+          const chunks = [];
+          const collect = (data) => chunks.push(data);
+          child.stdout?.on('data', collect);
+          child.stderr?.on('data', collect);
+          child.once('error', reject);
+          child.once('close', (code) => resolve({ code, text: Buffer.concat(chunks).toString('utf8') }));
+        }).catch(() => { throw fail(502, `${label}에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.`); });
+        if (log.code !== 0) throw fail(502, `${label}에 실패했습니다. ${log.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
+      };
+
+      if (useChunking) {
+        const stitchedParts = [];
+        if (typeof onProgress === 'function') onProgress(5, '보컬 조각 준비 중 (0/' + chunkPlan.length + ')');
+        for (let index = 0; index < chunkPlan.length; index += 1) {
+          const chunk = chunkPlan[index];
+          const chunkSource = path.join(workDir, `chunk-${String(index).padStart(3, '0')}.wav`);
+          const sourceFilter = `atrim=start=${chunk.start.toFixed(3)}:duration=${chunk.duration.toFixed(3)},asetpts=PTS-STARTPTS`;
+          await runFfmpeg(['-y', '-i', originalVocalsWav, '-af', sourceFilter, '-ar', '44100', '-ac', '1', chunkSource], '보컬 입력 조각 생성');
+          const rawOutput = path.join(workDir, `chunk-${String(index).padStart(3, '0')}-raw.wav`);
+          if (svcEngine === 'vevo2') await runVevo2Svc(chunkSource, voiceRefWav, rawOutput);
+          else await runSeedVcSvc(chunkSource, voiceRefWav, rawOutput);
+          const stitchedPart = path.join(workDir, `chunk-${String(index).padStart(3, '0')}-stitched.wav`);
+          const trimStart = index === 0 ? 0 : AUK_EDGE_TRIM_SECONDS;
+          const trimEnd = index === chunkPlan.length - 1 ? null : Math.max(trimStart, chunk.duration - AUK_EDGE_TRIM_SECONDS);
+          const trimFilter = `atrim=start=${trimStart.toFixed(3)}${trimEnd === null ? '' : `:end=${trimEnd.toFixed(3)}`},asetpts=PTS-STARTPTS`;
+          await runFfmpeg(['-y', '-i', rawOutput, '-af', trimFilter, '-ar', '44100', '-ac', '1', stitchedPart], '보컬 결과 조각 정리');
+          stitchedParts.push(stitchedPart);
+          if (typeof onProgress === 'function') onProgress(Math.round(5 + ((index + 1) / chunkPlan.length) * 85), `음색 변환 중 (${index + 1}/${chunkPlan.length})`);
+        }
+        const concatInputs = stitchedParts.flatMap((file) => ['-i', file]);
+        const concatFilter = `${stitchedParts.map((_, index) => `[${index}:a]`).join('')}concat=n=${stitchedParts.length}:v=0:a=1[out]`;
+        await runFfmpeg(['-y', ...concatInputs, '-filter_complex', concatFilter, '-map', '[out]', '-ar', '44100', '-ac', '1', convertedVocals], '보컬 결과 조각 연결');
+      } else if (svcEngine === 'vevo2') {
+        await runVevo2Svc(originalVocalsWav, voiceRefWav, convertedVocals);
+      } else {
+        await runSeedVcSvc(originalVocalsWav, voiceRefWav, convertedVocals);
+      }
       const gatedVocals = await postProcessConvertedVocal(convertedVocals, originalVocalsWav, workDir);
       await copyFile(gatedVocals, path.join(stems, 'vocals.wav'));
-      return { ok: true };
+      return { ok: true, warning, chunkCount: chunkPlan.length };
     } finally {
       await rm(workDir, { recursive: true, force: true }).catch(() => {});
     }
@@ -1001,7 +1053,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     if (ffmpegLog.code !== 0) throw fail(502, `입력 오디오 변환에 실패했습니다. ${ffmpegLog.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
     return audioFilePath;
   }
-  async function runAukTool({ task, instruction, audioDataUrl, checkpoint, seconds }) {
+  async function runAukTool({ task, instruction, audioDataUrl, checkpoint, seconds, chunk }) {
     const cleanTask = text(task, 100).trim();
     const cleanInstruction = text(instruction, 2000).trim();
     if (!cleanTask || !cleanInstruction) throw fail(400, '작업 종류와 지시문이 필요합니다.');
@@ -1015,15 +1067,67 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         audioFilePath = await normalizeInputAudio(workDir, audioDataUrl);
       }
 
-      let result;
-      try {
-        result = await submitAukToolJob(fetchImpl, spawnImpl, endpoint, audioAukPath, { task: cleanTask, instruction: cleanInstruction, audioFilePath, checkpoint, seconds });
-      } catch (error) {
-        throw fail(502, `AuK 작업에 실패했습니다. ${(error && error.message) || '알 수 없는 오류'}`);
+      // Tools 메뉴의 오디오 편집/조절/변형/품질개선 도구: AuK는 오디오 전체를 한 번에 편집할 때
+      // 10초를 넘기면 음성 환각으로 무너진다. 조각과 무관한 지시문(음량/피치/속도/속삭임/노이즈 제거
+      // 등)이라면 입력을 겹치는 10초 창으로 잘라 각각 처리한 뒤 같은 방식으로 이어붙인다. 시점에
+      // 의존하거나 텍스트 앵커가 필요한 도구(비언어음 추가, 가사/대사 편집)는 프론트가 chunk 대신
+      // 단일 잡으로 보낸다.
+      const durationMs = audioFilePath ? await measureDurationMs(audioFilePath) : null;
+      const durationSeconds = durationMs ? durationMs / 1000 : 0;
+      const useChunking = chunk === true && audioFilePath && durationMs !== null && durationSeconds > AUK_CHUNK_SECONDS;
+      const chunkPlan = useChunking ? buildAukChunkPlan(durationSeconds) : [];
+      const warning = useChunking
+        ? `긴 오디오를 ${AUK_CHUNK_SECONDS}초 단위(겹침 ${AUK_OVERLAP_SECONDS}초)로 ${chunkPlan.length}개로 나눠 순차 처리하고 연결했습니다. 조각 경계 부근에서 오디오가 어색할 수 있습니다.`
+        : null;
+
+      const runFfmpeg = async (args, label) => {
+        const log = await new Promise((resolve, reject) => {
+          const child = spawnImpl('ffmpeg', args, { windowsHide: true });
+          const chunks = [];
+          const collect = (data) => chunks.push(data);
+          child.stdout?.on('data', collect);
+          child.stderr?.on('data', collect);
+          child.once('error', reject);
+          child.once('close', (code) => resolve({ code, text: Buffer.concat(chunks).toString('utf8') }));
+        }).catch(() => { throw fail(502, `${label}에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.`); });
+        if (log.code !== 0) throw fail(502, `${label}에 실패했습니다. ${log.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
+      };
+      const runToolJob = async (jobAudioPath, index) => {
+        let result;
+        try {
+          result = await submitAukToolJob(fetchImpl, spawnImpl, endpoint, audioAukPath, { task: cleanTask, instruction: cleanInstruction, audioFilePath: jobAudioPath, checkpoint, seconds });
+        } catch (error) {
+          throw fail(502, `AuK 작업에 실패했습니다. ${(error && error.message) || '알 수 없는 오류'}`);
+        }
+        const rawOutput = path.join(workDir, `output-${String(index).padStart(3, '0')}${result.outputExt}`);
+        await writeFile(rawOutput, result.outputBuffer);
+        return rawOutput;
+      };
+
+      if (useChunking) {
+        const stitchedParts = [];
+        for (let index = 0; index < chunkPlan.length; index += 1) {
+          const chunk = chunkPlan[index];
+          const chunkSource = path.join(workDir, `chunk-${String(index).padStart(3, '0')}.wav`);
+          const sourceFilter = `atrim=start=${chunk.start.toFixed(3)}:duration=${chunk.duration.toFixed(3)},asetpts=PTS-STARTPTS`;
+          await runFfmpeg(['-y', '-i', audioFilePath, '-af', sourceFilter, '-ar', '44100', '-ac', '1', chunkSource], '입력 조각 생성');
+          const rawOutput = await runToolJob(chunkSource, index);
+          const stitchedPart = path.join(workDir, `chunk-${String(index).padStart(3, '0')}-stitched.wav`);
+          const trimStart = index === 0 ? 0 : AUK_EDGE_TRIM_SECONDS;
+          const trimEnd = index === chunkPlan.length - 1 ? null : Math.max(trimStart, chunk.duration - AUK_EDGE_TRIM_SECONDS);
+          const trimFilter = `atrim=start=${trimStart.toFixed(3)}${trimEnd === null ? '' : `:end=${trimEnd.toFixed(3)}`},asetpts=PTS-STARTPTS`;
+          await runFfmpeg(['-y', '-i', rawOutput, '-af', trimFilter, '-ar', '44100', '-ac', '1', stitchedPart], '결과 조각 정리');
+          stitchedParts.push(stitchedPart);
+        }
+        const outputWav = path.join(workDir, 'output.wav');
+        const concatInputs = stitchedParts.flatMap((file) => ['-i', file]);
+        const concatFilter = `${stitchedParts.map((_, index) => `[${index}:a]`).join('')}concat=n=${stitchedParts.length}:v=0:a=1[out]`;
+        await runFfmpeg(['-y', ...concatInputs, '-filter_complex', concatFilter, '-map', '[out]', '-ar', '44100', '-ac', '1', outputWav], '결과 조각 연결');
+        const wavBuffer = await readFile(outputWav);
+        return { dataUrl: `data:audio/wav;base64,${wavBuffer.toString('base64')}`, warning, chunkCount: chunkPlan.length };
       }
 
-      const rawOutput = path.join(workDir, `output${result.outputExt}`);
-      await writeFile(rawOutput, result.outputBuffer);
+      const rawOutput = await runToolJob(audioFilePath, 0);
       const outputWav = path.join(workDir, 'output.wav');
       const convertLog = await new Promise((resolve, reject) => {
         const child = spawnImpl('ffmpeg', ['-y', '-i', rawOutput, outputWav], { windowsHide: true });
@@ -2203,8 +2307,13 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         if (!(await exists(dir))) throw fail(404, '원본 오디오 준비 정보를 찾을 수 없습니다. 원본을 다시 선택해 주세요.');
         if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
         generating = true;
-        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 60000 };
-        try { return send(200, await applyVocalTimbreCore(path.join(dir, 'stems'), input.dataUrl, input.engine)); }
+        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 60000, progress: 0, detail: '음색 변환 준비 중' };
+        const onProgress = (progress, detail) => {
+          if (!generationStatus) return;
+          generationStatus.progress = progress;
+          generationStatus.detail = detail;
+        };
+        try { return send(200, await applyVocalTimbreCore(path.join(dir, 'stems'), input.dataUrl, input.engine, onProgress)); }
         finally { generating = false; generationStatus = null; }
       }
       const timbreAukApplyMatch = pathname.match(/^\/api\/timbre-transform\/([^/]+)\/auk\/apply$/);
@@ -2231,7 +2340,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
         generating = true;
         generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 60000 };
-        try { return send(200, await runAukTool({ task: input.task, instruction: input.instruction, audioDataUrl: input.audioDataUrl, checkpoint: input.checkpoint, seconds: input.seconds })); }
+        try { return send(200, await runAukTool({ task: input.task, instruction: input.instruction, audioDataUrl: input.audioDataUrl, checkpoint: input.checkpoint, seconds: input.seconds, chunk: input.chunk === true })); }
         finally { generating = false; generationStatus = null; }
       }
       // "Tools" 메뉴(가사/대사 편집 탭): 선택한 오디오를 AudioAuK Whisper STT로 전사해 가사 후보를

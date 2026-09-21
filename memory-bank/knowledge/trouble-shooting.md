@@ -518,3 +518,15 @@ const patched = template
 - **Cause:** The local Qwen Prompt Enhance classifier selects `Voice description TTS` instead of `Change timbre` when the task verb is ambiguous.
 - **Finding:** Starting the request with `Change the timbre of this singing voice...` classifies correctly, but the resulting instruction is the same canonical template SongYUE2 already builds directly.
 - **Decision:** Keep Prompt Enhance disabled for SongYUE2 timbre conversion. Send the canonical instruction directly and compare Base guidance values with a fixed source segment and seed.
+
+## Seed-VC / Vevo2 collapse on any source longer than ~10 seconds
+
+- **Symptom (user-confirmed):** a 10s source + 13s reference converts listenably; a 2-minute source
+  turns to noise. Using the SAME track as both source and reference still collapses, proving the
+  failure is engine length-dependence, not a reference-matching problem.
+- **Fix:** feed the engine 10s windows with 2s overlap and stitch trimmed edges, reusing the same
+  reference clip for every window -- mirroring the AuK chunk pipeline (shared constants/helpers).
+  Wired into `applyVocalTimbreCore` for both `seed_vc` and `vevo2`, and into the Tools content
+  editing path via `runAukTool`'s `chunk` flag.
+- **Note:** DDSP-SVC is frame-based and converts whole clips unchanged (no length collapse), so it
+  needs no chunking.

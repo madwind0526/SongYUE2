@@ -343,6 +343,23 @@ async function mixBuffers(buffers: AudioBuffer[]): Promise<AudioBuffer> {
   return offlineCtx.startRendering();
 }
 
+async function concatBuffers(buffers: AudioBuffer[]): Promise<AudioBuffer> {
+  if (!buffers.length) throw new Error('이어붙일 오디오가 없습니다.');
+  const channels = Math.max(...buffers.map(buffer => buffer.numberOfChannels));
+  const sampleRate = buffers[0].sampleRate;
+  const length = buffers.reduce((sum, buffer) => sum + buffer.length, 0);
+  const offlineCtx = new OfflineAudioContext(channels, length, sampleRate);
+  let offset = 0;
+  for (const buffer of buffers) {
+    const source = offlineCtx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(offlineCtx.destination);
+    source.start(offset / sampleRate);
+    offset += buffer.length;
+  }
+  return offlineCtx.startRendering();
+}
+
 function computeWaveformPeaks(buffer: AudioBuffer, buckets: number): number[] {
   const channel = buffer.getChannelData(0);
   const perBucket = Math.max(1, Math.floor(channel.length / buckets));
@@ -2043,7 +2060,7 @@ function TransportControls({ t, disabled }: { t: AudioTransport; disabled: boole
 // 재현한 것 -- AudioAuK의 POST /api/jobs는 이 instruction 문자열을 그대로 받는 자유 텍스트라,
 // 서버는 이 문자열을 검증 없이 전달만 한다.
 type AukField = { key: string; label: string; placeholder: string; type?: 'text' | 'number' | 'textarea'; hint?: string };
-type AukTool = { id: string; label: string; category: string; audio: 'none' | 'optional' | 'required'; audioLabel: string; showSeconds?: boolean; fields: AukField[]; description: string; instruction: (values: Record<string, string>) => string };
+type AukTool = { id: string; label: string; category: string; audio: 'none' | 'optional' | 'required'; audioLabel: string; showSeconds?: boolean; referenceOnly?: boolean; fields: AukField[]; description: string; instruction: (values: Record<string, string>) => string };
 // The position field is a 0-1 fraction of the picked audio's length (0 = start, 1 = end).
 // It is multiplied by the decoded audio duration, so "0.5" always means halfway through the
 // audio no matter how long it is, and the AuK instruction says "at N seconds".
@@ -2070,6 +2087,35 @@ function estimateSpeechSeconds(text: string): number {
   const minutes = koreanSyllables / 235 + englishWords / 150;
   return Math.max(1, Math.min(3600, Math.round(minutes * 60)));
 }
+
+// TTS는 10초를 넘는 클립에서 환각이 생기므로, 긴 텍스트를 사람 말하기 속도 기준으로 10초 이하가
+// 되는 조각으로 나눠 각각 생성한 뒤 이어붙인다. 줄 단위로 나누고, 한 줄이 여전히 넘치면 문장
+// 단위로 더 쪼갠다. (도구의 지시문 자체는 각 조각에 같은 방식으로 재조립되므로 말할 내용만
+// 조각별 텍스트로 교체하면 된다.)
+function splitSpeechText(text: string): string[] {
+  const MAX_SPEECH_SECONDS = 10;
+  const lines = (text || '').replace(/\r\n/g, '\n').split('\n').map(line => line.trim()).filter(Boolean);
+  const segments: string[] = [];
+  const clauseSplit = (line: string) => line.split(/(?<=[.!?。])\s+/).map(s => s.trim()).filter(Boolean);
+  for (const line of lines) {
+    if (estimateSpeechSeconds(line) <= MAX_SPEECH_SECONDS) {
+      const last = segments[segments.length - 1];
+      if (last !== undefined && estimateSpeechSeconds(`${last}\n${line}`) <= MAX_SPEECH_SECONDS) segments[segments.length - 1] = `${last}\n${line}`;
+      else segments.push(line);
+      continue;
+    }
+    // a single over-long line: split on sentence boundaries, then greedy-pack clauses
+    let current = '';
+    for (const clause of clauseSplit(line)) {
+      const trial = current ? `${current} ${clause}` : clause;
+      if (estimateSpeechSeconds(trial) <= MAX_SPEECH_SECONDS) { current = trial; continue; }
+      if (current) { segments.push(current); current = clause; }
+      else segments.push(clause);
+    }
+    if (current) segments.push(current);
+  }
+  return segments.length ? segments : [];
+}
 // The AuK engine echoes the instruction's dominant language into the speech it generates, so the
 // instruction scaffolding must be written in the language of the spoken text (English scaffolding +
 // Korean text falls back to Chinese). Pick ko/en scaffolding from whichever script wins.
@@ -2092,7 +2138,7 @@ const AUK_TOOLS: AukTool[] = [
       { key: 'text', label: '말할 내용', type: 'textarea', placeholder: '여러 줄로 입력해 주세요. 실제 발화할 텍스트입니다.' },
     ],
     instruction: v => usesKorean(v.text) ? `아래 내용을 소리 내어 읽어 주세요. 실제 말할 내용: "${v.text}". 목소리는 "${v.description}"으로 설명됩니다.` : `Speak the text below aloud. The content to speak is: "${v.text}". The speaker's voice is described as "${v.description}".`, description: 'Text를 음색 설명에 맞는 목소리(sound)로 변경합니다.' },
-  { id: 'voice-cloning', label: 'TTS 생성 (Ref-T2S)', category: 'tts', audio: 'required', audioLabel: '참조 목소리', showSeconds: true,
+  { id: 'voice-cloning', label: 'TTS 생성 (Ref-T2S)', category: 'tts', audio: 'required', audioLabel: '참조 목소리', referenceOnly: true, showSeconds: true,
     fields: [{ key: 'text', label: '말할 내용', type: 'textarea', placeholder: '여러 줄로 입력해 주세요. 실제 발화할 텍스트입니다.' }],
     instruction: v => usesKorean(v.text) ? `다음 내용을 같은 목소리로 읽어 주세요: "${v.text}".` : `Say the following with the same voice: "${v.text}".`, description: 'Text를 참조 목소리(sound)로 변경합니다.' },
   { id: 'edit-lyrics', label: '가사/대사 편집', category: 'edit', audio: 'required', audioLabel: '변경할 오디오', fields: [],
@@ -2176,6 +2222,7 @@ function AudioToolsPage({ notify, onCreated }: { notify: (text: string, error?: 
   const [running, setRunning] = useState(false);
   const [saving, setSaving] = useState(false);
   const [errorText, setErrorText] = useState('');
+  const [warningText, setWarningText] = useState('');
   const [transcribing, setTranscribing] = useState(false);
   const [transcript, setTranscript] = useState<string | null>(null);
   const [transcribeLanguage, setTranscribeLanguage] = useState<'auto' | 'korean' | 'english'>('auto');
@@ -2304,19 +2351,45 @@ function AudioToolsPage({ notify, onCreated }: { notify: (text: string, error?: 
     }
     setRunning(true);
     setErrorText('');
+    setWarningText('');
     t.stopPlayback();
     try {
       let audioDataUrl: string | undefined;
       if (audioBlobRef.current) audioDataUrl = await readFileAsDataUrl(audioBlobRef.current);
       for (const runTool of runTools) {
         const runValues = { ...defaultsFor(runTool.fields), ...fieldValues };
-        const instruction = isEdit ? editInstruction(editFunctionId, runValues) : runTool.id === 'add-nonverbal' ? nonverbalInstruction(runValues, pickedAudioSeconds) : runTool.instruction(runValues);
-        // TTS output length: 0 means "let the normal human speaking pace decide", estimated
-        // from the text length. AudioAuK rejects seconds=0 when no reference audioId exists,
-        // so a computed positive value is sent whenever the user left it at 0.
-        const resolvedSeconds = runTool.showSeconds ? (seconds > 0 ? seconds : estimateSpeechSeconds(runValues.text || instruction)) : 0;
-        const result = await api<{ dataUrl: string }>('/audio-tools/auk', 'POST', { task: 'tts', instruction, audioDataUrl, checkpoint, seconds: resolvedSeconds });
-        audioDataUrl = result.dataUrl;
+        const instructionFor = (values: Record<string, string>) => (isEdit ? editInstruction(editFunctionId, values) : runTool.id === 'add-nonverbal' ? nonverbalInstruction(values, pickedAudioSeconds) : runTool.instruction(values));
+        // 긴 오디오로 내용을 처리하는 도구(조절/변형/품질개선 등)는 서버가 10초 창으로 나눠 순차
+        // 처리하고 이어붙인다. 비언어음 추가(위치가 전체 길이 기준)와 참조 목소리(클론 원본)는 제외,
+        // 가사/대사 편집은 텍스트 앵커 문제로 제외(단일 잡으로 처리).
+        const chunkContentAudio = !isEdit && runTool.audio === 'required' && runTool.referenceOnly !== true && runTool.id !== 'add-nonverbal' && pickedAudioSeconds > 10;
+        // TTS는 긴 텍스트를 10초 이하 발화 조각으로 나눠 각각 생성한 뒤 이어붙인다. 사용자가 출력
+        // 길이를 직접 지정한 경우(seconds > 0)에는 그 의도를 존중해 분할하지 않는다.
+        const splitTts = runTool.showSeconds && seconds === 0 && estimateSpeechSeconds(runValues.text || '') > 10;
+        if (splitTts) {
+          const segments = splitSpeechText(runValues.text || '');
+          const buffers: AudioBuffer[] = [];
+          for (const segment of segments) {
+            const segSeconds = estimateSpeechSeconds(segment);
+            const result = await api<{ dataUrl: string }>('/audio-tools/auk', 'POST', { task: 'tts', instruction: instructionFor({ ...runValues, text: segment }), audioDataUrl, checkpoint, seconds: segSeconds });
+            const ctx = t.ensureAudioContext();
+            const response = await fetch(result.dataUrl);
+            if (!response.ok) throw new Error('조각 결과 오디오를 내려받지 못했습니다.');
+            buffers.push(await ctx.decodeAudioData(await response.arrayBuffer()));
+          }
+          const combined = await concatBuffers(buffers);
+          const blob = audioBufferToWavBlob(combined);
+          audioDataUrl = await readFileAsDataUrl(blob);
+        } else {
+          const instruction = instructionFor(runValues);
+          // TTS output length: 0 means "let the normal human speaking pace decide", estimated
+          // from the text length. AudioAuK rejects seconds=0 when no reference audioId exists,
+          // so a computed positive value is sent whenever the user left it at 0.
+          const resolvedSeconds = runTool.showSeconds ? (seconds > 0 ? seconds : estimateSpeechSeconds(runValues.text || instruction)) : 0;
+          const result = await api<{ dataUrl: string; warning?: string | null }>('/audio-tools/auk', 'POST', { task: 'tts', instruction, audioDataUrl, checkpoint, seconds: resolvedSeconds, chunk: chunkContentAudio });
+          if (result.warning) setWarningText(result.warning);
+          audioDataUrl = result.dataUrl;
+        }
       }
       const finalUrl = audioDataUrl;
       if (!finalUrl) throw new Error('결과 오디오가 없습니다.');
@@ -2411,7 +2484,7 @@ function AudioToolsPage({ notify, onCreated }: { notify: (text: string, error?: 
           <div className="at-function-fields">{editFunction.fields.map(field => renderField(field))}</div>
         </>}
         {tool.fields.map(field => renderField(field))}
-        {tool.showSeconds && <label className="at-field">출력 길이(초)<Input type="number" min={0} max={3600} value={seconds} onChange={event => setSeconds(Math.min(3600, Math.max(0, Number(event.target.value) || 0)))} disabled={running}/><span className="field-hint">0을 넣으면 일반적인 말하기 속도를 기준으로 텍스트 길이에서 시간을 계산하고, 숫자를 넣으면 그 길이(초)에 맞춰 만듭니다. 10초를 넘어가면 음성 환각(관련 없는 소리, 구절 반복 등)이 생길 수 있습니다.{(() => { const est = estimateSpeechSeconds(fieldValues.text || ''); return est > 10 ? ` 현재 텍스트는 약 ${est}초로 추정되니 문단 단위로 나눠 생성하세요.` : ''; })()}</span></label>}
+        {tool.showSeconds && <label className="at-field">출력 길이(초)<Input type="number" min={0} max={3600} value={seconds} onChange={event => setSeconds(Math.min(3600, Math.max(0, Number(event.target.value) || 0)))} disabled={running}/><span className="field-hint">0을 넣으면 일반적인 말하기 속도를 기준으로 텍스트 길이에서 시간을 계산하고, 숫자를 넣으면 그 길이(초)에 맞춰 만듭니다. 10초를 넘는 긴 텍스트는 발화 조각으로 나눠 생성한 뒤 자동으로 이어붙여 환각을 줄입니다.{(() => { const est = estimateSpeechSeconds(fieldValues.text || ''); return est > 10 ? ` 현재 텍스트는 약 ${est}초로 추정되며 자동 분할해 처리합니다.` : ''; })()}</span></label>}
         {isEdit && <div className="at-field">
           <span className="at-field-label">감지된 텍스트 (전사)</span>
           {transcribing ? <div className="at-transcribing"><LoaderCircle className="spin"/>텍스트 인식 중...</div> : <Textarea rows={6} readOnly className="at-textarea at-readonly" value={transcript || '오디오를 선택하면 이곳에 인식된 가사/대사가 표시됩니다.'}/>}
@@ -2420,6 +2493,7 @@ function AudioToolsPage({ notify, onCreated }: { notify: (text: string, error?: 
         {summarizeRun() && <p className="field-hint at-run-summary">{summarizeRun()}</p>}
         {isEdit && editSourceSeconds > 20 && <p className="field-hint warning">선택한 오디오가 약 {editSourceSeconds}초입니다. AuK 편집은 20초 이하에서 안정적이며, 더 길면 결과가 노이즈/왜곡으로 무너질 수 있습니다. 편집할 구간만 잘라 사용해 주세요.</p>}
         <Button onClick={() => void run()} disabled={running || (isEdit && transcribing)}>{running ? <LoaderCircle className="spin"/> : <Sparkles size={14}/>}{running ? '작업 중...' : '실행'}</Button>
+        {warningText && <p className="field-hint warning">{warningText}</p>}
         {errorText && <p className="field-hint warning">{errorText}</p>}
       </div>
       <div className="audio-tools-result">
@@ -2720,10 +2794,12 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
     if (!previewId || !referenceBlobRef.current) return;
     setApplying(true);
     setErrorText('');
+    setWarningText('');
     try {
       await withEstimatedProgress(async () => {
         const dataUrl = await readFileAsDataUrl(referenceBlobRef.current as Blob);
-        await api(`/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl, engine });
+        const result = await api<{ ok: boolean; warning: string | null }>(`/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl, engine });
+        setWarningText(result.warning || '');
         const ctx = t.ensureAudioContext();
         const [vocalsResponse, instrumentalResponse] = await Promise.all([
           fetch(`/api/timbre-transform/${previewId}/stems/vocals`),

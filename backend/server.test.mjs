@@ -1308,6 +1308,49 @@ test('음색 변조 - 기존 방식: engine:\'vevo2\'를 보내면 Seed-VC 대�
   assert.match(noModel.data.error, /Vevo2/);
 });
 
+test('음색 변조 - 기존 방식: 긴 보컬은 Seed-VC도 10초 창(겹침 2초)으로 나눠 같은 참조 목소리로 변환하고 연결한다(AuK와 동일 패턴, 긴 소스 붕괴 회피)', async t => {
+  resetEnv();
+  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-timbre-legacy-chunk-'));
+  const { enginePath } = await setUpEngine(root);
+  const seedVcModel = path.join(root, 'models', 'audio-cpp', 'audio.cpp-gguf', 'SeedVC-MLX-GGUF', 'seed-vc-mlx-q8_0.gguf');
+  await mkdir(path.dirname(seedVcModel), { recursive: true });
+  await writeFile(seedVcModel, 'stub');
+  const fakeSpawn = makeFakeSpawn();
+  const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}), spawnImpl: fakeSpawn.spawnImpl });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const call = async (route, method = 'GET', payload) => fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) });
+  const callJson = async (route, method, payload) => { const response = await call(route, method, payload); return { status: response.status, data: await response.json() }; };
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+
+  await callJson('/api/settings', 'PUT', { enginePath });
+  const sourceDataUrl = `data:audio/wav;base64,${Buffer.from('fake-source-song').toString('base64')}`;
+  const voiceRefDataUrl = `data:audio/wav;base64,${Buffer.from('fake-target-voice').toString('base64')}`;
+  const previewId = (await callJson('/api/timbre-transform/prepare', 'POST', { sourceDataUrl })).data.previewId;
+  fakeSpawn.setProbe({ durationSeconds: '26' });
+
+  const callsBeforeApply = fakeSpawn.calls.length;
+  const applied = await callJson(`/api/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl: voiceRefDataUrl });
+  assert.equal(applied.status, 200);
+  assert.equal(applied.data.chunkCount, 3);
+  assert.match(applied.data.warning, /10초 단위.*3개/);
+  const applyCalls = fakeSpawn.calls.slice(callsBeforeApply);
+  const seedCalls = applyCalls.filter(c => c.args.includes('seed_vc'));
+  assert.equal(seedCalls.length, 3, 'expected one Seed-VC run per 10s chunk, never on the whole 26s vocal at once');
+  for (const seedCall of seedCalls) {
+    assert.ok(seedCall.args.some(arg => String(arg).includes('voice-ref-normalized.wav')), 'expected every chunk to reuse the SAME normalized reference clip');
+    assert.ok(!seedCall.args.some(arg => String(arg).includes('vocals-original.wav')), 'a chunk source, not the full vocal, is what goes through Seed-VC');
+  }
+  const chunkArgs = applyCalls.filter(c => c.engine === 'ffmpeg').flatMap(c => c.args).map(String);
+  assert.ok(chunkArgs.some(arg => arg.includes('atrim=start=0.000:duration=10.000')));
+  assert.ok(chunkArgs.some(arg => arg.includes('atrim=start=8.000:duration=10.000')));
+  assert.ok(chunkArgs.some(arg => arg.includes('atrim=start=16.000:duration=10.000')));
+  assert.ok(chunkArgs.some(arg => arg.includes('concat=n=3:v=0:a=1')));
+  // the shared loudness-match + sidechain silence gate still runs on the stitched result
+  assert.ok(applyCalls.some(c => c.engine === 'ffmpeg' && c.args.some(arg => typeof arg === 'string' && arg.includes('sidechaingate'))), 'expected the shared post-processing chain on the concatenated vocal too');
+  assert.ok(applyCalls.some(c => c.engine === 'ffmpeg' && c.args.some(arg => typeof arg === 'string' && arg.startsWith('volume='))), 'expected the shared gain-correction pass on the concatenated vocal');
+});
+
 function makeFakeAudioAuk() {
   const calls = [];
   const jobs = new Map();
@@ -1579,6 +1622,35 @@ test('Tools 메뉴 - AuK 작업: 완성곡과 무관하게 독립 오디오(선�
   assert.match(pitchBody.instruction, /Raise the pitch by 2 semitones/);
   const settingsCall = auk.calls.filter(c => c.pathname === '/api/settings' && c.method === 'PUT').at(-1);
   assert.equal(JSON.parse(settingsCall.body).engine.model, 'auk_base_w4a8.safetensors');
+
+  // 긴 오디오+지시문(chunk:true)은 10초 창으로 나눠 각각 AuK 잡을 돌리고 이어붙인다 -- 결과는
+  // 여전히 dataUrl, 환각 회피용 warning/chunkCount 포함. 참조 목소리나 시점 앵커가 필요한 도구는
+  // 프론트가 chunk를 보내지 않으므로 이 경로는 "조각과 무관한 지시문" 전용이다.
+  fakeSpawn.setProbe({ durationSeconds: '26' });
+  const aukCallsBeforeChunk = auk.calls.length;
+  const chunked = await callJson('/api/audio-tools/auk', 'POST', {
+    task: 'tts', instruction: 'Remove the background noise, preserve everything else.', audioDataUrl, checkpoint: 'base', chunk: true,
+  });
+  assert.equal(chunked.status, 200);
+  assert.equal(chunked.data.chunkCount, 3);
+  assert.match(chunked.data.warning, /10초 단위.*3개/);
+  assert.match(chunked.data.dataUrl, /^data:audio\/wav;base64,/);
+  const chunkAudios = auk.calls.slice(aukCallsBeforeChunk).filter(c => c.pathname === '/api/audio' && c.method === 'POST');
+  assert.equal(chunkAudios.length, 3, 'expected one AudioAuK audio upload per 10s source chunk');
+  const chunkJobBodies = auk.calls.slice(aukCallsBeforeChunk).filter(c => c.pathname === '/api/jobs' && c.method === 'POST').map(c => JSON.parse(c.body));
+  assert.equal(chunkJobBodies.length, 3, 'expected one AuK job per source chunk');
+  assert.equal(new Set(chunkJobBodies.map(body => body.instruction)).size, 1, 'expected every chunk job to carry the same instruction');
+  assert.ok(!auk.calls.slice(aukCallsBeforeChunk).filter(c => c.pathname === '/api/jobs' && c.method === 'POST').some(c => JSON.parse(c.body).instruction.includes('26s')), 'sanity: instruction is unchanged by chunking');
+  const chunkFfmpegArgs = fakeSpawn.calls.filter(c => c.engine === 'ffmpeg').flatMap(c => c.args).map(String);
+  assert.ok(chunkFfmpegArgs.some(arg => arg.includes('concat=n=3:v=0:a=1')), 'expected the three chunk results to be concatenated');
+  // chunk:false(또는 누락)는 기존처럼 단일 잡 + 단일 업로드로 돌아간다
+  const callsBeforeSingle = auk.calls.length;
+  const chunkOff = await callJson('/api/audio-tools/auk', 'POST', {
+    task: 'tts', instruction: 'Raise the pitch by 1 semitone.', audioDataUrl, checkpoint: 'base',
+  });
+  assert.equal(chunkOff.status, 200);
+  assert.equal(chunkOff.data.chunkCount, undefined);
+  assert.equal(auk.calls.slice(callsBeforeSingle).filter(c => c.pathname === '/api/audio' && c.method === 'POST').length, 1, 'expected exactly one upload when chunking is off');
 
   // 결과가 라이브러리에 자동 저장되지 않는다 -- 별도로 /api/audio-save를 호출해야 함
   const saved = await callJson('/api/audio-save', 'POST', { dataUrl: withAudio.data.dataUrl, title: 'Tools 결과' });

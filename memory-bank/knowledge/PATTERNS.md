@@ -174,3 +174,31 @@ const t = useAudioTransport();
 - Reuse one seed for every chunk in the same conversion to reduce timbre drift.
 - Keep the first chunk except its final second, trim one second from both sides of middle chunks, and trim the first second from the last chunk before concatenation. This preserves the midpoint of each overlap without duplicating time.
 - Report progress from completed chunk count instead of a time-only estimate.
+
+## 10-second chunk pipeline for any short-window voice engine (AuK / Seed-VC / Vevo2)
+
+- Applied whenever an input exceeds the engine window (10s): split the source with a fixed stride
+  smaller than the window (8s) so adjacent windows overlap by the difference (2s).
+- Keep the first chunk except its final edge second, trim one second from both sides of middle
+  chunks, and trim only the first second from the last chunk before concatenation. Every cut lands
+  inside an overlap zone and each window's midpoint stays intact.
+- Reuse the SAME reference clip and the SAME seed across all chunks of one conversion to avoid
+  speaker/timbre drift. (User-confirmed: per-chunk different references are not needed.)
+- Never chunk content whose meaning depends on absolute position or duration -- nonverbal insert
+  (position relative to the full clip), lyrics/line edits (text anchors), and the voice-cloning
+  sample that is the *subject* of the request stay single-shot. Only position-independent
+  instructions (loudness/pitch/speed/whisper/noise removal) are safe to chunk.
+- Surface the outcome with a warning naming the window/overlap/part count and possible seams at
+  chunk boundaries.
+- Implement with `ffmpeg atrim+asetpts=PTS-STARTPTS` per chunk and one final
+  `concat=n={N}:v=0:a=1`; measure input length first (single ffprobe) to decide chunking.
+
+## Longer-than-window TTS text splitting
+
+- When a TTS tool yields the output budget from text length (seconds=0) and the estimated speech
+  time exceeds the 10s engine window, split the text into line-aware segments that each fit under
+  the threshold, generate one job per segment, decode all results, and concatenate the buffers
+  (`OfflineAudioContext` sources scheduled sequentially by cumulative time), then re-encode to WAV.
+- If the user explicitly pins an output length (seconds>0), respect it and do not split.
+- The instruction template is rebuilt per segment with only the text replaced, so the user's choices
+  are preserved across parts.
