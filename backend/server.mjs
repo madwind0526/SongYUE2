@@ -2,7 +2,7 @@ import http from 'node:http';
 import { mkdir, readFile, writeFile, rename, readdir, access, unlink, rm, stat, copyFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { randomInt, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import { comfyUiAlive, execute as executeComfyUi } from './comfyui.mjs';
@@ -77,6 +77,9 @@ const DEFAULT_COMFYUI_ENGINE_PATH = path.join('engine', 'ComfyUI');
 // its default path is absolute rather than root-relative.
 const DEFAULT_AUDIO_AUK_ENDPOINT = 'http://127.0.0.1:4312';
 const DEFAULT_AUDIO_AUK_PATH = 'C:\\Claude\\AudioAuK';
+const AUK_CHUNK_SECONDS = 10;
+const AUK_OVERLAP_SECONDS = 2;
+const AUK_EDGE_TRIM_SECONDS = AUK_OVERLAP_SECONDS / 2;
 const DEFAULT_DDSP_SVC_PATH = path.join('test', 'DDSP-SVC');
 const COMFYUI_GENERATE_DEADLINE_MS = GENERATE_TIMEOUT_MS;
 const COMFYUI_MAX_DURATION_SECONDS = 240;
@@ -96,6 +99,18 @@ const DEFAULT_VISUALIZER_RING_STEP = 1;
 const DEFAULT_VISUALIZER_AMPLITUDE = 2;
 const VOCAL_HINTS = { male: ', male vocal', female: ', female vocal', duet: ', duet: male and female vocals' };
 const vocalHint = (gender) => VOCAL_HINTS[gender] || '';
+
+function buildAukChunkPlan(durationSeconds) {
+  const chunks = [];
+  const stride = AUK_CHUNK_SECONDS - AUK_OVERLAP_SECONDS;
+  for (let start = 0; start < durationSeconds - 0.001;) {
+    const duration = Math.min(AUK_CHUNK_SECONDS, durationSeconds - start);
+    chunks.push({ start, duration });
+    if (start + duration >= durationSeconds - 0.001) break;
+    start += stride;
+  }
+  return chunks;
+}
 // YuE2 has no dedicated instrumental flag and both the audio.cpp and Python engines require
 // non-empty lyrics (audio.cpp throws "Yue2 requires non-empty lyrics" outright), so "instrumental"
 // mode can only ever be a soft style hint on top of the real lyrics, not a way to omit them.
@@ -827,7 +842,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   // submitAukJob() 주석 참고 -- 이 함수는 SongYUE2 쪽 준비(보컬 스템 확보, 참조 오디오 정규화,
   // 결과 후처리/저장)만 담당한다.
   // stems: prepareTimbrePreview()가 이미 채워둔 스템 캐시 디렉터리(project 무관, applyVocalTimbreCore와 같은 계약).
-  async function applyAukTimbreCore(stems, { referenceDataUrl, textDescription, checkpoint, lyrics, whisper, language }) {
+  async function applyAukTimbreCore(stems, { referenceDataUrl, textDescription, checkpoint, lyrics, whisper, language, onProgress }) {
     const description = text(textDescription, 500).trim();
     let referenceBuffer = null;
     let referenceExt = null;
@@ -857,11 +872,14 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     await mkdir(workDir, { recursive: true });
     try {
       const durationMs = await measureDurationMs(originalVocalsWav);
-      // 실측 확인됨(2026-09-17~18): AuK는 짧은 클립에서는 괜찮지만 전체곡 길이(약 100초)를
-      // 넣으면 결과가 노이즈로 붕괴한다. 차단하지 않고 경고만 표시(v1 결정).
-      const warning = durationMs && durationMs > 30000
-        ? 'AuK는 긴 음원에서 결과가 노이즈로 무너지는 경향이 있습니다(실측 확인됨). 30초 이하의 짧은 곡에서 더 안정적입니다.'
-        : null;
+      const durationSeconds = durationMs ? durationMs / 1000 : 0;
+      const useChunking = !referenceBuffer && durationSeconds > AUK_CHUNK_SECONDS;
+      const chunkPlan = useChunking ? buildAukChunkPlan(durationSeconds) : [];
+      const warning = useChunking
+        ? `긴 보컬을 ${AUK_CHUNK_SECONDS}초 단위(겹침 ${AUK_OVERLAP_SECONDS}초)로 ${chunkPlan.length}개 처리해 연결했습니다.`
+        : durationMs && durationMs > 30000
+          ? '참조 음성을 사용하는 AuK TTS는 긴 음원에서 결과가 노이즈로 무너지는 경향이 있습니다. 30초 이하에서 더 안정적입니다.'
+          : null;
 
       let referenceFilePath = null;
       if (referenceBuffer) {
@@ -880,32 +898,78 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         if (ffmpegLog.code !== 0) throw fail(502, `참조 오디오 변환에 실패했습니다. ${ffmpegLog.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
       }
 
-      let result;
-      try {
-        result = await submitAukJob(fetchImpl, spawnImpl, endpoint, audioAukPath, {
-          referenceFilePath, textDescription: description || null, sourceVocalPath: originalVocalsWav, checkpoint, lyrics: spokenLyrics, whisper, language,
-        });
-      } catch (error) {
-        throw fail(502, `AuK 변환에 실패했습니다. ${(error && error.message) || '알 수 없는 오류'}`);
-      }
-
-      const rawOutput = path.join(workDir, `auk-output${result.outputExt}`);
-      await writeFile(rawOutput, result.outputBuffer);
       const convertedVocals = path.join(workDir, 'converted-vocals.wav');
-      const convertLog = await new Promise((resolve, reject) => {
-        const child = spawnImpl('ffmpeg', ['-y', '-i', rawOutput, '-ar', '44100', '-ac', '1', convertedVocals], { windowsHide: true });
-        const chunks = [];
-        const collect = (data) => chunks.push(data);
-        child.stdout?.on('data', collect);
-        child.stderr?.on('data', collect);
-        child.once('error', reject);
-        child.once('close', (code) => resolve({ code, text: Buffer.concat(chunks).toString('utf8') }));
-      }).catch(() => { throw fail(502, 'AuK 결과 오디오 변환에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
-      if (convertLog.code !== 0) throw fail(502, `AuK 결과 오디오 변환에 실패했습니다. ${convertLog.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
+      let resultTranscript = null;
+
+      const runFfmpeg = async (args, label) => {
+        const log = await new Promise((resolve, reject) => {
+          const child = spawnImpl('ffmpeg', args, { windowsHide: true });
+          const chunks = [];
+          const collect = (data) => chunks.push(data);
+          child.stdout?.on('data', collect);
+          child.stderr?.on('data', collect);
+          child.once('error', reject);
+          child.once('close', (code) => resolve({ code, text: Buffer.concat(chunks).toString('utf8') }));
+        }).catch(() => { throw fail(502, `${label}에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.`); });
+        if (log.code !== 0) throw fail(502, `${label}에 실패했습니다. ${log.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
+      };
+
+      if (useChunking) {
+        const sharedSeed = randomInt(0, 2147483647);
+        const stitchedParts = [];
+        if (typeof onProgress === 'function') onProgress(2, `AuK 조각 준비 중 (0/${chunkPlan.length})`);
+
+        for (let index = 0; index < chunkPlan.length; index += 1) {
+          const chunk = chunkPlan[index];
+          const chunkSource = path.join(workDir, `chunk-${String(index).padStart(3, '0')}.wav`);
+          const sourceFilter = `atrim=start=${chunk.start.toFixed(3)}:duration=${chunk.duration.toFixed(3)},asetpts=PTS-STARTPTS`;
+          await runFfmpeg(['-y', '-i', originalVocalsWav, '-af', sourceFilter, '-ar', '44100', '-ac', '1', chunkSource], 'AuK 입력 조각 생성');
+
+          let chunkResult;
+          try {
+            chunkResult = await submitAukJob(fetchImpl, spawnImpl, endpoint, audioAukPath, {
+              referenceFilePath: null, textDescription: description, sourceVocalPath: chunkSource, checkpoint, lyrics: null, whisper, language, seed: sharedSeed,
+            });
+          } catch (error) {
+            throw fail(502, `AuK ${index + 1}/${chunkPlan.length} 조각 변환에 실패했습니다. ${(error && error.message) || '알 수 없는 오류'}`);
+          }
+
+          const rawOutput = path.join(workDir, `chunk-${String(index).padStart(3, '0')}-raw${chunkResult.outputExt}`);
+          const stitchedPart = path.join(workDir, `chunk-${String(index).padStart(3, '0')}-stitched.wav`);
+          await writeFile(rawOutput, chunkResult.outputBuffer);
+
+          const trimStart = index === 0 ? 0 : AUK_EDGE_TRIM_SECONDS;
+          const trimEnd = index === chunkPlan.length - 1 ? null : Math.max(trimStart, chunk.duration - AUK_EDGE_TRIM_SECONDS);
+          const trimFilter = `atrim=start=${trimStart.toFixed(3)}${trimEnd === null ? '' : `:end=${trimEnd.toFixed(3)}`},asetpts=PTS-STARTPTS`;
+          await runFfmpeg(['-y', '-i', rawOutput, '-af', trimFilter, '-ar', '44100', '-ac', '1', stitchedPart], 'AuK 결과 조각 정리');
+          stitchedParts.push(stitchedPart);
+          if (typeof onProgress === 'function') onProgress(Math.round(5 + ((index + 1) / chunkPlan.length) * 85), `AuK 조각 처리 중 (${index + 1}/${chunkPlan.length})`);
+        }
+
+        const concatInputs = stitchedParts.flatMap((file) => ['-i', file]);
+        const concatFilter = `${stitchedParts.map((_, index) => `[${index}:a]`).join('')}concat=n=${stitchedParts.length}:v=0:a=1[out]`;
+        await runFfmpeg(['-y', ...concatInputs, '-filter_complex', concatFilter, '-map', '[out]', '-ar', '44100', '-ac', '1', convertedVocals], 'AuK 결과 조각 연결');
+      } else {
+        let result;
+        try {
+          if (typeof onProgress === 'function') onProgress(5, 'AuK 처리 중');
+          result = await submitAukJob(fetchImpl, spawnImpl, endpoint, audioAukPath, {
+            referenceFilePath, textDescription: description || null, sourceVocalPath: originalVocalsWav, checkpoint, lyrics: spokenLyrics, whisper, language,
+          });
+        } catch (error) {
+          throw fail(502, `AuK 변환에 실패했습니다. ${(error && error.message) || '알 수 없는 오류'}`);
+        }
+        resultTranscript = result.transcript;
+        const rawOutput = path.join(workDir, `auk-output${result.outputExt}`);
+        await writeFile(rawOutput, result.outputBuffer);
+        await runFfmpeg(['-y', '-i', rawOutput, '-ar', '44100', '-ac', '1', convertedVocals], 'AuK 결과 오디오 변환');
+        if (typeof onProgress === 'function') onProgress(90, 'AuK 결과 정리 중');
+      }
 
       const gatedVocals = await postProcessConvertedVocal(convertedVocals, originalVocalsWav, workDir);
       await copyFile(gatedVocals, path.join(stems, 'vocals.wav'));
-      return { ok: true, warning, transcript: storedLyrics || result.transcript || null };
+      if (typeof onProgress === 'function') onProgress(96, '보컬과 반주를 합치는 중');
+      return { ok: true, warning, transcript: storedLyrics || resultTranscript || null, chunkCount: useChunking ? chunkPlan.length : 1 };
     } finally {
       await rm(workDir, { recursive: true, force: true }).catch(() => {});
     }
@@ -1637,7 +1701,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       }
       if (req.method === 'GET' && pathname === '/api/generate/status') {
         if (!generating || !generationStatus) return send(200, { active: false, elapsedMs: 0, expectedMs: 0 });
-        return send(200, { active: true, projectId: generationStatus.projectId, elapsedMs: Date.now() - generationStatus.startedAt, expectedMs: generationStatus.expectedMs });
+        return send(200, { active: true, projectId: generationStatus.projectId, elapsedMs: Date.now() - generationStatus.startedAt, expectedMs: generationStatus.expectedMs, progress: generationStatus.progress, detail: generationStatus.detail });
       }
       if (req.method === 'POST' && pathname === '/api/plan') {
         // Stateless preview: planning must not create/persist a project just to produce
@@ -2150,8 +2214,13 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         if (!(await exists(dir))) throw fail(404, '원본 오디오 준비 정보를 찾을 수 없습니다. 원본을 다시 선택해 주세요.');
         if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
         generating = true;
-        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 90000 };
-        try { return send(200, await applyAukTimbreCore(path.join(dir, 'stems'), { referenceDataUrl: input.referenceDataUrl, textDescription: input.textDescription, checkpoint: input.checkpoint, lyrics: input.lyrics, whisper: input.whisper, language: input.language })); }
+        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 90000, progress: 0, detail: 'AuK 준비 중' };
+        const onProgress = (progress, detail) => {
+          if (!generationStatus) return;
+          generationStatus.progress = progress;
+          generationStatus.detail = detail;
+        };
+        try { return send(200, await applyAukTimbreCore(path.join(dir, 'stems'), { referenceDataUrl: input.referenceDataUrl, textDescription: input.textDescription, checkpoint: input.checkpoint, lyrics: input.lyrics, whisper: input.whisper, language: input.language, onProgress })); }
         finally { generating = false; generationStatus = null; }
       }
       // "Tools" 메뉴: 완성곡과 무관한 독립 AuK 작업. /projects/:id 스코프가 아니라 /audio-save와

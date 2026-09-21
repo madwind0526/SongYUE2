@@ -167,3 +167,10 @@ const t = useAudioTransport();
 **사용 시점:** `AudioToolsPage`/`TimbreTransformDialog`처럼 입력 필드+설명문 데이터 기반 폼을 그릴 때.
 
 `<label className="field-hint">...<Input/>`처럼 label로 감싸는 방식은 접근성 트리에서 인식되게 `htmlFor`+`id`로 연결하고, 단순 컨테이너에 `role="group"` 대신 의미론적 태그(필요 시 `aria-labelledby`)를 쓴다. `<audio>`/`<canvas>`에는 재생 상태를 알릴 `aria-label`/설명이 있어야 한다. 화면 낭독 대상이므로 키보드 포커스가 아니라 접근성 검사 상의 경고로 잡히는 항목들.
+
+## AuK long-audio chunk stitching
+
+- For no-reference AuK timbre conversion, split long vocals into 10-second windows with an 8-second stride so adjacent windows overlap by 2 seconds.
+- Reuse one seed for every chunk in the same conversion to reduce timbre drift.
+- Keep the first chunk except its final second, trim one second from both sides of middle chunks, and trim the first second from the last chunk before concatenation. This preserves the midpoint of each overlap without duplicating time.
+- Report progress from completed chunk count instead of a time-only estimate.

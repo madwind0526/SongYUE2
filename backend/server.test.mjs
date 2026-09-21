@@ -1364,6 +1364,7 @@ test('음색 변조 - AuK 탭: 레퍼런스만 있으면 소스를 전사해 그
   const sourceDataUrl = `data:audio/wav;base64,${Buffer.from('fake-source-song').toString('base64')}`;
   const previewId = (await callJson('/api/timbre-transform/prepare', 'POST', { sourceDataUrl })).data.previewId;
   assert.ok(fakeSpawn.calls.some(c => c.args.includes('mel_band_roformer')), 'expected prepare to separate the source once, up front');
+  fakeSpawn.setProbe({ durationSeconds: '9.5' });
 
   // neither reference nor text description: clear 400, no AudioAuK calls made
   const neither = await callJson(`/api/timbre-transform/${previewId}/auk/apply`, 'POST', { checkpoint: 'flash' });
@@ -1414,6 +1415,30 @@ test('음색 변조 - AuK 탭: 레퍼런스만 있으면 소스를 전사해 그
   const ttsJobCallLyrics = auk.calls.filter(c => c.pathname === '/api/jobs' && c.method === 'POST').at(-1);
   const ttsBodyLyrics = JSON.parse(ttsJobCallLyrics.body);
   assert.match(ttsBodyLyrics.instruction, /^다음 내용을 같은 목소리로 읽어 주세요: "낮은 목소리로 부른 원곡 가사 후렴은 크게"\.$/);
+
+  // Long text-only timbre edits are split into overlapping 10-second windows. With a 26-second
+  // source the plan is 0-10, 8-18, 16-26. The first tail and following head each lose one second,
+  // producing contiguous 0-9, 9-17, 17-26 output without sending a long clip to AuK.
+  fakeSpawn.setProbe({ durationSeconds: '26' });
+  const callsBeforeChunking = auk.calls.length;
+  const spawnsBeforeChunking = fakeSpawn.calls.length;
+  const chunked = await callJson(`/api/timbre-transform/${previewId}/auk/apply`, 'POST', { textDescription: '따뜻하고 중후한 남성', checkpoint: 'flash' });
+  assert.equal(chunked.status, 200);
+  assert.equal(chunked.data.chunkCount, 3);
+  assert.match(chunked.data.warning, /10초 단위.*3개/);
+  const chunkJobBodies = auk.calls.slice(callsBeforeChunking)
+    .filter(c => c.pathname === '/api/jobs' && c.method === 'POST')
+    .map(c => JSON.parse(c.body));
+  assert.equal(chunkJobBodies.length, 3, 'expected one AuK job per overlapping source chunk');
+  assert.equal(new Set(chunkJobBodies.map(body => body.seed)).size, 1, 'expected every chunk to share one seed for consistent timbre');
+  const chunkFfmpegArgs = fakeSpawn.calls.slice(spawnsBeforeChunking).filter(c => c.engine === 'ffmpeg').flatMap(c => c.args);
+  assert.ok(chunkFfmpegArgs.some(arg => String(arg).includes('atrim=start=0.000:duration=10.000')));
+  assert.ok(chunkFfmpegArgs.some(arg => String(arg).includes('atrim=start=8.000:duration=10.000')));
+  assert.ok(chunkFfmpegArgs.some(arg => String(arg).includes('atrim=start=16.000:duration=10.000')));
+  assert.ok(chunkFfmpegArgs.some(arg => String(arg).includes('atrim=start=0.000:end=9.000')));
+  assert.ok(chunkFfmpegArgs.some(arg => String(arg).includes('atrim=start=1.000:end=9.000')));
+  assert.ok(chunkFfmpegArgs.some(arg => String(arg).includes('atrim=start=1.000,asetpts=PTS-STARTPTS')));
+  assert.ok(chunkFfmpegArgs.some(arg => String(arg).includes('concat=n=3:v=0:a=1')));
 
   // the sidechain silence-gate (shared postProcessConvertedVocal helper) still runs on AuK's output, same as Seed-VC/Vevo2
   assert.ok(fakeSpawn.calls.some(c => c.engine === 'ffmpeg' && c.args.some(arg => typeof arg === 'string' && arg.includes('sidechaingate'))), 'expected the shared post-processing chain to run on the AuK result too');
@@ -1751,4 +1776,3 @@ test('보컬 음색 변환의 내장 파일 탐색기: library/ 트리 안 어�
   assert.equal((await call('/api/library/meta?path=music/없는.json')).status, 404);
   assert.equal((await call('/api/library/meta?path=../outside.json')).status, 400);
 });
-

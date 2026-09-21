@@ -1251,7 +1251,7 @@ function StemDialog({ project, mode, onClose, notify, visualizerEnabled, visuali
     if (!ctx || !buffer) return;
     // A suspended context (created after an await) stays silent until resumed from a
     // user gesture. Every play click is such a gesture, so resume before starting.
-    if (ctx.state !== 'running') void ctx.resume();
+    if (ctx.state === 'suspended') void ctx.resume().catch(() => {});
     const position = atPosition !== undefined ? atPosition : currentPosition();
     const clamped = Math.max(0, Math.min(position, Math.max(0, buffer.duration - 0.02)));
     currentSourceRef.current?.stop();
@@ -1899,7 +1899,9 @@ function useAudioTransport() {
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
 
   function ensureAudioContext(): AudioContext {
-    if (audioCtxRef.current) return audioCtxRef.current;
+    if (audioCtxRef.current && audioCtxRef.current.state !== 'closed') return audioCtxRef.current;
+    audioCtxRef.current = null;
+    previewGainRef.current = null;
     const ctx = new AudioContext();
     audioCtxRef.current = ctx;
     const gainNode = ctx.createGain();
@@ -1926,7 +1928,7 @@ function useAudioTransport() {
     return playOffsetRef.current + (ctx.currentTime - playStartCtxTimeRef.current) * rateRef.current;
   }
   function playKey(key: string, atPosition?: number) {
-    const ctx = audioCtxRef.current || ensureAudioContext();
+    const ctx = ensureAudioContext();
     const buffer = bufferForKey(key);
     if (!buffer) return;
     // A suspended context (created after an await) stays silent until resumed from a
@@ -1998,10 +2000,18 @@ function useAudioTransport() {
   const activeBuffer = bufferForKey(activeKey);
   const playedFraction = activeBuffer ? Math.min(1, positionSeconds / activeBuffer.duration) : 0;
   const rowClass = (key: string, base: string) => `${base}${activeKey === key && isPlaying ? ' pp-row-playing-original' : ''}`;
+  function closeContext() {
+    currentSourceRef.current?.stop();
+    currentSourceRef.current = null;
+    const ctx = audioCtxRef.current;
+    audioCtxRef.current = null;
+    previewGainRef.current = null;
+    if (ctx && ctx.state !== 'closed') void ctx.close().catch(() => {});
+  }
   return {
     activeKey, isPlaying, positionSeconds, playbackRate, previewVolume, activeBuffer, playedFraction, rowClass,
     ensureAudioContext, setBuffer, bufferForKey, peaksForKey, handleKeyClick, stopPlayback, seekBy, seekTo, cycleSpeed, applyPreviewVolume,
-    closeContext: () => { void audioCtxRef.current?.close(); },
+    closeContext,
   };
 }
 type AudioTransport = ReturnType<typeof useAudioTransport>;
@@ -2546,7 +2556,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
   const referenceBlobRef = useRef<Blob | null>(null);
   const [preparing, setPreparing] = useState(false);
   const [engine, setEngine] = useState<TimbreEngine>('seed_vc');
-  const [checkpoint, setCheckpoint] = useState<'flash' | 'base'>('flash');
+  const [checkpoint, setCheckpoint] = useState<'flash' | 'base'>('base');
   const [whisperModel, setWhisperModel] = useState('large-v3');
   const [aukLanguage, setAukLanguage] = useState<'auto' | 'korean' | 'english'>('auto');
   const [textDescription, setTextDescription] = useState('');
@@ -2697,8 +2707,10 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
   function withEstimatedProgress<T>(run: () => Promise<T>): Promise<T> {
     setApplyProgress(0);
     const poll = window.setInterval(() => {
-      api<{ active: boolean; elapsedMs: number; expectedMs: number }>('/generate/status').then(status => {
-        if (status.active && status.expectedMs > 0) setApplyProgress(Math.min(96, Math.round(status.elapsedMs / status.expectedMs * 100)));
+      api<{ active: boolean; elapsedMs: number; expectedMs: number; progress?: number }>('/generate/status').then(status => {
+        if (!status.active) return;
+        if (Number.isFinite(status.progress)) setApplyProgress(Math.min(96, Math.max(0, Math.round(status.progress as number))));
+        else if (status.expectedMs > 0) setApplyProgress(Math.min(96, Math.round(status.elapsedMs / status.expectedMs * 100)));
       }).catch(() => {});
     }, 500);
     return run().finally(() => { window.clearInterval(poll); setApplyProgress(100); });
@@ -2735,14 +2747,13 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
 
   async function applyAuk() {
     if (!previewId) return;
-    if (!referenceBlobRef.current && !textDescription.trim()) return;
+    if (!textDescription.trim()) return;
     setApplying(true);
     setErrorText('');
     setWarningText('');
     try {
       await withEstimatedProgress(async () => {
-        const referenceDataUrl = referenceBlobRef.current ? await readFileAsDataUrl(referenceBlobRef.current) : undefined;
-        const result = await api<{ ok: boolean; warning: string | null; transcript: string | null }>(`/timbre-transform/${previewId}/auk/apply`, 'POST', { referenceDataUrl, textDescription: textDescription.trim() || undefined, checkpoint, lyrics: sourceLyrics || undefined, whisper: whisperModel, language: aukLanguage });
+        const result = await api<{ ok: boolean; warning: string | null; transcript: string | null; chunkCount: number }>(`/timbre-transform/${previewId}/auk/apply`, 'POST', { textDescription: textDescription.trim(), checkpoint, lyrics: sourceLyrics || undefined, whisper: whisperModel, language: aukLanguage });
         setWarningText(result.warning || '');
         setTranscript(result.transcript);
         const ctx = t.ensureAudioContext();
@@ -2804,7 +2815,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
   const isTraining = !!ddspJob && !['completed', 'failed', 'cancelled'].includes(ddspJob.status);
   const busy = preparing || applying || starting;
   const canApply = engine === 'ddsp' ? !!ddspReferencePaths.length && !!previewId && !isTraining
-    : engine === 'auk' ? !!previewId && (!!referenceName || !!textDescription.trim())
+    : engine === 'auk' ? !!previewId && !!textDescription.trim()
     : !!previewId && !!referenceName;
   const resultBuffer = t.bufferForKey('result');
   const ddspProgress = ddspJob?.targetStep ? Math.min(100, Math.round(ddspJob.currentStep / ddspJob.targetStep * 100)) : 0;
@@ -2824,7 +2835,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
           <Button variant="outline" className="voice-convert-file-btn" onClick={() => setSourcePickerOpen(true)} disabled={busy} title={sourceName || undefined}>
             <Upload size={14}/><span className="voice-convert-file-name">{sourceName || '원본 audio 선택'}</span>
           </Button>
-          <Button variant="outline" className="voice-convert-file-btn" onClick={() => setReferencePickerOpen(true)} disabled={busy} title={referenceName || undefined}>
+          <Button variant="outline" className={`voice-convert-file-btn${engine === 'auk' ? ' disabled' : ''}`} onClick={() => setReferencePickerOpen(true)} disabled={busy || engine === 'auk'} title={engine === 'auk' ? 'AuK 엔진에서는 참조 audio를 사용할 수 없습니다. 목표 음색 텍스트 설명을 입력해 주세요.' : (referenceName || undefined)}>
             <Upload size={14}/><span className="voice-convert-file-name">{referenceName || '참조 audio 선택'}</span>
           </Button>
 
@@ -2842,8 +2853,8 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
             <div className="timbre-auk-option-head" style={{ marginTop: 16 }}>Whisper Option 결정</div>
             <div className="timbre-transcribe-options">전사 언어<select value={aukLanguage} onChange={event => setAukLanguage(event.target.value as 'auto' | 'korean' | 'english')} aria-label="전사 언어" disabled={busy}><option value="auto">자동 감지</option><option value="korean">한국어</option><option value="english">영어</option></select>Whisper 모델<select value={whisperModel} onChange={event => setWhisperModel(event.target.value)} aria-label="Whisper 모델" disabled={busy}><option value="tiny">tiny</option><option value="base">base</option><option value="small">small</option><option value="medium">medium</option><option value="large-v3">large-v3</option><option value="large-v3-turbo">large-v3-turbo</option></select></div>
             <p className="field-hint">가사가 저장된 곡은 전사 없이 그대로 쓰므로 이 전사 선택은 가사가 없는 외부 오디오에서만 적용됩니다.</p>
-            <Textarea value={textDescription} onChange={event => setTextDescription(event.target.value)} placeholder="목표 음색 텍스트 설명 (예: 따뜻하고 부드러운 남성 재즈 보컬) -- 참조가 없으면 필수, 있으면 스타일 수식어로 함께 사용됩니다" disabled={busy} rows={3}/>
-            <p className="field-hint">주의: 참조 audio를 쓰면 결과는 원곡 멜로디가 아니라 그 목소리로 가사를 다시 말하는(TTS) 형태입니다. 30초를 넘는 긴 곡에서는 결과가 불안정할 수 있습니다.</p>
+            <Textarea value={textDescription} onChange={event => setTextDescription(event.target.value)} placeholder="목표 음색 텍스트 설명 (필수) (예: 따뜻하고 부드러운 남성 재즈 보컬)" disabled={busy} rows={3}/>
+            <p className="field-hint">AuK는 참조 audio를 사용하지 않습니다. 긴 보컬은 10초 단위로 나누고 2초씩 겹쳐 처리한 뒤, 겹친 양쪽을 1초씩 잘라 자동으로 연결합니다. 목소리의 색(톤·무게·성별 등)을 구체적으로 설명해 주세요.</p>
           </div>}
 
           {engine === 'ddsp' && <div className="timbre-engine-options">

@@ -26,6 +26,8 @@
   margin-top: 10px;
 }
 
+.timbre-transform-dialog .voice-convert-file-btn.disabled { opacity: 0.4; cursor: not-allowed; }
+
 .timbre-transform-dialog .timbre-section-heading:first-child {
   margin-top: 0;
 }

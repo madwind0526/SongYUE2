@@ -84,7 +84,7 @@ async function pollAukJob(fetchImpl, endpoint, jobId) {
 function freshSeed() { return randomInt(0, 2147483647); }
 
 async function selectAukCheckpoint(fetchImpl, endpoint, checkpoint) {
-  const model = AUK_CHECKPOINTS[checkpoint] || AUK_CHECKPOINTS.flash;
+  const model = AUK_CHECKPOINTS[checkpoint] || AUK_CHECKPOINTS.base;
   await aukFetchJson(fetchImpl, endpoint, '/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ engine: { model } }) });
 }
 
@@ -112,7 +112,7 @@ async function runAukJob(fetchImpl, endpoint, jobBody) {
 // lyrics: the source vocal's real lyrics when they are known in advance (an in-app-created song has
 // them stored next to its audio). Whisper STT hallucinates on dense mixes ("아 아 아" filler), so
 // whenever real lyrics exist we skip transcription entirely.
-export async function submitAukJob(fetchImpl, spawnImpl, endpoint, audioAukPath, { referenceFilePath, textDescription, sourceVocalPath, checkpoint, lyrics, whisper, language }) {
+export async function submitAukJob(fetchImpl, spawnImpl, endpoint, audioAukPath, { referenceFilePath, textDescription, sourceVocalPath, checkpoint, lyrics, whisper, language, seed }) {
   await ensureAudioAukRunning(fetchImpl, spawnImpl, endpoint, audioAukPath);
   await selectAukCheckpoint(fetchImpl, endpoint, checkpoint);
 
@@ -131,9 +131,9 @@ export async function submitAukJob(fetchImpl, spawnImpl, endpoint, audioAukPath,
     const instruction = textDescription
       ? `다음 내용을 읽어 주세요: "${transcript}". 목소리 설명: ${textDescription}.`
       : `다음 내용을 같은 목소리로 읽어 주세요: "${transcript}".`;
-    jobBody = { task: 'tts', instruction, audioId: referenceAudioId, seconds: 0, seed: freshSeed() };
+    jobBody = { task: 'tts', instruction, audioId: referenceAudioId, seconds: 0, seed: Number.isSafeInteger(seed) ? seed : freshSeed() };
   } else {
-    jobBody = { task: 'tts', instruction: `Keep the spoken content unchanged and change the timbre to: "${textDescription}".`, audioId: sourceAudioId, seconds: 0, seed: freshSeed() };
+    jobBody = { task: 'tts', instruction: `Keep the spoken content unchanged and change the timbre to: "${textDescription}".`, audioId: sourceAudioId, seconds: 0, seed: Number.isSafeInteger(seed) ? seed : freshSeed() };
   }
   const result = await runAukJob(fetchImpl, endpoint, jobBody);
   return { ...result, transcript };

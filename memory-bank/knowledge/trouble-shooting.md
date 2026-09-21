@@ -504,3 +504,17 @@ const patched = template
 ### 교훈
 
 비동기 작업을 `void` 없이 버리면 실패한 fetch/decode가 silent fail한다. lint/no-floating-promises를 반드시 지킬 것.
+
+## Closed AudioContext after HMR or dialog cleanup
+
+- **Symptom:** Playback rejects with `Cannot resume a closed AudioContext`, or cleanup rejects with `Cannot close a closed AudioContext`.
+- **Cause:** Hot module replacement or repeated dialog cleanup closes the context while a retained ref still points to it; asynchronous `resume()`/`close()` rejection was also left unhandled.
+- **Fix:** Treat a `closed` context as absent and create a fresh context before playback. Clear context and gain refs before closing, only resume a `suspended` context, only close a non-closed context, and attach `.catch(() => {})` to both promises.
+- **Verified flow:** play audio, close the dialog while playing, reopen the dialog, then confirm no new browser error overlay appears.
+
+## AuK Prompt Enhance can misclassify timbre edits as TTS
+
+- **Symptom:** A loose request such as “make the singer sound like a deep adult man” is rewritten as voice-description TTS and inserts the default content `Hello, welcome to AuK`.
+- **Cause:** The local Qwen Prompt Enhance classifier selects `Voice description TTS` instead of `Change timbre` when the task verb is ambiguous.
+- **Finding:** Starting the request with `Change the timbre of this singing voice...` classifies correctly, but the resulting instruction is the same canonical template SongYUE2 already builds directly.
+- **Decision:** Keep Prompt Enhance disabled for SongYUE2 timbre conversion. Send the canonical instruction directly and compare Base guidance values with a fixed source segment and seed.
