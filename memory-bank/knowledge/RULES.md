@@ -144,3 +144,9 @@
 
 **규칙:** 2026-09-20 코드 감사에서 신규 코드에 한글 주석이 다수 재발했다(`app/app/studio.tsx` ~16건, `backend/server.mjs` ~10건). 대화/음색 변조/오디오 도구 구현물에서 전부 영어 주석 규칙을 위반. **CSS placeholder/기본값 경계 케이스**도 있음: `AudioToolsPage` 필드의 placeholder이 영어 문장이자 입력 기본값으로 노출돼('Warm, clear voice' 등) 사용자에게 영어 문장이 보임 — 라벨은 한국어지만 placeholder/기본 시드 텍스트도 G-02 대상이다.
 **이유:** 댓글로 동작 설명을 남기는 습관 자체는 좋지만(제거보다 번역을 권장), 위반이 세션마다 반복되므로 새 다이얼로그/라이브러리를 커밋하기 전에 자기 코드를 grep(`\/\/.*[가-힣]`, `/\/\*.*[가-힣]/`)해보는 단계를 추가할 것. placeholder가 "입력값"으로 쓰이는 `Textarea`/`Input`에는 그 값까지 사용자에게 보이는 UI 텍스트라는 점을 기억할 것.
+
+## AuK 노래 음색 변환 기본 프롬프트
+
+- 음색 변조의 텍스트 전용 AuK 경로는 `Keep the lyrics, melody, phrasing and rhythm unchanged and change the timbre to: "${textDescription}".` 형식을 사용한다.
+- 기본 목표 음색 설명은 `a deep adult male with a warm, resonant baritone voice`이다.
+- 이 프롬프트는 남성 음색을 유지하지만 가창 품질을 크게 개선하지는 않는다.

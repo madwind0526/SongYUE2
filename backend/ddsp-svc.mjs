@@ -18,7 +18,15 @@ import path from 'node:path';
 const STEP_LOG_PATTERN = /step:\s*(\d+)/;
 const LOSS_LOG_PATTERN = /loss:\s*([\d.]+)/;
 const MIN_CLIP_DURATION_SECONDS = 2;
-const DEFAULT_PITCH_EXTRACTOR = 'rmvpe';
+const DDSP_ENCODERS = {
+  contentvec: { name: 'contentvec768l12tta2x', hopSize: 160, channels: 768, checkpoint: 'pretrain/contentvec/pytorch_model.bin' },
+  hubertsoft: { name: 'hubertsoft', hopSize: 320, channels: 256, checkpoint: 'pretrain/hubert/hubert-soft-0d54a1f4.pt' },
+};
+const DDSP_PITCH_EXTRACTORS = new Set(['rmvpe', 'fcpe']);
+const DDSP_VOCODERS = {
+  nsf_hifigan: 'pretrain/nsf_hifigan/model',
+  pc_nsf_hifigan: 'pretrain/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02/model.ckpt',
+};
 
 function ffprobeDurationSeconds(spawnImpl, file) {
   return new Promise((resolve) => {
@@ -75,7 +83,15 @@ async function latestCheckpoint(expDir) {
 // doesn't own it, since it lives in server.mjs alongside the other SVC engines.
 // Mutates `job` in place through every status transition and returns the final gated vocal path,
 // or throws (after recording job.status='failed'/job.error) if any step fails.
-export async function startDdspJob(ddspSvcRoot, job, referenceFilePaths, { spawnImpl, sourceVocalPath, postProcess }) {
+export async function startDdspJob(ddspSvcRoot, job, referenceFilePaths, { spawnImpl, sourceVocalPath, postProcess, featureEncoder, pitchExtractor, vocoder }) {
+  const selectedEncoderKey = DDSP_ENCODERS[featureEncoder] ? featureEncoder : 'contentvec';
+  const selectedEncoder = DDSP_ENCODERS[selectedEncoderKey];
+  const selectedPitchExtractor = DDSP_PITCH_EXTRACTORS.has(pitchExtractor) ? pitchExtractor : 'rmvpe';
+  const selectedVocoderKey = DDSP_VOCODERS[vocoder] ? vocoder : 'nsf_hifigan';
+  const selectedVocoder = DDSP_VOCODERS[selectedVocoderKey];
+  job.featureEncoder = selectedEncoderKey;
+  job.pitchExtractor = selectedPitchExtractor;
+  job.vocoder = selectedVocoderKey;
   const pythonExe = path.join(ddspSvcRoot, '.venv', 'Scripts', 'python.exe');
   const jobRelDir = path.join('data', `job-${job.id}`).split(path.sep).join('/');
   const trainDir = path.join(ddspSvcRoot, 'data', `job-${job.id}`, 'train', 'audio');
@@ -115,6 +131,12 @@ export async function startDdspJob(ddspSvcRoot, job, referenceFilePaths, { spawn
     const intervalVal = Math.max(10, Math.min(2000, Math.floor(job.targetStep / 4)));
     const template = await readFile(path.join(ddspSvcRoot, 'configs', 'reflow.yaml'), 'utf8');
     const patched = template
+      .replace(/(\n\s*f0_extractor:\s*)\S+/, `$1'${selectedPitchExtractor}'`)
+      .replace(/(\n\s*encoder:\s*)\S+/, `$1'${selectedEncoder.name}'`)
+      .replace(/(\n\s*encoder_hop_size:\s*)\S+/, `$1${selectedEncoder.hopSize}`)
+      .replace(/(\n\s*encoder_out_channels:\s*)\S+/, `$1${selectedEncoder.channels}`)
+      .replace(/(\n\s*encoder_ckpt:\s*)\S+/, `$1${selectedEncoder.checkpoint}`)
+      .replace(/(\n\s*ckpt:\s*)\S+/, `$1'${selectedVocoder}'`)
       .replace(/(\n\s*train_path:\s*)\S+/, `$1${jobRelDir}/train`)
       .replace(/(\n\s*valid_path:\s*)\S+/, `$1${jobRelDir}/val`)
       .replace(/(\n\s*expdir:\s*)\S+/, `$1${expRelDir}`)
@@ -172,7 +194,7 @@ export async function startDdspJob(ddspSvcRoot, job, referenceFilePaths, { spawn
     const convertedVocalPath = path.join(outputDir, 'converted.wav');
     await runToCompletion(spawnImpl, pythonExe, [
       'main_reflow.py', '-m', checkpoint, '-i', sourceVocalPath, '-o', convertedVocalPath,
-      '-id', '1', '-k', '0', '-step', '50', '-method', 'euler', '-pe', DEFAULT_PITCH_EXTRACTOR,
+      '-id', '1', '-k', '0', '-step', '50', '-method', 'euler', '-pe', selectedPitchExtractor,
     ], ddspSvcRoot);
 
     job.status = 'postprocessing';

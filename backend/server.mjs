@@ -679,7 +679,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     if (log.signal) throw fail(502, '보컬 음색 변환이 제한 시간을 넘어 중단되었습니다.');
     if (log.code !== 0 || !(await exists(outputWav))) throw fail(502, `보컬 음색 변환에 실패했습니다 (종료 코드 ${log.code}). ${log.text.trim().slice(0, 500) || '알 수 없는 오류'}`);
   }
-  async function runSeedVcSvc(vocalsWav, voiceRefWav, outputWav) {
+  async function runSeedVcSvc(vocalsWav, voiceRefWav, outputWav, options = {}) {
     // f0_condition defaults to false on the v1_svc route (engine/audio.cpp/docs/models/seed_vc.md),
     // meaning the model gets no pitch-contour guidance from the source singing -- without it the
     // output loses the correct pitch trajectory entirely, which is what produced the "quacking"
@@ -693,14 +693,19 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     // prompted the report, so it is not a fix on its own -- see the silence-gate step in
     // applyVocalTimbreCore() and the vevo2 alternative engine for the changes that actually mattered.
     // It is kept anyway because it matches the authors' own recommended defaults at no extra cost.
-    await runSvcCli(['--task', 'svc', '--family', 'seed_vc', '--model', path.join(root, SEED_VC_MODEL_PATH), '--backend', 'cuda', '--task-route', 'v1_svc', '--request-option', 'f0_condition=true', '--request-option', 'auto_f0_adjust=true', '--request-option', 'num_inference_steps=80', '--audio', vocalsWav, '--voice-ref', voiceRefWav, '--out', outputWav], 'Seed-VC 엔진을 실행할 수 없습니다.');
+    const f0Condition = options.f0Condition !== false;
+    const autoF0Adjust = options.autoF0Adjust !== false;
+    const inferenceSteps = Math.max(1, Math.min(200, Math.round(Number(options.inferenceSteps)) || 80));
+    await runSvcCli(['--task', 'svc', '--family', 'seed_vc', '--model', path.join(root, SEED_VC_MODEL_PATH), '--backend', 'cuda', '--task-route', 'v1_svc', '--request-option', `f0_condition=${f0Condition}`, '--request-option', `auto_f0_adjust=${autoF0Adjust}`, '--request-option', `num_inference_steps=${inferenceSteps}`, '--audio', vocalsWav, '--voice-ref', voiceRefWav, '--out', outputWav], 'Seed-VC 엔진을 실행할 수 없습니다.');
   }
-  async function runVevo2Svc(vocalsWav, voiceRefWav, outputWav) {
+  async function runVevo2Svc(vocalsWav, voiceRefWav, outputWav, route = 'style_preserved_svc') {
     // style_preserved_svc is vevo2's default svc route: convert the source singing to the target
     // voice while keeping the source's own singing style/prosody (engine/audio.cpp/docs/models/vevo2.md).
     // Zero-shot like Seed-VC (a target-voice clip, no training), added 2026-09-17 as an alternative
     // engine after Seed-VC's SVC output kept producing artifacts regardless of reference or parameters.
-    await runSvcCli(['--task', 'svc', '--family', 'vevo2', '--model', path.join(root, VEVO2_MODEL_PATH), '--backend', 'cuda', '--task-route', 'style_preserved_svc', '--source-audio', vocalsWav, '--target-voice', voiceRefWav, '--out', outputWav], 'Vevo2 엔진을 실행할 수 없습니다.');
+    const selectedRoute = route === 'style_preserved_vc' ? route : 'style_preserved_svc';
+    const task = selectedRoute.endsWith('_vc') ? 'vc' : 'svc';
+    await runSvcCli(['--task', task, '--family', 'vevo2', '--model', path.join(root, VEVO2_MODEL_PATH), '--backend', 'cuda', '--task-route', selectedRoute, '--source-audio', vocalsWav, '--target-voice', voiceRefWav, '--out', outputWav], 'Vevo2 엔진을 실행할 수 없습니다.');
   }
   // ffmpeg's volumedetect filter is the cheapest way to read a file's average loudness without
   // pulling in a full loudness-analysis library -- parses the "mean_volume: X dB" line it prints
@@ -792,8 +797,9 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   // stems: 이 소스 오디오의 스템 캐시 디렉터리(prepareTimbrePreview()가 이미 vocals-original.wav를
   // 채워둔 상태여야 함 -- 이 함수는 더 이상 분리를 직접 하지 않는다). 프로젝트와 무관, "음색 변조"
   // 팝업이 라이브러리에서 자유롭게 고른 원본 오디오에 대해서도 그대로 쓸 수 있다.
-  async function applyVocalTimbreCore(stems, voiceRefDataUrl, engineChoice, onProgress) {
+  async function applyVocalTimbreCore(stems, voiceRefDataUrl, engineChoice, engineOptions, onProgress) {
     const svcEngine = VOCAL_TIMBRE_ENGINES.has(engineChoice) ? engineChoice : 'seed_vc';
+    const options = engineOptions && typeof engineOptions === 'object' ? engineOptions : {};
     const engine = resolveConfigPath(settings.enginePath, DEFAULT_ENGINE_PATH);
     if (!(await exists(engine))) throw fail(400, `audio.cpp 실행 파일을 찾을 수 없습니다: ${path.relative(root, engine)}. 설정에서 경로를 확인해 주세요.`);
     if (svcEngine === 'vevo2') {
@@ -864,8 +870,8 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           const sourceFilter = `atrim=start=${chunk.start.toFixed(3)}:duration=${chunk.duration.toFixed(3)},asetpts=PTS-STARTPTS`;
           await runFfmpeg(['-y', '-i', originalVocalsWav, '-af', sourceFilter, '-ar', '44100', '-ac', '1', chunkSource], '보컬 입력 조각 생성');
           const rawOutput = path.join(workDir, `chunk-${String(index).padStart(3, '0')}-raw.wav`);
-          if (svcEngine === 'vevo2') await runVevo2Svc(chunkSource, voiceRefWav, rawOutput);
-          else await runSeedVcSvc(chunkSource, voiceRefWav, rawOutput);
+          if (svcEngine === 'vevo2') await runVevo2Svc(chunkSource, voiceRefWav, rawOutput, options.vevoRoute);
+          else await runSeedVcSvc(chunkSource, voiceRefWav, rawOutput, options);
           const stitchedPart = path.join(workDir, `chunk-${String(index).padStart(3, '0')}-stitched.wav`);
           const trimStart = index === 0 ? 0 : AUK_EDGE_TRIM_SECONDS;
           const trimEnd = index === chunkPlan.length - 1 ? null : Math.max(trimStart, chunk.duration - AUK_EDGE_TRIM_SECONDS);
@@ -878,9 +884,9 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         const concatFilter = `${stitchedParts.map((_, index) => `[${index}:a]`).join('')}concat=n=${stitchedParts.length}:v=0:a=1[out]`;
         await runFfmpeg(['-y', ...concatInputs, '-filter_complex', concatFilter, '-map', '[out]', '-ar', '44100', '-ac', '1', convertedVocals], '보컬 결과 조각 연결');
       } else if (svcEngine === 'vevo2') {
-        await runVevo2Svc(originalVocalsWav, voiceRefWav, convertedVocals);
+        await runVevo2Svc(originalVocalsWav, voiceRefWav, convertedVocals, options.vevoRoute);
       } else {
-        await runSeedVcSvc(originalVocalsWav, voiceRefWav, convertedVocals);
+        await runSeedVcSvc(originalVocalsWav, voiceRefWav, convertedVocals, options);
       }
       const gatedVocals = await postProcessConvertedVocal(convertedVocals, originalVocalsWav, workDir);
       await copyFile(gatedVocals, path.join(stems, 'vocals.wav'));
@@ -894,7 +900,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   // submitAukJob() 주석 참고 -- 이 함수는 SongYUE2 쪽 준비(보컬 스템 확보, 참조 오디오 정규화,
   // 결과 후처리/저장)만 담당한다.
   // stems: prepareTimbrePreview()가 이미 채워둔 스템 캐시 디렉터리(project 무관, applyVocalTimbreCore와 같은 계약).
-  async function applyAukTimbreCore(stems, { referenceDataUrl, textDescription, checkpoint, lyrics, whisper, language, onProgress }) {
+  async function applyAukTimbreCore(stems, { referenceDataUrl, textDescription, checkpoint, modelVariant, textEncoder, vae, lyrics, whisper, language, onProgress }) {
     const description = text(textDescription, 500).trim();
     let referenceBuffer = null;
     let referenceExt = null;
@@ -980,7 +986,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           let chunkResult;
           try {
             chunkResult = await submitAukJob(fetchImpl, spawnImpl, endpoint, audioAukPath, {
-              referenceFilePath: null, textDescription: description, sourceVocalPath: chunkSource, checkpoint, lyrics: null, whisper, language, seed: sharedSeed,
+              referenceFilePath: null, textDescription: description, sourceVocalPath: chunkSource, checkpoint, modelVariant, textEncoder, vae, lyrics: null, whisper, language, seed: sharedSeed,
             });
           } catch (error) {
             throw fail(502, `AuK ${index + 1}/${chunkPlan.length} 조각 변환에 실패했습니다. ${(error && error.message) || '알 수 없는 오류'}`);
@@ -1006,7 +1012,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         try {
           if (typeof onProgress === 'function') onProgress(5, 'AuK 처리 중');
           result = await submitAukJob(fetchImpl, spawnImpl, endpoint, audioAukPath, {
-            referenceFilePath, textDescription: description || null, sourceVocalPath: originalVocalsWav, checkpoint, lyrics: spokenLyrics, whisper, language,
+            referenceFilePath, textDescription: description || null, sourceVocalPath: originalVocalsWav, checkpoint, modelVariant, textEncoder, vae, lyrics: spokenLyrics, whisper, language,
           });
         } catch (error) {
           throw fail(502, `AuK 변환에 실패했습니다. ${(error && error.message) || '알 수 없는 오류'}`);
@@ -1053,7 +1059,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     if (ffmpegLog.code !== 0) throw fail(502, `입력 오디오 변환에 실패했습니다. ${ffmpegLog.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
     return audioFilePath;
   }
-  async function runAukTool({ task, instruction, audioDataUrl, checkpoint, seconds, chunk }) {
+  async function runAukTool({ task, instruction, audioDataUrl, checkpoint, modelVariant, textEncoder, vae, seconds, chunk }) {
     const cleanTask = text(task, 100).trim();
     const cleanInstruction = text(instruction, 2000).trim();
     if (!cleanTask || !cleanInstruction) throw fail(400, '작업 종류와 지시문이 필요합니다.');
@@ -1095,7 +1101,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       const runToolJob = async (jobAudioPath, index) => {
         let result;
         try {
-          result = await submitAukToolJob(fetchImpl, spawnImpl, endpoint, audioAukPath, { task: cleanTask, instruction: cleanInstruction, audioFilePath: jobAudioPath, checkpoint, seconds });
+          result = await submitAukToolJob(fetchImpl, spawnImpl, endpoint, audioAukPath, { task: cleanTask, instruction: cleanInstruction, audioFilePath: jobAudioPath, checkpoint, modelVariant, textEncoder, vae, seconds });
         } catch (error) {
           throw fail(502, `AuK 작업에 실패했습니다. ${(error && error.message) || '알 수 없는 오류'}`);
         }
@@ -2313,7 +2319,12 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           generationStatus.progress = progress;
           generationStatus.detail = detail;
         };
-        try { return send(200, await applyVocalTimbreCore(path.join(dir, 'stems'), input.dataUrl, input.engine, onProgress)); }
+        try { return send(200, await applyVocalTimbreCore(path.join(dir, 'stems'), input.dataUrl, input.engine, {
+          f0Condition: input.seedF0Condition,
+          autoF0Adjust: input.seedAutoF0Adjust,
+          inferenceSteps: input.seedInferenceSteps,
+          vevoRoute: input.vevoRoute,
+        }, onProgress)); }
         finally { generating = false; generationStatus = null; }
       }
       const timbreAukApplyMatch = pathname.match(/^\/api\/timbre-transform\/([^/]+)\/auk\/apply$/);
@@ -2329,7 +2340,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           generationStatus.progress = progress;
           generationStatus.detail = detail;
         };
-        try { return send(200, await applyAukTimbreCore(path.join(dir, 'stems'), { referenceDataUrl: input.referenceDataUrl, textDescription: input.textDescription, checkpoint: input.checkpoint, lyrics: input.lyrics, whisper: input.whisper, language: input.language, onProgress })); }
+        try { return send(200, await applyAukTimbreCore(path.join(dir, 'stems'), { referenceDataUrl: input.referenceDataUrl, textDescription: input.textDescription, checkpoint: input.checkpoint, modelVariant: input.modelVariant, textEncoder: input.textEncoder, vae: input.vae, lyrics: input.lyrics, whisper: input.whisper, language: input.language, onProgress })); }
         finally { generating = false; generationStatus = null; }
       }
       // "Tools" 메뉴: 완성곡과 무관한 독립 AuK 작업. /projects/:id 스코프가 아니라 /audio-save와
@@ -2340,7 +2351,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
         generating = true;
         generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 60000 };
-        try { return send(200, await runAukTool({ task: input.task, instruction: input.instruction, audioDataUrl: input.audioDataUrl, checkpoint: input.checkpoint, seconds: input.seconds, chunk: input.chunk === true })); }
+        try { return send(200, await runAukTool({ task: input.task, instruction: input.instruction, audioDataUrl: input.audioDataUrl, checkpoint: input.checkpoint, modelVariant: input.modelVariant, textEncoder: input.textEncoder, vae: input.vae, seconds: input.seconds, chunk: input.chunk === true })); }
         finally { generating = false; generationStatus = null; }
       }
       // "Tools" 메뉴(가사/대사 편집 탭): 선택한 오디오를 AudioAuK Whisper STT로 전사해 가사 후보를
@@ -2358,7 +2369,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           await mkdir(workDir, { recursive: true });
           try {
             const audioFilePath = await normalizeInputAudio(workDir, input.audioDataUrl);
-            const transcript = await transcribeAukAudio(fetchImpl, spawnImpl, endpoint, audioAukPath, { audioFilePath, checkpoint: input.checkpoint, language: input.language, whisper: input.whisper });
+            const transcript = await transcribeAukAudio(fetchImpl, spawnImpl, endpoint, audioAukPath, { audioFilePath, checkpoint: input.checkpoint, modelVariant: input.modelVariant, textEncoder: input.textEncoder, vae: input.vae, language: input.language, whisper: input.whisper });
             return send(200, { transcript });
           } finally {
             await rm(workDir, { recursive: true, force: true }).catch(() => {});
@@ -2366,7 +2377,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         } finally { generating = false; generationStatus = null; }
       }
       // job.child(ChildProcess)는 JSON으로 못 보내니 제외하고 나머지 상태만 프론트에 노출한다.
-      const publicDdspJob = (job) => ({ id: job.id, projectId: job.projectId, status: job.status, targetStep: job.targetStep, currentStep: job.currentStep, currentLoss: job.currentLoss, createdAt: job.createdAt, updatedAt: job.updatedAt, skippedRefs: job.skippedRefs, error: job.error });
+      const publicDdspJob = (job) => ({ id: job.id, projectId: job.projectId, status: job.status, targetStep: job.targetStep, currentStep: job.currentStep, currentLoss: job.currentLoss, featureEncoder: job.featureEncoder, pitchExtractor: job.pitchExtractor, vocoder: job.vocoder, createdAt: job.createdAt, updatedAt: job.updatedAt, skippedRefs: job.skippedRefs, error: job.error });
       const timbreDdspStartMatch = pathname.match(/^\/api\/timbre-transform\/([^/]+)\/ddsp\/start$/);
       if (timbreDdspStartMatch && req.method === 'POST') {
         const input = await body(req, 200 * 1024 * 1024);
@@ -2395,7 +2406,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           referenceFiles.push(filePath);
         }
         if (!referenceFiles.length) { await rm(jobWorkDir, { recursive: true, force: true }).catch(() => {}); throw fail(400, '유효한 레퍼런스 오디오가 없습니다.'); }
-        const job = { id: jobId, projectId: previewId, status: 'preparing', targetStep, currentStep: 0, currentLoss: null, createdAt: Date.now(), updatedAt: Date.now(), expdir: null, configPath: null, child: null, skippedRefs: [], error: null };
+        const job = { id: jobId, projectId: previewId, status: 'preparing', targetStep, currentStep: 0, currentLoss: null, featureEncoder: null, pitchExtractor: null, vocoder: null, createdAt: Date.now(), updatedAt: Date.now(), expdir: null, configPath: null, child: null, skippedRefs: [], error: null };
         ddspJobs.set(jobId, job);
         ddspActive = true;
         const ddspSvcRoot = resolveConfigPath(settings.ddspSvcPath, DEFAULT_DDSP_SVC_PATH);
@@ -2405,6 +2416,9 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           spawnImpl,
           sourceVocalPath: originalVocalsWav,
           postProcess: (convertedVocalPath, workDir) => postProcessConvertedVocal(convertedVocalPath, originalVocalsWav, workDir),
+          featureEncoder: input.featureEncoder,
+          pitchExtractor: input.pitchExtractor,
+          vocoder: input.vocoder,
         }).then(async (gatedVocalPath) => {
           if (gatedVocalPath) await copyFile(gatedVocalPath, path.join(stems, 'vocals.wav'));
         }).catch(() => {}) // 실패 사유는 이미 job.error에 기록됨 (startDdspJob 내부)

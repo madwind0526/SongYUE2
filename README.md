@@ -15,7 +15,10 @@
 - **채널 분리**: STEM 분리와 같은 UI를 AI 모델 없이 재사용 — 완성곡을 왼쪽/오른쪽 채널로 나눠 각각 EQ/FxSound를 적용한 뒤 다시 합쳐 저장(스테레오 곡만 가능)
 - **음원 복원 (실험적)**: 사이드바의 "음원 복원" 메뉴에서 저음질 외부 오디오 파일을 업로드하면 AudioSR로 복원해 새 완성곡으로 라이브러리에 추가. 스테레오는 왼쪽/오른쪽을 각각 복원한 뒤 합쳐서 스테레오를 유지(AudioSR 자체는 모노만 출력하는 모델 한계가 있음). 이미 무손실인 오디오에는 효과 없음 — 실제로 저음질인 소스 전용. **클릭/틱 잡음이 재현되는 것을 확인해 실험적 기능으로 표시했습니다**(`progress.md` 참고)
 - **MIDI로 내보내기**: 완성곡 메뉴에서 audio.cpp의 MuScriptor로 오디오를 표준 MIDI 파일(악기·음표·타이밍)로 변환. 바로 다운로드하지 않고 SVG 피아노롤 팝업으로 먼저 보여줘서 음표를 확인·이동·리사이즈·삭제·추가한 뒤 저장(또는 취소)할 수 있고, "미리듣기" 버튼으로 브라우저 안에서 간단한 신디사이저 소리로 편집 내용을 바로 들어볼 수 있음(Web Audio 오실레이터 기반). 매우 빠르고(RTX 5070에서 30초 곡 기준 약 0.7초) 결과는 곡별로 캐시됨
-- **보컬 음색 변환 (실험적)**: STEM 분리와 같은 UI 골격 재사용 — 사이드바에서 목표 음색의 짧은 참조 오디오를 고르고 "적용"을 누르면 audio.cpp의 Seed-VC(Singing Voice Conversion)로 완성곡을 보컬/반주로 먼저 분리한 뒤 보컬만 변환(변환 직후 원본과의 음량 차이를 자동 보정 — 음량 보정+피크 리미터), 보컬/악기 두 트랙이 나타나 각각 "후처리"(EQ/FX)도 가능. 아래엔 원본과 합친 미리듣기 비교. 다른 참조로 다시 적용하면 보컬만 재변환(반주 후처리는 유지). "합치기" 후 "저장"으로 새 완성곡을 라이브러리에 추가(원곡은 그대로 유지). 보컬 분리+음색 변환을 순서대로 거치므로 원곡보다 음질이 떨어질 수 있고, AudioSR만큼 느림(RTX 5070에서 RTF ≈ 0.82)
+- **음색 변조 (실험적)**: 완성곡(또는 라이브러리의 어떤 오디오라도)의 보컬 음색을 바꾸는 통합 팝업 — 3개 탭에서 엔진을 고릅니다.
+  - **기존 방식 (Seed-VC / Vevo2)**: 목표 음색의 짧은 참조 오디오를 고르면 보컬만 Singing Voice Conversion으로 변환. 변환 직후 원본과의 음량 차이를 자동 보정하고, 무음 구간에 엔진이 채우는 잡음은 게이트로 정리합니다. **긴 보컬은 10초 창(2초 겹침, 경계 1초 트림)으로 나눠 각각 변환한 뒤 이어붙여, 10초를 넘기는 입력에서 두 엔진이 소리를 노이즈로 붕괴시키는 문제를 회피합니다.** Seed-VC는 원곡 음정선 사용(F0 condition)·자동 음정 조절·추론 스텝(기본 80)을, Vevo2는 노래용 SVC/말소리용 VC 변환 라우트를 고를 수 있습니다. 결과는 원곡과 비교해 미리 듣고 "저장"으로 새 완성곡으로 라이브러리에 추가(원곡 유지). 보컬 분리+변환을 순서대로 거치므로 원곡보다 음질이 떨어질 수 있고 AudioSR만큼 느립니다(RTX 5070에서 RTF ≈ 0.82).
+  - **AuK**: 참조 목소리가 있으면 소스 보컬 가사를 전사해 그 참조 목소리로 낭독하는 제로샷 TTS 클론, 텍스트 설명만 있으면 "가사·멜로디·박자·리듬은 그대로 두고 음색만" 변경합니다(기본 목표 음색은 `a deep adult male with a warm, resonant baritone voice`). 체크포인트 계열(Flash 4스텝 / Base 32스텝)·모델 정밀도(Flash W4A8/BF16/FP32, Base W4A8/BF16)·텍스트 인코더(Qwen W4A8/INT8)·VAE를 선택할 수 있습니다. 저장된 가사가 있는 곡은 전사 없이 그대로 쓰며, 긴 보컬은 기존 방식과 같은 10초 청크로 처리합니다. Tools 메뉴의 TTS/편집 도구도 같은 구성 선택을 공유합니다.
+  - **DDSP-SVC**: 목표 목소리의 레퍼런스 여러 개로 실제 학습해 변환하는 방식 — 특징 인코더(ContentVec/HubertSoft)·음정 추출기(RMVPE/FCPE)·보코더(NSF-HiFiGAN/PC-NSF-HiFiGAN)·목표 스텝을 고르고, 목표 도달 시 학습을 정확히 중단한 뒤 그 체크포인트로 추론합니다. 프레임 단위로 처리해 긴 입력도 그대로 변환됩니다.
 - 라이브러리(완성곡) / 프로젝트(초안·설정) 완전 분리 — 하나를 지워도 다른 하나는 그대로 유지
 - 재생목록 생성 및 PC에서 연속 재생, 앨범 커버 등록
 - wav / flac / mp3 / mp4 다중 포맷 다운로드
@@ -40,7 +43,7 @@
 
 | 구성 요소 | 용량 | 필요한 경우 |
 |---|---|---|
-| `scripts/download_models.py` 전체 다운로드 | 약 33.54GB | **선택 옵션이 없어 항상 5개 저장소(전체 스냅샷 4개 + HTDemucs/Mel-Band RoFormer/AudioSR/MuScriptor/Seed-VC 단일 파일 5개)를 받습니다** — GGUF만 쓸 계획이어도 원본 모델(7.79GB)이 함께 받아짐 |
+| `scripts/download_models.py` 전체 다운로드 | 약 33.54GB | **선택 옵션이 없어 항상 5개 저장소(전체 스냅샷 4개 + HTDemucs/Mel-Band RoFormer/AudioSR/MuScriptor/Seed-VC/Vevo2 단일 파일 6개)를 받습니다** — GGUF만 쓸 계획이어도 원본 모델(7.79GB)이 함께 받아짐 |
 | audio.cpp 소스 빌드(engine/) | 소스는 작지만 CUDA Toolkit·VS Build Tools 자체가 수 GB | GGUF 모델(Q4/Q8/BF16), STEM 분리 사용 시 |
 | YuE2 원본 Python venv(test/YuE2-source/.venv) | 약 15~20GB(torch+CUDA 휠 포함, `.uv-cache` 삭제 전 기준) | "YuE2 - 원본" 모델 사용 시 |
 | SheetSage2 전용 venv(test/YuE2-source/.venv-sheetsage2) + 모델 | 약 2GB(venv) + 2GB(모델, 첫 전사 시) | "커버"/"오디오에서 추출" 기능 사용 시 |
@@ -111,7 +114,7 @@ cp .env.sample .env
 python scripts/download_models.py
 ```
 
-이 한 번의 실행으로 ①②④⑥⑦⑧이 쓸 모델(GGUF + 원본 Python 본체/VAE + STEM 분리용 HTDemucs/Mel-Band RoFormer + AudioSR + MuScriptor + Seed-VC, 약 33.54GB)이 전부 받아집니다. 선택적으로 일부만 받는 옵션은 없습니다(GGUF만 쓸 계획이어도 원본 모델이 함께 받아짐). 시간이 오래 걸리며, 중단 후 재실행하면 이어받기/해시 검증을 하므로 다시 실행해도 안전합니다. ③ SheetSage2의 전사 모델은 이 스크립트가 아니라 별도로 받습니다(아래 참고). 완료되면 `model-download-status.json`의 각 저장소 `state`가 `"complete"`인지 확인하세요.
+이 한 번의 실행으로 ①②④⑥⑦⑧이 쓸 모델(GGUF + 원본 Python 본체/VAE + STEM 분리용 HTDemucs/Mel-Band RoFormer + AudioSR + MuScriptor + Seed-VC/Vevo2, 약 33.54GB)이 전부 받아집니다. 선택적으로 일부만 받는 옵션은 없습니다(GGUF만 쓸 계획이어도 원본 모델이 함께 받아짐). 시간이 오래 걸리며, 중단 후 재실행하면 이어받기/해시 검증을 하므로 다시 실행해도 안전합니다. ③ SheetSage2의 전사 모델은 이 스크립트가 아니라 별도로 받습니다(아래 참고). 완료되면 `model-download-status.json`의 각 저장소 `state`가 `"complete"`인지 확인하세요.
 
 이제 아래 중 하나 이상을 골라 그 문서를 **처음부터 끝까지** 따라가세요(각 문서에 자체 "0단계 사전 준비"가 있습니다).
 
@@ -122,7 +125,9 @@ python scripts/download_models.py
 - **⑤ ComfyUI (선택, "YuE2 - INT8 ConvRot" 모델 전용)**: ComfyUI(v0.35.0+, YuE2 네이티브 지원)를 `engine/ComfyUI`에 독립 설치해 HTTP API로 연동합니다(약 4.2GB — `.venv`+코드, 체크포인트는 하드링크). VRAM 절약 효과는 없고 다운로드 용량만 작습니다 — 저VRAM 환경에서 고를 실익은 적습니다. → **[docs/comfyui-setup.md](docs/comfyui-setup.md)**
 - **⑥ AudioSR (선택, "음원 복원" 메뉴 전용, 실험적)**: 저음질 오디오를 복원하는 audio.cpp의 AudioSR 모델(약 6.18GB, f32 단일 정밀도)입니다. ①을 빌드할 때 `-Models "yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc"`로 `audiosr`을 포함해야 합니다. **클릭/틱 잡음이 재현되는 것을 확인한 실험적 기능**입니다 — `progress.md` 참고. → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)의 음원 복원 절**
 - **⑦ MuScriptor (선택, "MIDI로 내보내기" 메뉴 전용)**: 완성곡을 표준 MIDI 파일로 변환하는 audio.cpp의 MuScriptor 모델(약 412MB). 매우 빠름(RTX 5070에서 30초 곡 기준 약 0.7초). ①을 빌드할 때 `-Models "yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc"`로 `muscriptor`를 포함해야 합니다. → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)의 MIDI로 내보내기 절**
-- **⑧ Seed-VC (선택, "보컬 음색 변환" 메뉴 전용, 실험적)**: 완성곡의 보컬 음색을 참조 오디오로 바꾸는 audio.cpp의 Seed-VC 모델(약 2.90GB, MLX Q8_0). ①을 빌드할 때 `-Models "yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc"`로 `seed_vc`를 포함해야 합니다. 보컬 분리(STEM)+음색 변환을 순서대로 거치는 다단계 파이프라인이라 원곡보다 음질이 떨어질 수 있고, AudioSR만큼 느립니다(RTX 5070에서 RTF ≈ 0.82). → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)의 보컬 음색 변환 절**
+- **⑧ Seed-VC / Vevo2 (선택, "음색 변조" 메뉴의 기존 방식 탭 전용, 실험적)**: 완성곡의 보컬 음색을 참조 오디오로 바꾸는 audio.cpp의 SVC 모델 두 가지 — Seed-VC(약 2.90GB, MLX Q8_0)와 Vevo2(약 3.2GB, Q8_0). ①을 빌드할 때 `-Models "yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc,vevo2"`로 `seed_vc`와 `vevo2`를 모두 포함해야 합니다. 보컬 분리(STEM)+음색 변환을 순서대로 거치는 다단계 파이프라인이라 원곡보다 음질이 떨어질 수 있고, AudioSR만큼 느립니다(RTX 5070에서 RTF ≈ 0.82). → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)의 보컬 음색 변환 절**
+- **⑨ AuK (선택, "음색 변조"의 AuK 탭 + "Tools" 메뉴 전용, 실험적)**: 자매 프로젝트 AudioAuK(ComfyUI 기반, HTTP API, 기본 `127.0.0.1:4312`)를 연결해 쓰는 zero-shot TTS/음색 변경 엔진. 참조 목소리로 "그 가사를 그 목소리로 낭독"하는 클론, 또는 텍스트 설명만으로 "가사·멜로디·리듬 보존 + 음색 변경"이 가능합니다. 체크포인트 계열(Flash 기본 4스텝 / Base 32스텝)·모델 정밀도(Flash W4A8/BF16/FP32, Base W4A8/BF16)·텍스트 인코더(Qwen W4A8/INT8)·VAE를 선택할 수 있고, AudioAuK의 별도 설치가 필요합니다(경로·주소는 설정 화면에서 변경 가능).
+- **⑩ DDSP-SVC (선택, "음색 변조"의 DDSP-SVC 탭 전용, 실험적)**: 목표 목소리의 레퍼런스 클립들로 SVC 모델을 실제로 학습해(기본 4만 스텝 ≈ 1시간 반) 변환하는 파이프라인. 특징 인코더(ContentVec/HubertSoft)·음정 추출기(RMVPE/FCPE)·보코더(NSF-HiFiGAN/PC-NSF-HiFiGAN)와 목표 스텝을 고르고, 목표에 도달하면 학습을 정확히 중단해 그 체크포인트로 추론합니다. 별도의 DDSP-SVC 설치가 필요합니다(기본 경로 `test\DDSP-SVC`, `ddspSvcPath` 설정).
 
 > "심볼릭 작곡"·"악기만"·ABC 기반 커버는 최종 생성에 ①이나 ②를 쓰더라도, ABC 악보 준비(계획 생성/보컬 성부 뮤트) 자체는 항상 ②의 Python 엔진(`abc_tools.py`)을 거칩니다. 즉 GGUF만 쓰더라도 이 기능들을 쓰려면 ②의 Python 환경 구성이 필요합니다.
 
@@ -148,6 +153,9 @@ npm run dev
 | SheetSage2 Python 실행 파일 | `test\YuE2-source\.venv-sheetsage2\Scripts\python.exe` |
 | ComfyUI 연결 주소 | `http://127.0.0.1:8190` (기본값, 비워두면 자동 사용) |
 | ComfyUI 설치 폴더 | `engine\ComfyUI` (기본값, 비워두면 자동 사용) |
+| AudioAuK 연결 주소 (음색 변조 AuK 탭 / Tools) | `http://127.0.0.1:4312` (기본값) |
+| AudioAuK 설치 폴더 | `C:\Claude\AudioAuK` (기본값) |
+| DDSP-SVC 설치 폴더 (음색 변조 DDSP 탭) | `test\DDSP-SVC` (기본값) |
 
 경로는 모두 SongYUE2 폴더 기준 상대 경로 또는 절대 경로를 쓸 수 있습니다.
 

@@ -202,3 +202,9 @@ const t = useAudioTransport();
 - If the user explicitly pins an output length (seconds>0), respect it and do not split.
 - The instruction template is rebuilt per segment with only the text replaced, so the user's choices
   are preserved across parts.
+
+## 긴 음성 변환의 공통 청크 처리
+
+- Seed-VC, Vevo2, AuK처럼 긴 입력에서 품질이 무너지는 엔진은 10초 창, 2초 겹침, 양쪽 경계 1초 트림 방식으로 처리한다.
+- 모든 청크에 같은 참조 음성을 재사용하고, 진행률·경고·청크 수를 공통 반환 형식으로 유지한다.
+- TTS 텍스트는 예상 발화가 10초를 넘고 명시적 길이가 없을 때만 문장 단위로 나누어 생성 후 연결한다.

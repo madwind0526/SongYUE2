@@ -2,9 +2,10 @@
 
 ## Current Wave
 
-- **Wave:** 44
+- **Wave:** 45
 - **Status:** Done
 - **Cache Status:** CLEAN
+- **Last Checkpoint:** 2026-09-22 AuK 노래 음색 변조의 기본 프롬프트를 `Keep the lyrics, melody, phrasing and rhythm unchanged and change the timbre to: "${textDescription}".`로 확정하고, 기본 목표 음색을 `a deep adult male with a warm, resonant baritone voice`로 설정. 백엔드 테스트 23개와 TypeScript 검사 통과.
 - **Last Checkpoint:** 2026-09-22 Seed-VC/Vevo2도 AuK와 동일한 10초 청크(2초 겹침·테두리 1초 트림)로 긴 보컬을 변환하도록 확장 — 길이 의존 붕괴(10초 OK/2분 노이즈, 원곡=ref여도 붕괴)를 사용자 실험으로 확정 후 `applyVocalTimbreCore`에 통합(모든 조각에 동일 참조 클립 재사용, `onProgress`, `{ok, warning, chunkCount}` 반환). Tools는 `runAukTool`에 `chunk` 플래그 신설(위치/길이 무관 지시문 전용)하고 TTS는 `splitSpeechText`+`concatBuffers`로 긴 텍스트를 자동 분할 생성. 테스트 2건 추가(legacy 26초→3조각·같은 ref·atrim/concat·게인/게이트 유지, audio-tools chunk:true→3잡/3업로드·동일 instruction·warning, chunk 해제→단일 경로) — 23개 전부 통과, tsc 통과. DDSP-SVC는 프레임 기반이라 청크 불필요 확인.
 - **Last Checkpoint:** 2026-09-21 AuK Base 저 guidance 추가 실험. 동일 첫 10초·seed 424242·steps 32·sway -1·Prompt Enhance 끔 조건에서 guidance 0/0.2/0.5 결과를 생성하고 WAV/FLAC 및 개별 JSON 기록을 `test/auk-base-low-guidance/`에 저장. 세 WAV 모두 10초이며 해시가 달라 실제 파라미터별 결과임을 확인.
 - **Last Checkpoint:** 2026-09-21 AuK Base 첫 10초 guidance 실험. Prompt Enhance는 느슨한 남성화 요청을 Voice-description TTS로 오분류해 기본 문장 `Hello, welcome to AuK`를 생성했으며, 정확한 `Change the timbre...` 요청에서는 기존 직접 템플릿과 동일해 제품 경로에서 사용하지 않기로 결정. 이후 Prompt Enhance 없이 동일 10초·seed 424242·steps 32·sway -1로 guidance 0.7/1.0/1.5 결과를 생성해 `test/auk-base-low-guidance/`에 WAV/FLAC 및 메타데이터 저장.

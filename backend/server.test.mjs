@@ -1175,12 +1175,16 @@ test('음색 변조 - 기존 방식(Seed-VC) 탭: prepare가 원본을 한 번�
 
   // "적용": converts the already-separated vocal -- apply itself never re-runs STEM separation
   const callsBeforeApply = fakeSpawn.calls.length;
-  const firstApply = await callJson(`/api/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl: voiceRefDataUrl });
+  const firstApply = await callJson(`/api/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl: voiceRefDataUrl, seedF0Condition: false, seedAutoF0Adjust: false, seedInferenceSteps: 42 });
   assert.equal(firstApply.status, 200);
   const applyCalls = fakeSpawn.calls.slice(callsBeforeApply);
   assert.ok(!applyCalls.some(c => c.args.includes('mel_band_roformer')), 'expected apply to reuse the STEM split done during prepare, not re-run it');
   assert.ok(applyCalls.some(c => c.args.includes('seed_vc')), 'expected a --family seed_vc invocation');
   assert.ok(applyCalls.some(c => c.args.includes('--voice-ref')), 'expected the reference clip to be passed as --voice-ref');
+  const seedCall = applyCalls.find(c => c.args.includes('seed_vc'));
+  assert.ok(seedCall.args.includes('f0_condition=false'));
+  assert.ok(seedCall.args.includes('auto_f0_adjust=false'));
+  assert.ok(seedCall.args.includes('num_inference_steps=42'));
   assert.ok(!applyCalls.some(c => c.engine === 'ffmpeg' && c.args.some(arg => arg.includes('amix'))), 'remixing now happens client-side (mixBuffers), not via a server-side amix');
 
   // the silence-gate fix (2026-09-17): both Seed-VC and Vevo2 were found to keep generating audible
@@ -1295,6 +1299,13 @@ test('음색 변조 - 기존 방식: engine:\'vevo2\'를 보내면 Seed-VC 대�
   assert.ok(!fakeSpawn.calls.some(c => c.args.includes('seed_vc')), 'expected engine:\'vevo2\' to never invoke seed_vc');
   // the silence-gate fix applies to both engines, not just the default seed_vc path
   assert.ok(fakeSpawn.calls.some(c => c.engine === 'ffmpeg' && c.args.some(arg => typeof arg === 'string' && arg.includes('sidechaingate'))), 'expected the silence gate to also run for the vevo2 path');
+
+  const callsBeforeVcRoute = fakeSpawn.calls.length;
+  const vcRoute = await callJson(`/api/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl: voiceRefDataUrl, engine: 'vevo2', vevoRoute: 'style_preserved_vc' });
+  assert.equal(vcRoute.status, 200);
+  const vcCall = fakeSpawn.calls.slice(callsBeforeVcRoute).find(c => c.args.includes('vevo2'));
+  assert.ok(vcCall.args.includes('style_preserved_vc'));
+  assert.equal(vcCall.args[vcCall.args.indexOf('--task') + 1], 'vc');
 
   // an unrecognized/omitted engine value falls back to seed_vc, not an error
   const unknownEngine = await callJson(`/api/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl: voiceRefDataUrl, engine: 'not-a-real-engine' });
@@ -1417,15 +1428,17 @@ test('음색 변조 - AuK 탭: 레퍼런스만 있으면 소스를 전사해 그
 
   // text description only: uses the change-timbre shape (audio = source vocal, not a reference)
   const callsBeforeText = fakeSpawn.calls.length;
-  const textOnly = await callJson(`/api/timbre-transform/${previewId}/auk/apply`, 'POST', { textDescription: '따뜻하고 부드러운 남성 재즈 보컬', checkpoint: 'base' });
+  const textOnly = await callJson(`/api/timbre-transform/${previewId}/auk/apply`, 'POST', { textDescription: '따뜻하고 부드러운 남성 재즈 보컬', checkpoint: 'base', modelVariant: 'bf16', textEncoder: 'int8', vae: 'auk' });
   assert.equal(textOnly.status, 200);
   assert.equal(textOnly.data.transcript, null, 'change-timbre shape does not transcribe anything');
   assert.ok(!fakeSpawn.calls.slice(callsBeforeText).some(c => c.args.includes('mel_band_roformer')), 'expected apply to reuse the STEM split done during prepare, not re-run it');
   const settingsCallText = auk.calls.find(c => c.pathname === '/api/settings' && c.method === 'PUT');
-  assert.equal(JSON.parse(settingsCallText.body).engine.model, 'auk_base_w4a8.safetensors', 'expected the "base" checkpoint choice to reach AudioAuK');
+  assert.deepEqual(JSON.parse(settingsCallText.body).engine, { model: 'auk_base_bf16.safetensors', encoder: 'qwen_omni_int8.safetensors', vae: 'auk_vae.safetensors', precision: 'auto' }, 'expected every selected AuK component to reach AudioAuK');
   const ttsJobCallText = auk.calls.filter(c => c.pathname === '/api/jobs' && c.method === 'POST').at(-1);
   const ttsBodyText = JSON.parse(ttsJobCallText.body);
-  assert.match(ttsBodyText.instruction, /Keep the spoken content unchanged and change the timbre to: "따뜻하고 부드러운 남성 재즈 보컬"\./);
+  assert.match(ttsBodyText.instruction, /Keep the lyrics, melody, phrasing and rhythm unchanged and change the timbre to: "따뜻하고 부드러운 남성 재즈 보컬"\./);
+  assert.equal(ttsBodyText.steps, 32);
+  assert.equal(ttsBodyText.guidance, 0.7);
   assert.ok(!auk.calls.some(c => c.pathname === '/api/transcribe'), 'expected no transcription step when only a text description is given');
 
   // reference only: transcribes the source vocal, then clones the reference's voice reciting that transcript
@@ -1439,6 +1452,8 @@ test('음색 변조 - AuK 탭: 레퍼런스만 있으면 소스를 전사해 그
   const ttsJobCallRef = auk.calls.filter(c => c.pathname === '/api/jobs' && c.method === 'POST').at(-1);
   const ttsBodyRef = JSON.parse(ttsJobCallRef.body);
   assert.match(ttsBodyRef.instruction, /^다음 내용을 같은 목소리로 읽어 주세요: "가짜로 인식된 가사입니다"\.$/);
+  assert.equal(ttsBodyRef.steps, 4);
+  assert.equal(ttsBodyRef.guidance, 0);
 
   // both reference and text: clone the reference's voice, but fold the text in as a style qualifier
   const both = await callJson(`/api/timbre-transform/${previewId}/auk/apply`, 'POST', { referenceDataUrl, textDescription: 'warm and smooth', checkpoint: 'flash' });
@@ -1496,8 +1511,9 @@ async function setUpDdspSvcRoot(root) {
   await writeFile(path.join(ddspSvcRoot, '.venv', 'Scripts', 'python.exe'), 'stub');
   await mkdir(path.join(ddspSvcRoot, 'configs'), { recursive: true });
   await writeFile(path.join(ddspSvcRoot, 'configs', 'reflow.yaml'), [
-    'data:', '  f0_extractor: \'rmvpe\'', '  train_path: data/train', '  valid_path: data/val',
+    'data:', '  f0_extractor: \'rmvpe\'', '  encoder: \'contentvec768l12tta2x\'', '  encoder_hop_size: 160', '  encoder_out_channels: 768', '  encoder_ckpt: pretrain/contentvec/pytorch_model.bin', '  train_path: data/train', '  valid_path: data/val',
     'model:', '  type: \'RectifiedFlow\'',
+    'vocoder:', '  type: \'nsf-hifigan\'', '  ckpt: \'pretrain/nsf_hifigan/model\'',
     'env:', '  expdir: exp/reflow-test', '  gpu_id: 0',
     'train:', '  epochs: 100000', '  interval_log: 1', '  interval_val: 2000', '  interval_force_save: 10000',
   ].join('\n'));
@@ -1718,7 +1734,7 @@ test('음색 변조 - DDSP-SVC 탭: 목표 스텝에 도달하면 실제로 학�
     `data:audio/wav;base64,${Buffer.from('fake-ref-clip-1').toString('base64')}`,
     `data:audio/wav;base64,${Buffer.from('fake-ref-clip-2').toString('base64')}`,
   ];
-  const started = await callJson(`/api/timbre-transform/${previewId}/ddsp/start`, 'POST', { targetStep: 200, referenceDataUrls });
+  const started = await callJson(`/api/timbre-transform/${previewId}/ddsp/start`, 'POST', { targetStep: 200, referenceDataUrls, featureEncoder: 'hubertsoft', pitchExtractor: 'fcpe', vocoder: 'pc_nsf_hifigan' });
   assert.equal(started.status, 200);
   assert.ok(started.data.jobId, 'expected the start route to return a jobId immediately, not wait for training');
 
@@ -1736,6 +1752,16 @@ test('음색 변조 - DDSP-SVC 탭: 목표 스텝에 도달하면 실제로 학�
   }
   assert.ok(job, 'expected the job to be visible via GET /api/ddsp-jobs');
   assert.equal(job.status, 'completed', job.error || 'expected the job to complete successfully');
+  assert.equal(job.featureEncoder, 'hubertsoft');
+  assert.equal(job.pitchExtractor, 'fcpe');
+  assert.equal(job.vocoder, 'pc_nsf_hifigan');
+  const generatedDdspConfig = await readFile(path.join(ddspSvcRoot, 'configs', `job-${job.id}.yaml`), 'utf8');
+  assert.match(generatedDdspConfig, /encoder: 'hubertsoft'/);
+  assert.match(generatedDdspConfig, /encoder_hop_size: 320/);
+  assert.match(generatedDdspConfig, /encoder_out_channels: 256/);
+  assert.match(generatedDdspConfig, /encoder_ckpt: pretrain\/hubert\/hubert-soft-0d54a1f4\.pt/);
+  assert.match(generatedDdspConfig, /f0_extractor: 'fcpe'/);
+  assert.match(generatedDdspConfig, /ckpt: 'pretrain\/pc_nsf_hifigan_44\.1k_hop512_128bin_2025\.02\/model\.ckpt'/);
 
   // THE regression check: stdout reported steps 50..500 in increments of 50 (if never killed), but
   // the target was 200 -- the process must have been killed at/just past 200, never anywhere near 500.
@@ -1743,7 +1769,9 @@ test('음색 변조 - DDSP-SVC 탭: 목표 스텝에 도달하면 실제로 학�
   assert.ok(job.currentStep >= 200 && job.currentStep <= 250, `expected currentStep to stop just at/after target (200), got ${job.currentStep} -- would be 500 if the kill-at-target mechanism regressed`);
 
   assert.ok(ddspSpawn.calls.some(c => c.args[0] === 'preprocess.py'), 'expected preprocess.py to run before training');
-  assert.ok(ddspSpawn.calls.some(c => c.args[0] === 'main_reflow.py'), 'expected inference to run after training stops');
+  const ddspInferenceCall = ddspSpawn.calls.find(c => c.args[0] === 'main_reflow.py');
+  assert.ok(ddspInferenceCall, 'expected inference to run after training stops');
+  assert.equal(ddspInferenceCall.args[ddspInferenceCall.args.indexOf('-pe') + 1], 'fcpe');
   assert.ok(audioSpawn.calls.some(c => c.engine === 'ffmpeg' && c.args.some(arg => typeof arg === 'string' && arg.includes('sidechaingate'))), 'expected the shared post-processing chain to run on the DDSP-SVC result too');
 
   // the finished vocal was written back into this preview session's servable stems/vocals.wav

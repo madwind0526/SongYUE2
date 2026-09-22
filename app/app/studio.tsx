@@ -2217,7 +2217,10 @@ function AudioToolsPage({ notify, onCreated }: { notify: (text: string, error?: 
   const editFunction = EDIT_FUNCTIONS.find(item => item.id === editFunctionId) || EDIT_FUNCTIONS[0];
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const [seconds, setSeconds] = useState(10);
-  const [checkpoint, setCheckpoint] = useState<'flash' | 'base'>('base');
+  const [checkpoint, setCheckpoint] = useState<AukCheckpoint>('flash');
+  const [aukModelVariant, setAukModelVariant] = useState<AukModelVariant>('w4a8');
+  const [aukTextEncoder, setAukTextEncoder] = useState<AukTextEncoder>('w4a8');
+  const [aukVae, setAukVae] = useState<'auk'>('auk');
   const [audioName, setAudioName] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -2237,6 +2240,10 @@ function AudioToolsPage({ notify, onCreated }: { notify: (text: string, error?: 
   const sourceBuffer = t.bufferForKey('source');
   const atRowClass = (key: string, kind: 'dry' | 'wet') => `at-result-row${t.activeKey === key && t.isPlaying ? (kind === 'wet' ? ' pp-row-playing-processed' : ' pp-row-playing-original') : ''}`;
   useEffect(() => () => t.closeContext(), [] /* eslint-disable-line react-hooks/exhaustive-deps */);
+  function selectAukCheckpoint(next: AukCheckpoint) {
+    setCheckpoint(next);
+    if (next === 'base' && aukModelVariant === 'fp32') setAukModelVariant('w4a8');
+  }
 
   const isEdit = categoryId === 'edit';
   function defaultsFor(fields: AukField[]): Record<string, string> {
@@ -2325,7 +2332,7 @@ function AudioToolsPage({ notify, onCreated }: { notify: (text: string, error?: 
     setErrorText('');
     try {
       const dataUrl = await readFileAsDataUrl(file);
-      const result = await api<{ transcript: string | null }>('/audio-tools/transcribe', 'POST', { audioDataUrl: dataUrl, checkpoint, language: transcribeLanguage, whisper: whisperModel });
+      const result = await api<{ transcript: string | null }>('/audio-tools/transcribe', 'POST', { audioDataUrl: dataUrl, checkpoint, modelVariant: aukModelVariant, textEncoder: aukTextEncoder, vae: aukVae, language: transcribeLanguage, whisper: whisperModel });
       setTranscript(result.transcript || null);
     } catch (error) { setTranscript(null); setErrorText(`텍스트 인식에 실패했습니다. ${(error as Error).message}`); }
     finally { setTranscribing(false); }
@@ -2371,7 +2378,7 @@ function AudioToolsPage({ notify, onCreated }: { notify: (text: string, error?: 
           const buffers: AudioBuffer[] = [];
           for (const segment of segments) {
             const segSeconds = estimateSpeechSeconds(segment);
-            const result = await api<{ dataUrl: string }>('/audio-tools/auk', 'POST', { task: 'tts', instruction: instructionFor({ ...runValues, text: segment }), audioDataUrl, checkpoint, seconds: segSeconds });
+            const result = await api<{ dataUrl: string }>('/audio-tools/auk', 'POST', { task: 'tts', instruction: instructionFor({ ...runValues, text: segment }), audioDataUrl, checkpoint, modelVariant: aukModelVariant, textEncoder: aukTextEncoder, vae: aukVae, seconds: segSeconds });
             const ctx = t.ensureAudioContext();
             const response = await fetch(result.dataUrl);
             if (!response.ok) throw new Error('조각 결과 오디오를 내려받지 못했습니다.');
@@ -2386,7 +2393,7 @@ function AudioToolsPage({ notify, onCreated }: { notify: (text: string, error?: 
           // from the text length. AudioAuK rejects seconds=0 when no reference audioId exists,
           // so a computed positive value is sent whenever the user left it at 0.
           const resolvedSeconds = runTool.showSeconds ? (seconds > 0 ? seconds : estimateSpeechSeconds(runValues.text || instruction)) : 0;
-          const result = await api<{ dataUrl: string; warning?: string | null }>('/audio-tools/auk', 'POST', { task: 'tts', instruction, audioDataUrl, checkpoint, seconds: resolvedSeconds, chunk: chunkContentAudio });
+          const result = await api<{ dataUrl: string; warning?: string | null }>('/audio-tools/auk', 'POST', { task: 'tts', instruction, audioDataUrl, checkpoint, modelVariant: aukModelVariant, textEncoder: aukTextEncoder, vae: aukVae, seconds: resolvedSeconds, chunk: chunkContentAudio });
           if (result.warning) setWarningText(result.warning);
           audioDataUrl = result.dataUrl;
         }
@@ -2436,10 +2443,11 @@ function AudioToolsPage({ notify, onCreated }: { notify: (text: string, error?: 
       <div className="audio-tools-inputs">
         <div className="at-section-head">모델 선택</div>
         <div className="audio-tools-model-switch" role="group" aria-label="AuK 체크포인트">
-          <button type="button" className={checkpoint === 'flash' ? 'active' : ''} aria-pressed={checkpoint === 'flash'} onClick={() => setCheckpoint('flash')} disabled={running}>Flash</button>
-          <button type="button" className={checkpoint === 'base' ? 'active' : ''} aria-pressed={checkpoint === 'base'} onClick={() => setCheckpoint('base')} disabled={running}>Base</button>
+          <button type="button" className={checkpoint === 'flash' ? 'active' : ''} aria-pressed={checkpoint === 'flash'} onClick={() => selectAukCheckpoint('flash')} disabled={running}>Flash</button>
+          <button type="button" className={checkpoint === 'base' ? 'active' : ''} aria-pressed={checkpoint === 'base'} onClick={() => selectAukCheckpoint('base')} disabled={running}>Base</button>
         </div>
-        <span className="field-hint">Flash는 빠르지만 지시문(말할 내용)을 덜 따릅니다. 문장이 섞여 나오면 Base를 선택하세요. 정확한 목소리가 필요하면 참조 목소리를 쓰는 TTS 생성 (Ref-T2S) 쪽이 안정적입니다.</span>
+        <AukRuntimeSelectors checkpoint={checkpoint} modelVariant={aukModelVariant} textEncoder={aukTextEncoder} vae={aukVae} disabled={running} onModelVariant={setAukModelVariant} onTextEncoder={setAukTextEncoder} onVae={setAukVae}/>
+        <span className="field-hint">기본값은 실제 음색 실험에서 가장 안정적이었던 Flash W4A8 + Qwen W4A8입니다. Base는 32스텝으로 더 느리며, 현재 입력에서는 노래 품질이 더 좋지 않았습니다.</span>
         {tool.audio !== 'none' && isEdit && <div>
           <div className="at-transcribe-options-head">Whisper Option 결정</div>
           <div className="at-transcribe-options"><label>전사 언어<select value={transcribeLanguage} onChange={event => setTranscribeLanguage(event.target.value as typeof transcribeLanguage)} aria-label="전사 언어"><option value="auto">자동 감지</option><option value="korean">한국어</option><option value="english">영어</option></select></label><label>Whisper 모델<select value={whisperModel} onChange={event => setWhisperModel(event.target.value)} aria-label="Whisper 모델"><option value="tiny">tiny</option><option value="base">base</option><option value="small">small</option><option value="medium">medium</option><option value="large-v3">large-v3</option><option value="large-v3-turbo">large-v3-turbo</option></select></label></div>
@@ -2535,7 +2543,7 @@ function AudioToolsPage({ notify, onCreated }: { notify: (text: string, error?: 
   </section>;
 }
 
-type DdspJobStatus = { id: string; projectId: string; status: string; targetStep: number; currentStep: number; currentLoss: number | null; createdAt: number; updatedAt: number; skippedRefs: string[]; error: string | null };
+type DdspJobStatus = { id: string; projectId: string; status: string; targetStep: number; currentStep: number; currentLoss: number | null; featureEncoder?: string | null; pitchExtractor?: string | null; vocoder?: string | null; createdAt: number; updatedAt: number; skippedRefs: string[]; error: string | null };
 
 // 라이브러리 파일 선택기 -- multiple=false(기본, 원본/참조 audio 선택용)면 더블클릭 한 번으로 바로
 // 확정되고, multiple=true(DDSP-SVC 레퍼런스 여러 개 선택용)면 체크박스로 여러 개 고른 뒤 "완료"를
@@ -2610,12 +2618,44 @@ const DDSP_STATUS_LABEL: Record<string, string> = {
 
 
 type TimbreEngine = 'seed_vc' | 'vevo2' | 'auk' | 'ddsp';
+type AukCheckpoint = 'flash' | 'base';
+type AukModelVariant = 'w4a8' | 'bf16' | 'fp32';
+type AukTextEncoder = 'w4a8' | 'int8';
 const TIMBRE_ENGINES: { id: TimbreEngine; label: string }[] = [
   { id: 'seed_vc', label: 'Seed-VC' },
   { id: 'vevo2', label: 'Vevo' },
   { id: 'auk', label: 'AuK' },
   { id: 'ddsp', label: 'DDSP-SVC' },
 ];
+const DEFAULT_AUK_TIMBRE_DESCRIPTION = 'a deep adult male with a warm, resonant baritone voice';
+const AUK_MODEL_VARIANTS: Record<AukCheckpoint, { id: AukModelVariant; label: string }[]> = {
+  flash: [
+    { id: 'w4a8', label: 'W4A8 · 0.88GB (권장)' },
+    { id: 'bf16', label: 'BF16 · 3.06GB' },
+    { id: 'fp32', label: 'FP32 · 6.12GB' },
+  ],
+  base: [
+    { id: 'w4a8', label: 'W4A8 · 0.88GB' },
+    { id: 'bf16', label: 'BF16 · 3.06GB' },
+  ],
+};
+
+function AukRuntimeSelectors({ checkpoint, modelVariant, textEncoder, vae, disabled, onModelVariant, onTextEncoder, onVae }: {
+  checkpoint: AukCheckpoint;
+  modelVariant: AukModelVariant;
+  textEncoder: AukTextEncoder;
+  vae: 'auk';
+  disabled: boolean;
+  onModelVariant: (value: AukModelVariant) => void;
+  onTextEncoder: (value: AukTextEncoder) => void;
+  onVae: (value: 'auk') => void;
+}) {
+  return <div className="auk-runtime-options">
+    <label>모델 정밀도<select value={modelVariant} onChange={event => onModelVariant(event.target.value as AukModelVariant)} disabled={disabled}>{AUK_MODEL_VARIANTS[checkpoint].map(option => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
+    <label>텍스트 인코더<select value={textEncoder} onChange={event => onTextEncoder(event.target.value as AukTextEncoder)} disabled={disabled}><option value="w4a8">Qwen W4A8 · 3.18GB (권장)</option><option value="int8">Qwen INT8 · 4.67GB</option></select></label>
+    <label>VAE<select value={vae} onChange={event => onVae(event.target.value as 'auk')} disabled={disabled}><option value="auk">AuK VAE FP32 · 0.64GB</option></select></label>
+  </div>;
+}
 
 // Sidebar timbre transform dialog. Source/reference audio can now come from
 // any library file, so the backend uses a preview session instead of project id.
@@ -2630,12 +2670,22 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
   const referenceBlobRef = useRef<Blob | null>(null);
   const [preparing, setPreparing] = useState(false);
   const [engine, setEngine] = useState<TimbreEngine>('seed_vc');
-  const [checkpoint, setCheckpoint] = useState<'flash' | 'base'>('base');
+  const [checkpoint, setCheckpoint] = useState<AukCheckpoint>('flash');
+  const [aukModelVariant, setAukModelVariant] = useState<AukModelVariant>('w4a8');
+  const [aukTextEncoder, setAukTextEncoder] = useState<AukTextEncoder>('w4a8');
+  const [aukVae, setAukVae] = useState<'auk'>('auk');
   const [whisperModel, setWhisperModel] = useState('large-v3');
   const [aukLanguage, setAukLanguage] = useState<'auto' | 'korean' | 'english'>('auto');
-  const [textDescription, setTextDescription] = useState('');
+  const [textDescription, setTextDescription] = useState(DEFAULT_AUK_TIMBRE_DESCRIPTION);
+  const [seedF0Condition, setSeedF0Condition] = useState(true);
+  const [seedAutoF0Adjust, setSeedAutoF0Adjust] = useState(true);
+  const [seedInferenceSteps, setSeedInferenceSteps] = useState(80);
+  const [vevoRoute, setVevoRoute] = useState<'style_preserved_svc' | 'style_preserved_vc'>('style_preserved_svc');
   const [ddspReferencePaths, setDdspReferencePaths] = useState<string[]>([]);
   const [ddspTargetStep, setDdspTargetStep] = useState(40000);
+  const [ddspFeatureEncoder, setDdspFeatureEncoder] = useState<'contentvec' | 'hubertsoft'>('contentvec');
+  const [ddspPitchExtractor, setDdspPitchExtractor] = useState<'rmvpe' | 'fcpe'>('rmvpe');
+  const [ddspVocoder, setDdspVocoder] = useState<'nsf_hifigan' | 'pc_nsf_hifigan'>('nsf_hifigan');
   const [ddspPickerOpen, setDdspPickerOpen] = useState(false);
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
   const [referencePickerOpen, setReferencePickerOpen] = useState(false);
@@ -2657,6 +2707,10 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
   useEffect(() => () => t.closeContext(), []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const ddspActiveJobId = previewId ? ddspActiveJobs[previewId] || null : null;
+  function selectTimbreAukCheckpoint(next: AukCheckpoint) {
+    setCheckpoint(next);
+    if (next === 'base' && aukModelVariant === 'fp32') setAukModelVariant('w4a8');
+  }
   useEffect(() => {
     if (!ddspActiveJobId) { setDdspJob(null); return; }
     let cancelled = false;
@@ -2798,7 +2852,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
     try {
       await withEstimatedProgress(async () => {
         const dataUrl = await readFileAsDataUrl(referenceBlobRef.current as Blob);
-        const result = await api<{ ok: boolean; warning: string | null }>(`/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl, engine });
+        const result = await api<{ ok: boolean; warning: string | null }>(`/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl, engine, seedF0Condition, seedAutoF0Adjust, seedInferenceSteps, vevoRoute });
         setWarningText(result.warning || '');
         const ctx = t.ensureAudioContext();
         const [vocalsResponse, instrumentalResponse] = await Promise.all([
@@ -2829,7 +2883,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
     setWarningText('');
     try {
       await withEstimatedProgress(async () => {
-        const result = await api<{ ok: boolean; warning: string | null; transcript: string | null; chunkCount: number }>(`/timbre-transform/${previewId}/auk/apply`, 'POST', { textDescription: textDescription.trim(), checkpoint, lyrics: sourceLyrics || undefined, whisper: whisperModel, language: aukLanguage });
+        const result = await api<{ ok: boolean; warning: string | null; transcript: string | null; chunkCount: number }>(`/timbre-transform/${previewId}/auk/apply`, 'POST', { textDescription: textDescription.trim(), checkpoint, modelVariant: aukModelVariant, textEncoder: aukTextEncoder, vae: aukVae, lyrics: sourceLyrics || undefined, whisper: whisperModel, language: aukLanguage });
         setWarningText(result.warning || '');
         setTranscript(result.transcript);
         const ctx = t.ensureAudioContext();
@@ -2863,7 +2917,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
         if (!response.ok) throw new Error(`파일을 불러오지 못했습니다: ${relPath}`);
         return readFileAsDataUrl(await response.blob());
       }));
-      const result = await api<{ jobId: string }>(`/timbre-transform/${previewId}/ddsp/start`, 'POST', { referenceDataUrls, targetStep: ddspTargetStep });
+      const result = await api<{ jobId: string }>(`/timbre-transform/${previewId}/ddsp/start`, 'POST', { referenceDataUrls, targetStep: ddspTargetStep, featureEncoder: ddspFeatureEncoder, pitchExtractor: ddspPitchExtractor, vocoder: ddspVocoder });
       onDdspJobStarted(previewId, result.jobId);
       notify('DDSP-SVC 학습을 시작했습니다. 창을 닫아도 계속 진행됩니다.');
     } catch (error) { setErrorText((error as Error).message); }
@@ -2920,12 +2974,28 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
             {TIMBRE_ENGINES.map(item => <button key={item.id} type="button" className={`timbre-model-btn${engine === item.id ? ' active' : ''}`} onClick={() => setEngine(item.id)} disabled={busy}>{item.label}</button>)}
           </div>
 
+          {engine === 'seed_vc' && <div className="timbre-engine-options">
+            <div className="timbre-auk-option-head" style={{ marginTop: 18 }}>Seed-VC 실행 옵션</div>
+            <label className="timbre-option-check"><input type="checkbox" checked={seedF0Condition} onChange={event => setSeedF0Condition(event.target.checked)} disabled={busy}/>원곡 음정선 사용 (F0 condition)</label>
+            <label className="timbre-option-check"><input type="checkbox" checked={seedAutoF0Adjust} onChange={event => setSeedAutoF0Adjust(event.target.checked)} disabled={busy}/>참조 목소리에 맞춰 음정 자동 조절</label>
+            <div className="auk-runtime-options"><label>추론 스텝<Input type="number" min={1} max={200} value={seedInferenceSteps} onChange={event => setSeedInferenceSteps(Math.max(1, Math.min(200, Number(event.target.value) || 80)))} disabled={busy}/></label></div>
+            <p className="field-hint">기본값은 노래 변환용으로 확인한 F0 사용 · 자동 음정 조절 · 80스텝입니다.</p>
+          </div>}
+
+          {engine === 'vevo2' && <div className="timbre-engine-options">
+            <div className="timbre-auk-option-head" style={{ marginTop: 18 }}>Vevo 변환 라우트</div>
+            <div className="auk-runtime-options"><label>변환 방식<select value={vevoRoute} onChange={event => setVevoRoute(event.target.value as typeof vevoRoute)} disabled={busy}><option value="style_preserved_svc">노래 스타일 유지 SVC (권장)</option><option value="style_preserved_vc">발화 스타일 유지 VC</option></select></label></div>
+            <p className="field-hint">노래에는 SVC가 적합합니다. VC는 말소리용이라 넓은 음정 변화가 손상될 수 있습니다.</p>
+          </div>}
+
           {engine === 'auk' && <div className="timbre-engine-options">
-            <div className="timbre-auk-option-head" style={{ marginTop: 18 }}>모델 결정</div>
+            <div className="timbre-auk-option-head" style={{ marginTop: 18 }}>체크포인트 계열</div>
             <div className="voice-convert-engine-switch" role="group" aria-label="AuK 체크포인트">
-              <Button variant={checkpoint === 'flash' ? undefined : 'outline'} size="sm" onClick={() => setCheckpoint('flash')} disabled={busy}>Flash</Button>
-              <Button variant={checkpoint === 'base' ? undefined : 'outline'} size="sm" onClick={() => setCheckpoint('base')} disabled={busy}>Base</Button>
+              <Button variant={checkpoint === 'flash' ? undefined : 'outline'} size="sm" onClick={() => selectTimbreAukCheckpoint('flash')} disabled={busy}>Flash</Button>
+              <Button variant={checkpoint === 'base' ? undefined : 'outline'} size="sm" onClick={() => selectTimbreAukCheckpoint('base')} disabled={busy}>Base</Button>
             </div>
+            <AukRuntimeSelectors checkpoint={checkpoint} modelVariant={aukModelVariant} textEncoder={aukTextEncoder} vae={aukVae} disabled={busy} onModelVariant={setAukModelVariant} onTextEncoder={setAukTextEncoder} onVae={setAukVae}/>
+            <p className="field-hint">기본값: Flash W4A8 · Qwen W4A8 · AuK VAE FP32. Base에는 설치된 FP32 체크포인트가 없어 W4A8/BF16만 표시됩니다.</p>
             <div className="timbre-auk-option-head" style={{ marginTop: 16 }}>Whisper Option 결정</div>
             <div className="timbre-transcribe-options">전사 언어<select value={aukLanguage} onChange={event => setAukLanguage(event.target.value as 'auto' | 'korean' | 'english')} aria-label="전사 언어" disabled={busy}><option value="auto">자동 감지</option><option value="korean">한국어</option><option value="english">영어</option></select>Whisper 모델<select value={whisperModel} onChange={event => setWhisperModel(event.target.value)} aria-label="Whisper 모델" disabled={busy}><option value="tiny">tiny</option><option value="base">base</option><option value="small">small</option><option value="medium">medium</option><option value="large-v3">large-v3</option><option value="large-v3-turbo">large-v3-turbo</option></select></div>
             <p className="field-hint">가사가 저장된 곡은 전사 없이 그대로 쓰므로 이 전사 선택은 가사가 없는 외부 오디오에서만 적용됩니다.</p>
@@ -2937,6 +3007,12 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
             <Button variant="outline" className="voice-convert-file-btn" onClick={() => setDdspPickerOpen(true)} disabled={isTraining || starting}>
               <Upload size={14}/><span className="voice-convert-file-name">{ddspReferencePaths.length ? `레퍼런스 ${ddspReferencePaths.length}개 선택됨` : '레퍼런스 선택 (여러 개, 참조 audio와 별개)'}</span>
             </Button>
+            <div className="timbre-auk-option-head" style={{ marginTop: 10 }}>DDSP-SVC 구성 요소</div>
+            <div className="auk-runtime-options">
+              <label>특징 인코더<select value={ddspFeatureEncoder} onChange={event => setDdspFeatureEncoder(event.target.value as typeof ddspFeatureEncoder)} disabled={isTraining || starting}><option value="contentvec">ContentVec (권장)</option><option value="hubertsoft">HubertSoft</option></select></label>
+              <label>음정 추출기<select value={ddspPitchExtractor} onChange={event => setDdspPitchExtractor(event.target.value as typeof ddspPitchExtractor)} disabled={isTraining || starting}><option value="rmvpe">RMVPE (권장)</option><option value="fcpe">FCPE</option></select></label>
+              <label>보코더<select value={ddspVocoder} onChange={event => setDdspVocoder(event.target.value as typeof ddspVocoder)} disabled={isTraining || starting}><option value="nsf_hifigan">NSF-HiFiGAN (권장)</option><option value="pc_nsf_hifigan">PC-NSF-HiFiGAN</option></select></label>
+            </div>
             <label className="field-hint">목표 스텝<Input type="number" min={100} max={500000} step={1000} value={ddspTargetStep} onChange={event => setDdspTargetStep(Number(event.target.value))} disabled={isTraining || starting}/></label>
             <Button onClick={() => void startDdspTraining()} disabled={!canApply || starting}>{starting ? <LoaderCircle className="spin"/> : <Sparkles size={14}/>}학습 시작</Button>
             <p className="field-hint">기본값 40,000스텝은 이 환경 기준 약 1시간 35분 소요(초당 7~10스텝).</p>

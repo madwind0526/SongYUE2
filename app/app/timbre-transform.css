@@ -70,6 +70,50 @@
   gap: 8px;
 }
 
+.auk-runtime-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.auk-runtime-options label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+  color: #c5d1bb;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.auk-runtime-options select,
+.auk-runtime-options input {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 5px 8px;
+  border: 1px solid #3b493d;
+  border-radius: 6px;
+  background: #232b23;
+  color: #e4ece0;
+  font-size: 12px;
+}
+
+.timbre-option-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #c5d1bb;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.timbre-option-check input {
+  width: 15px;
+  height: 15px;
+  accent-color: #7fb069;
+}
+
 .timbre-transform-dialog .timbre-transcribe-options {
   display: flex;
   align-items: center;
