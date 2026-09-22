@@ -208,3 +208,49 @@ const t = useAudioTransport();
 - Seed-VC, Vevo2, AuK처럼 긴 입력에서 품질이 무너지는 엔진은 10초 창, 2초 겹침, 양쪽 경계 1초 트림 방식으로 처리한다.
 - 모든 청크에 같은 참조 음성을 재사용하고, 진행률·경고·청크 수를 공통 반환 형식으로 유지한다.
 - TTS 텍스트는 예상 발화가 10초를 넘고 명시적 길이가 없을 때만 문장 단위로 나누어 생성 후 연결한다.
+
+## 자식 프로세스 실행에는 항상 hard deadline (timer + kill + signal 감지)
+
+**사용 시점:** `spawn`으로 CLI를 돌리는 모든 곳. `close`/`error`만 기다리는 promise는 프로세스가 행(hang)하면 HTTP 요청을 무기한 붙잡는다.
+
+```js
+async function runBufferedProcess(command, args, { cwd, timeoutMs = FFMPEG_TIMEOUT_MS } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawnImpl(command, args, { windowsHide: true, cwd });
+    const chunks = [];
+    let size = 0;
+    const collect = (data) => { size += data.length; if (size < 512 * 1024) chunks.push(data); };
+    child.stdout?.on('data', collect);
+    child.stderr?.on('data', collect);
+    const timer = setTimeout(() => child.kill(), timeoutMs);
+    child.once('error', (error) => { clearTimeout(timer); reject(error); });
+    child.once('close', (code, signal) => { clearTimeout(timer); resolve({ text: Buffer.concat(chunks).toString('utf8'), code, signal }); });
+  });
+}
+```
+
+- SJF: 남는 출력을 전부 쌓지 말고 캡(예: 512KB)을 걸 것. `signal`은 타임아웃 kill임을 뜻하므로 명시적 시간 초과 메시지를 낼 수 있다.
+- 출처: `backend/server.mjs`의 `runBufferedProcess`/`runFfmpegCli`(E1 수정, Wave 46).
+
+## 외부 HTTP 폴링: 전체 deadline 사이에 있는 개별 fetch에도 타임아웃
+
+**사용 시점:** 잡을 폴링하거나 상태를 주기적으로 조회하는 루프. `while (Date.now() < deadline)`은 fetch 한 번이 hang되면 무력하다.
+
+- 전체 잡 허용시간(예: 20분)이 있어도 **각 fetch에 `AbortSignal.timeout(...)`을 따로 걸고**, 남은 시간에 비례해 줄인다.
+- 실제 적용: `auk.mjs`의 `aukFetchJson(…, timeoutMs)` — 셋업성 호출(settings PUT/잡 POST)은 모델 로드 시간을 넉넉히(5분), 상태 조회는 짧게(10초), 결과 오디오 다운로드는 3분.
+- `options.signal ?? AbortSignal.timeout(timeoutMs)`로 호출자가 signal을 넣어도 덮어쓰지 않는다.
+
+## 반복 잡에서 동일한 설정 PUT 건너뛰기 (instance-scoped cache)
+
+**사용 시점:** 외부 엔진이 설정 API 호출마다 무거운 작업을 다시 하는데(예: 모델 재로드), 한 요청이 같은 설정으로 여러 잡을 연속 제출하는 구조(청크 처리).
+
+```js
+// 서버 인스턴스 단위 캐시 객체를 호출부에서 전달받아 비교
+const settingsKey = `${model}|${encoder}|${vae}|${precision}`;
+if (configCache && configCache.lastSettingsKey === settingsKey) return selected;
+await aukFetchJson(... '/api/settings', { method: 'PUT', ... });
+if (configCache) configCache.lastSettingsKey = settingsKey;
+```
+
+- **모듈 전역이 아니라 인스턴스 스코프**로 해야 테스트 간 간섭이 없다(`createStudioServer`가 생성하는 객체를 넘긴다).
+- 같은 잡 시퀀스 안에서만 불변인 설정이므로, 캐시 덕에 청크 N개가 PUT 몇 회로 줄어든다.

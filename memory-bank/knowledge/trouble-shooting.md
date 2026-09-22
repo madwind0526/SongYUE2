@@ -530,3 +530,18 @@ const patched = template
   editing path via `runAukTool`'s `chunk` flag.
 - **Note:** DDSP-SVC is frame-based and converts whole clips unchanged (no length collapse), so it
   needs no chunking.
+
+## Child process promise that blocks the request forever (no timeout)
+
+- **Symptom:** a hung `ffmpeg`/CLI (file held open by another process, corrupt stream) left the HTTP
+  request pending indefinitely -- the whole SongYUE2 handler stalls with no error surfaced.
+- **Cause:** inline `new Promise` wrappers resolved only on `close`/`error`; a process that never
+  exits never fires either. Only `runSvcCli` had a timer, while the many other spawn sites
+  (ffmpeg normalization, chunk slicing, seed/vevo/auk stitching, final format convert) did not.
+- **Fix (Wave 46):** one shared `runBufferedProcess`(timer+kill+clearTimeout, 512KB log cap) plus
+  `runFfmpegCli`(label-aware Korean error messages). All the ffmpeg helpers in the timbre/AuK/Tools
+  paths now go through it.
+- **Also fixed:** the AuK fetch path had per-fetch timeouts only on health; settings PUT / job POST /
+  poll / result download were unbounded, and the 20-min poll deadline only applied *between* fetches.
+  `aukFetchJson` now applies `AbortSignal.timeout` per call (5min config, 10s poll, 3min output).
+- **Test status:** 23 tests pass; `npm run check` clean.

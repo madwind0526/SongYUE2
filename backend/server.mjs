@@ -50,6 +50,7 @@ const DEFAULT_EXAMPLES = [
   { title: '마음을 전하는 피아노', genre: '피아노 발라드', caption: '여백이 있는 감성적인 선율', color: 'sand', style: 'Korean, piano ballad, expressive soft vocal, spacious piano, subtle strings, tender and hopeful, 72 BPM', lyrics: '[Verse]\n다 하지 못한 말들이\n건반 위에 내려앉아\n그대의 이름 부르면\n작은 노래가 되네\n\n[Chorus]\n언제나 그대 곁에서\n조용한 빛이 될게요\n시간이 우리를 지나도\n이 마음은 여기 있어요' },
 ];
 const GENERATE_TIMEOUT_MS = 10 * 60 * 1000;
+const FFMPEG_TIMEOUT_MS = 5 * 60 * 1000;
 const SAVE_FORMATS = new Set(['wav', 'flac', 'mp3', 'mp4']);
 const AUDIO_MIME_TYPES = { '.wav': 'audio/wav', '.flac': 'audio/flac', '.mp3': 'audio/mpeg', '.mp4': 'video/mp4', '.m4a': 'audio/mp4', '.ogg': 'audio/ogg' };
 const LIBRARY_BROWSE_AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.flac', '.m4a', '.ogg']);
@@ -247,6 +248,38 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     viewMode: VIEW_MODES.has(stored.viewMode) ? stored.viewMode : 'list',
     outputDirectory,
   };
+  // Per-server cache of the AudioAuK engine settings last PUT to /api/settings. A chunked job
+  // submits several AuK jobs back-to-back with identical {model, encoder, vae, precision}, and
+  // AudioAuK re-loads weights on every settings PUT -- keying the skip on this instance-scoped
+  // object (not module state) avoids reloading per chunk without leaking state across servers/tests.
+  const audioAukConfigCache = { lastSettingsKey: null };
+  // Shared child-runner with a hard deadline + output cap. The older inline spawn promises resolved
+  // only on close/error, so a hung ffmpeg (file held open by another process, corrupt stream) held
+  // the HTTP request open forever; this mirrors runSvcCli()'s timer+kill guard so the caller
+  // surfaces a clear Korean timeout error instead. runFfmpegCli() wraps it with the label messages.
+  async function runBufferedProcess(command, args, { cwd, timeoutMs = FFMPEG_TIMEOUT_MS } = {}) {
+    return new Promise((resolve, reject) => {
+      const child = spawnImpl(command, args, { windowsHide: true, cwd });
+      const chunks = [];
+      let size = 0;
+      const collect = (data) => { size += data.length; if (size < 512 * 1024) chunks.push(data); };
+      child.stdout?.on('data', collect);
+      child.stderr?.on('data', collect);
+      const timer = setTimeout(() => child.kill(), timeoutMs);
+      child.once('error', (error) => { clearTimeout(timer); reject(error); });
+      child.once('close', (code, signal) => { clearTimeout(timer); resolve({ text: Buffer.concat(chunks).toString('utf8'), code, signal }); });
+    });
+  }
+  async function runFfmpegCli(args, label) {
+    let log;
+    try {
+      log = await runBufferedProcess('ffmpeg', args);
+    } catch {
+      throw fail(502, `${label}에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.`);
+    }
+    if (log.signal) throw fail(502, `${label}이 제한 시간을 넘어 중단되었습니다.`);
+    if (log.code !== 0) throw fail(502, `${label}에 실패했습니다. ${log.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
+  }
   const resolveLibraryDir = (relative, defaultRelative) => path.join(root, relative.trim() || defaultRelative);
   const settingDir = () => resolveLibraryDir(settings.settingPath, 'library/setting');
   const musicDir = () => resolveLibraryDir(settings.musicPath, 'library/music');
@@ -823,16 +856,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       // and write the same file at once ("FFmpeg cannot edit existing files in-place") and always
       // failed with a misleading "ffmpeg가 설치되어 있는지 확인해 주세요" error (2026-09-16, real bug).
       const voiceRefWav = path.join(workDir, 'voice-ref-normalized.wav');
-      const ffmpegLog = await new Promise((resolve, reject) => {
-        const child = spawnImpl('ffmpeg', ['-y', '-i', voiceRefSource, '-ar', '44100', '-ac', '1', voiceRefWav], { windowsHide: true });
-        const chunks = [];
-        const collect = (data) => chunks.push(data);
-        child.stdout?.on('data', collect);
-        child.stderr?.on('data', collect);
-        child.once('error', reject);
-        child.once('close', (code) => resolve({ code, text: Buffer.concat(chunks).toString('utf8') }));
-      }).catch(() => { throw fail(502, '참조 오디오 변환에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
-      if (ffmpegLog.code !== 0) throw fail(502, `참조 오디오 변환에 실패했습니다. ${ffmpegLog.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
+      await runFfmpegCli(['-y', '-i', voiceRefSource, '-ar', '44100', '-ac', '1', voiceRefWav], '참조 오디오 변환');
 
       // 긴 보컬은 AuK와 같은 방식으로 겹치는 10초 창으로 나눠 처리한다. Seed-VC/Vevo2는 소스
       // 전체를 한 번에 변환할 때 길어질수록 점점 노이즈/변형으로 무너지는 것이 실제 테스트로
@@ -848,18 +872,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         : null;
 
       const convertedVocals = path.join(workDir, 'converted-vocals.wav');
-      const runFfmpeg = async (args, label) => {
-        const log = await new Promise((resolve, reject) => {
-          const child = spawnImpl('ffmpeg', args, { windowsHide: true });
-          const chunks = [];
-          const collect = (data) => chunks.push(data);
-          child.stdout?.on('data', collect);
-          child.stderr?.on('data', collect);
-          child.once('error', reject);
-          child.once('close', (code) => resolve({ code, text: Buffer.concat(chunks).toString('utf8') }));
-        }).catch(() => { throw fail(502, `${label}에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.`); });
-        if (log.code !== 0) throw fail(502, `${label}에 실패했습니다. ${log.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
-      };
+      const runFfmpeg = (args, label) => runFfmpegCli(args, label);
 
       if (useChunking) {
         const stitchedParts = [];
@@ -944,33 +957,13 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         const referenceSource = path.join(workDir, `reference.${referenceExt}`);
         await writeFile(referenceSource, referenceBuffer);
         referenceFilePath = path.join(workDir, 'reference-normalized.wav');
-        const ffmpegLog = await new Promise((resolve, reject) => {
-          const child = spawnImpl('ffmpeg', ['-y', '-i', referenceSource, '-ar', '44100', '-ac', '1', referenceFilePath], { windowsHide: true });
-          const chunks = [];
-          const collect = (data) => chunks.push(data);
-          child.stdout?.on('data', collect);
-          child.stderr?.on('data', collect);
-          child.once('error', reject);
-          child.once('close', (code) => resolve({ code, text: Buffer.concat(chunks).toString('utf8') }));
-        }).catch(() => { throw fail(502, '참조 오디오 변환에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
-        if (ffmpegLog.code !== 0) throw fail(502, `참조 오디오 변환에 실패했습니다. ${ffmpegLog.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
+        await runFfmpegCli(['-y', '-i', referenceSource, '-ar', '44100', '-ac', '1', referenceFilePath], '참조 오디오 변환');
       }
 
       const convertedVocals = path.join(workDir, 'converted-vocals.wav');
       let resultTranscript = null;
 
-      const runFfmpeg = async (args, label) => {
-        const log = await new Promise((resolve, reject) => {
-          const child = spawnImpl('ffmpeg', args, { windowsHide: true });
-          const chunks = [];
-          const collect = (data) => chunks.push(data);
-          child.stdout?.on('data', collect);
-          child.stderr?.on('data', collect);
-          child.once('error', reject);
-          child.once('close', (code) => resolve({ code, text: Buffer.concat(chunks).toString('utf8') }));
-        }).catch(() => { throw fail(502, `${label}에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.`); });
-        if (log.code !== 0) throw fail(502, `${label}에 실패했습니다. ${log.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
-      };
+      const runFfmpeg = (args, label) => runFfmpegCli(args, label);
 
       if (useChunking) {
         const sharedSeed = randomInt(0, 2147483647);
@@ -986,7 +979,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           let chunkResult;
           try {
             chunkResult = await submitAukJob(fetchImpl, spawnImpl, endpoint, audioAukPath, {
-              referenceFilePath: null, textDescription: description, sourceVocalPath: chunkSource, checkpoint, modelVariant, textEncoder, vae, lyrics: null, whisper, language, seed: sharedSeed,
+              referenceFilePath: null, textDescription: description, sourceVocalPath: chunkSource, checkpoint, modelVariant, textEncoder, vae, lyrics: null, whisper, language, seed: sharedSeed, configCache: audioAukConfigCache,
             });
           } catch (error) {
             throw fail(502, `AuK ${index + 1}/${chunkPlan.length} 조각 변환에 실패했습니다. ${(error && error.message) || '알 수 없는 오류'}`);
@@ -1012,7 +1005,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         try {
           if (typeof onProgress === 'function') onProgress(5, 'AuK 처리 중');
           result = await submitAukJob(fetchImpl, spawnImpl, endpoint, audioAukPath, {
-            referenceFilePath, textDescription: description || null, sourceVocalPath: originalVocalsWav, checkpoint, modelVariant, textEncoder, vae, lyrics: spokenLyrics, whisper, language,
+            referenceFilePath, textDescription: description || null, sourceVocalPath: originalVocalsWav, checkpoint, modelVariant, textEncoder, vae, lyrics: spokenLyrics, whisper, language, configCache: audioAukConfigCache,
           });
         } catch (error) {
           throw fail(502, `AuK 변환에 실패했습니다. ${(error && error.message) || '알 수 없는 오류'}`);
@@ -1047,16 +1040,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const source = path.join(workDir, `input.${ext}`);
     await writeFile(source, buffer);
     const audioFilePath = path.join(workDir, 'input-normalized.wav');
-    const ffmpegLog = await new Promise((resolve, reject) => {
-      const child = spawnImpl('ffmpeg', ['-y', '-i', source, '-ar', '44100', '-ac', '1', audioFilePath], { windowsHide: true });
-      const chunks = [];
-      const collect = (data) => chunks.push(data);
-      child.stdout?.on('data', collect);
-      child.stderr?.on('data', collect);
-      child.once('error', reject);
-      child.once('close', (code) => resolve({ code, text: Buffer.concat(chunks).toString('utf8') }));
-    }).catch(() => { throw fail(502, '입력 오디오 변환에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
-    if (ffmpegLog.code !== 0) throw fail(502, `입력 오디오 변환에 실패했습니다. ${ffmpegLog.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
+    await runFfmpegCli(['-y', '-i', source, '-ar', '44100', '-ac', '1', audioFilePath], '입력 오디오 변환');
     return audioFilePath;
   }
   async function runAukTool({ task, instruction, audioDataUrl, checkpoint, modelVariant, textEncoder, vae, seconds, chunk }) {
@@ -1086,22 +1070,11 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         ? `긴 오디오를 ${AUK_CHUNK_SECONDS}초 단위(겹침 ${AUK_OVERLAP_SECONDS}초)로 ${chunkPlan.length}개로 나눠 순차 처리하고 연결했습니다. 조각 경계 부근에서 오디오가 어색할 수 있습니다.`
         : null;
 
-      const runFfmpeg = async (args, label) => {
-        const log = await new Promise((resolve, reject) => {
-          const child = spawnImpl('ffmpeg', args, { windowsHide: true });
-          const chunks = [];
-          const collect = (data) => chunks.push(data);
-          child.stdout?.on('data', collect);
-          child.stderr?.on('data', collect);
-          child.once('error', reject);
-          child.once('close', (code) => resolve({ code, text: Buffer.concat(chunks).toString('utf8') }));
-        }).catch(() => { throw fail(502, `${label}에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.`); });
-        if (log.code !== 0) throw fail(502, `${label}에 실패했습니다. ${log.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
-      };
+      const runFfmpeg = (args, label) => runFfmpegCli(args, label);
       const runToolJob = async (jobAudioPath, index) => {
         let result;
         try {
-          result = await submitAukToolJob(fetchImpl, spawnImpl, endpoint, audioAukPath, { task: cleanTask, instruction: cleanInstruction, audioFilePath: jobAudioPath, checkpoint, modelVariant, textEncoder, vae, seconds });
+          result = await submitAukToolJob(fetchImpl, spawnImpl, endpoint, audioAukPath, { task: cleanTask, instruction: cleanInstruction, audioFilePath: jobAudioPath, checkpoint, modelVariant, textEncoder, vae, seconds, configCache: audioAukConfigCache });
         } catch (error) {
           throw fail(502, `AuK 작업에 실패했습니다. ${(error && error.message) || '알 수 없는 오류'}`);
         }
@@ -1135,16 +1108,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
 
       const rawOutput = await runToolJob(audioFilePath, 0);
       const outputWav = path.join(workDir, 'output.wav');
-      const convertLog = await new Promise((resolve, reject) => {
-        const child = spawnImpl('ffmpeg', ['-y', '-i', rawOutput, outputWav], { windowsHide: true });
-        const chunks = [];
-        const collect = (data) => chunks.push(data);
-        child.stdout?.on('data', collect);
-        child.stderr?.on('data', collect);
-        child.once('error', reject);
-        child.once('close', (code) => resolve({ code, text: Buffer.concat(chunks).toString('utf8') }));
-      }).catch(() => { throw fail(502, 'AuK 결과 오디오 변환에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
-      if (convertLog.code !== 0) throw fail(502, `AuK 결과 오디오 변환에 실패했습니다. ${convertLog.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
+      await runFfmpegCli(['-y', '-i', rawOutput, outputWav], 'AuK 결과 오디오 변환');
 
       const wavBuffer = await readFile(outputWav);
       return { dataUrl: `data:audio/wav;base64,${wavBuffer.toString('base64')}` };
@@ -2369,7 +2333,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           await mkdir(workDir, { recursive: true });
           try {
             const audioFilePath = await normalizeInputAudio(workDir, input.audioDataUrl);
-            const transcript = await transcribeAukAudio(fetchImpl, spawnImpl, endpoint, audioAukPath, { audioFilePath, checkpoint: input.checkpoint, modelVariant: input.modelVariant, textEncoder: input.textEncoder, vae: input.vae, language: input.language, whisper: input.whisper });
+            const transcript = await transcribeAukAudio(fetchImpl, spawnImpl, endpoint, audioAukPath, { audioFilePath, checkpoint: input.checkpoint, modelVariant: input.modelVariant, textEncoder: input.textEncoder, vae: input.vae, language: input.language, whisper: input.whisper, configCache: audioAukConfigCache });
             return send(200, { transcript });
           } finally {
             await rm(workDir, { recursive: true, force: true }).catch(() => {});

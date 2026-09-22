@@ -23,6 +23,10 @@ const AUK_JOB_POLL_INTERVAL_MS = 1500;
 const AUK_JOB_POLL_TIMEOUT_MS = 20 * 60 * 1000;
 const AUK_HEALTH_TIMEOUT_MS = 1500;
 const AUK_STARTUP_POLL_TIMEOUT_MS = 90000;
+const AUK_FETCH_TIMEOUT_MS = 60 * 1000;
+const AUK_CONFIG_TIMEOUT_MS = 5 * 60 * 1000;
+const AUK_POLL_FETCH_TIMEOUT_MS = 10 * 1000;
+const AUK_OUTPUT_TIMEOUT_MS = 3 * 60 * 1000;
 const AUK_MODELS = {
   flash: {
     w4a8: { model: 'auk_flash_w4a8.safetensors', precision: 'auto', steps: 4, guidance: 0 },
@@ -37,8 +41,11 @@ const AUK_MODELS = {
 const AUK_ENCODERS = { w4a8: 'qwen_omni_w4a8.safetensors', int8: 'qwen_omni_int8.safetensors' };
 const AUK_VAES = { auk: 'auk_vae.safetensors' };
 
-async function aukFetchJson(fetchImpl, endpoint, route, options = {}) {
-  const response = await fetchImpl(`${endpoint.replace(/\/$/, '')}${route}`, options);
+async function aukFetchJson(fetchImpl, endpoint, route, options = {}, timeoutMs = AUK_FETCH_TIMEOUT_MS) {
+  // Every AuK request gets its own deadline (unless the caller installed one) -- the poll loop's
+  // 20-minute cap only applies between fetches, so without a per-fetch timeout a hung AudioAuK
+  // would hold SongYUE2's HTTP request open forever.
+  const response = await fetchImpl(`${endpoint.replace(/\/$/, '')}${route}`, { ...options, signal: options.signal ?? AbortSignal.timeout(timeoutMs) });
   const text = await response.text();
   let data;
   try { data = text ? JSON.parse(text) : {}; } catch { data = {}; }
@@ -79,7 +86,8 @@ async function uploadAukAudio(fetchImpl, endpoint, filePath, filename) {
 async function pollAukJob(fetchImpl, endpoint, jobId) {
   const deadline = Date.now() + AUK_JOB_POLL_TIMEOUT_MS;
   while (Date.now() < deadline) {
-    const jobs = await aukFetchJson(fetchImpl, endpoint, '/api/jobs');
+    const remainingMs = deadline - Date.now();
+    const jobs = await aukFetchJson(fetchImpl, endpoint, '/api/jobs', {}, Math.min(AUK_POLL_FETCH_TIMEOUT_MS, Math.max(1000, remainingMs)));
     const job = jobs.find((item) => item.id === jobId);
     if (!job) throw new Error('AudioAuK 작업을 찾을 수 없습니다.');
     if (job.status === 'completed') return job;
@@ -95,17 +103,25 @@ async function pollAukJob(fetchImpl, endpoint, jobId) {
 // able to land a cleaner take.
 function freshSeed() { return randomInt(0, 2147483647); }
 
-async function selectAukConfiguration(fetchImpl, endpoint, { checkpoint, modelVariant, textEncoder, vae }) {
+async function selectAukConfiguration(fetchImpl, endpoint, { checkpoint, modelVariant, textEncoder, vae }, configCache = null) {
   const family = AUK_MODELS[checkpoint] ? checkpoint : 'flash';
   const variants = AUK_MODELS[family];
   const selected = variants[modelVariant] || variants.w4a8;
   const encoder = AUK_ENCODERS[textEncoder] || AUK_ENCODERS.w4a8;
   const vaeName = AUK_VAES[vae] || AUK_VAES.auk;
+  // A chunked job submits many jobs back-to-back with the same {model, encoder, vae, precision},
+  // and AudioAuK re-loads those weights on every /api/settings PUT -- skip the redundant PUT when
+  // the last-applied settings for this SongYUE2 server already match. The cache is instance-scoped
+  // (passed in from createStudioServer), so state never leaks across servers (or tests), and any
+  // externally-edited AuK settings are picked up once the app is restarted.
+  const settingsKey = `${selected.model}|${encoder}|${vaeName}|${selected.precision}`;
+  if (configCache && configCache.lastSettingsKey === settingsKey) return selected;
   await aukFetchJson(fetchImpl, endpoint, '/api/settings', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ engine: { model: selected.model, encoder, vae: vaeName, precision: selected.precision } }),
-  });
+  }, AUK_CONFIG_TIMEOUT_MS);
+  if (configCache) configCache.lastSettingsKey = settingsKey;
   return selected;
 }
 
@@ -113,10 +129,10 @@ async function selectAukConfiguration(fetchImpl, endpoint, { checkpoint, modelVa
 // result audio. Shared by submitAukJob() (음색 변조 탭) and submitAukToolJob() (Tools 메뉴) so
 // both go through the identical submit-poll-fetch sequence.
 async function runAukJob(fetchImpl, endpoint, jobBody) {
-  const created = await aukFetchJson(fetchImpl, endpoint, '/api/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(jobBody) });
+  const created = await aukFetchJson(fetchImpl, endpoint, '/api/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(jobBody) }, AUK_CONFIG_TIMEOUT_MS);
   const finished = await pollAukJob(fetchImpl, endpoint, created.id);
   if (!finished.outputUrl) throw new Error('AudioAuK 작업이 완료되었지만 결과 오디오가 없습니다.');
-  const audioResponse = await fetchImpl(`${endpoint.replace(/\/$/, '')}${finished.outputUrl}`);
+  const audioResponse = await fetchImpl(`${endpoint.replace(/\/$/, '')}${finished.outputUrl}`, { signal: AbortSignal.timeout(AUK_OUTPUT_TIMEOUT_MS) });
   if (!audioResponse.ok) throw new Error('AudioAuK 결과 오디오를 받지 못했습니다.');
   const outputBuffer = Buffer.from(await audioResponse.arrayBuffer());
   // finished.outputUrl is "/api/audio/<uuid><ext>" -- AudioAuK names result files by their real
@@ -133,9 +149,9 @@ async function runAukJob(fetchImpl, endpoint, jobBody) {
 // lyrics: the source vocal's real lyrics when they are known in advance (an in-app-created song has
 // them stored next to its audio). Whisper STT hallucinates on dense mixes ("아 아 아" filler), so
 // whenever real lyrics exist we skip transcription entirely.
-export async function submitAukJob(fetchImpl, spawnImpl, endpoint, audioAukPath, { referenceFilePath, textDescription, sourceVocalPath, checkpoint, modelVariant, textEncoder, vae, lyrics, whisper, language, seed }) {
+export async function submitAukJob(fetchImpl, spawnImpl, endpoint, audioAukPath, { referenceFilePath, textDescription, sourceVocalPath, checkpoint, modelVariant, textEncoder, vae, lyrics, whisper, language, seed, configCache }) {
   await ensureAudioAukRunning(fetchImpl, spawnImpl, endpoint, audioAukPath);
-  const generation = await selectAukConfiguration(fetchImpl, endpoint, { checkpoint, modelVariant, textEncoder, vae });
+  const generation = await selectAukConfiguration(fetchImpl, endpoint, { checkpoint, modelVariant, textEncoder, vae }, configCache);
 
   const sourceAudioId = await uploadAukAudio(fetchImpl, endpoint, sourceVocalPath, path.basename(sourceVocalPath));
   let transcript = null;
@@ -144,7 +160,7 @@ export async function submitAukJob(fetchImpl, spawnImpl, endpoint, audioAukPath,
     const referenceAudioId = await uploadAukAudio(fetchImpl, endpoint, referenceFilePath, path.basename(referenceFilePath));
     transcript = typeof lyrics === 'string' ? lyrics.trim() : '';
     if (!transcript) {
-      const transcribeJob = await aukFetchJson(fetchImpl, endpoint, '/api/transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audioId: sourceAudioId, model: whisper, language }) });
+      const transcribeJob = await aukFetchJson(fetchImpl, endpoint, '/api/transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audioId: sourceAudioId, model: whisper, language }) }, AUK_CONFIG_TIMEOUT_MS);
       const transcribed = await pollAukJob(fetchImpl, endpoint, transcribeJob.id);
       transcript = (transcribed.transcript || '').trim();
     }
@@ -164,9 +180,9 @@ export async function submitAukJob(fetchImpl, spawnImpl, endpoint, audioAukPath,
 // 맥락이 없고(독립 오디오 파일 업로드 또는 텍스트만), 전사(transcribe) 같은 특수 분기도 없다.
 // instruction은 호출자가 이미 TOOL 템플릿 문자열을 채워서 넘긴다(app/app/studio.tsx의
 // AUK_TOOLS 테이블 참고).
-export async function submitAukToolJob(fetchImpl, spawnImpl, endpoint, audioAukPath, { task, instruction, audioFilePath, checkpoint, modelVariant, textEncoder, vae, seconds }) {
+export async function submitAukToolJob(fetchImpl, spawnImpl, endpoint, audioAukPath, { task, instruction, audioFilePath, checkpoint, modelVariant, textEncoder, vae, seconds, configCache }) {
   await ensureAudioAukRunning(fetchImpl, spawnImpl, endpoint, audioAukPath);
-  const generation = await selectAukConfiguration(fetchImpl, endpoint, { checkpoint, modelVariant, textEncoder, vae });
+  const generation = await selectAukConfiguration(fetchImpl, endpoint, { checkpoint, modelVariant, textEncoder, vae }, configCache);
   const audioId = audioFilePath ? await uploadAukAudio(fetchImpl, endpoint, audioFilePath, path.basename(audioFilePath)) : undefined;
   return runAukJob(fetchImpl, endpoint, { task, instruction, audioId, seconds: seconds ?? 0, seed: freshSeed(), steps: generation.steps, guidance: generation.guidance, sway: -1, promptEnhance: false });
 }
@@ -174,11 +190,11 @@ export async function submitAukToolJob(fetchImpl, spawnImpl, endpoint, audioAukP
 // "Tools" 메뉴(가사/대사 편집 탭): 선택한 오디오를 AudioAuK의 Whisper STT로 전사해 가사 후보를
 // 돌려준다. 음색 변조 AuK 탭의 reference 분기(submitAukJob)와 동일한 /api/transcribe 경로를
 // 그대로 재사용한다 -- 결과는 저장하지 않고 transcript 문자열만 반환한다.
-export async function transcribeAukAudio(fetchImpl, spawnImpl, endpoint, audioAukPath, { audioFilePath, checkpoint, modelVariant, textEncoder, vae, language, whisper }) {
+export async function transcribeAukAudio(fetchImpl, spawnImpl, endpoint, audioAukPath, { audioFilePath, checkpoint, modelVariant, textEncoder, vae, language, whisper, configCache }) {
   await ensureAudioAukRunning(fetchImpl, spawnImpl, endpoint, audioAukPath);
-  await selectAukConfiguration(fetchImpl, endpoint, { checkpoint, modelVariant, textEncoder, vae });
+  await selectAukConfiguration(fetchImpl, endpoint, { checkpoint, modelVariant, textEncoder, vae }, configCache);
   const audioId = await uploadAukAudio(fetchImpl, endpoint, audioFilePath, path.basename(audioFilePath));
-  const transcribeJob = await aukFetchJson(fetchImpl, endpoint, '/api/transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audioId, language, model: whisper }) });
+  const transcribeJob = await aukFetchJson(fetchImpl, endpoint, '/api/transcribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ audioId, language, model: whisper }) }, AUK_CONFIG_TIMEOUT_MS);
   const transcribed = await pollAukJob(fetchImpl, endpoint, transcribeJob.id);
   return (transcribed.transcript || '').trim() || null;
 }

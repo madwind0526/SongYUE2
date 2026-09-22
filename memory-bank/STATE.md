@@ -2,9 +2,10 @@
 
 ## Current Wave
 
-- **Wave:** 45
+- **Wave:** 46
 - **Status:** Done
 - **Cache Status:** CLEAN
+- **Last Checkpoint:** 2026-09-22 코드 리뷰(에러/성능/보안 관점) 후 확정된 항목 3개 수정. (E1) ffmpeg 실행부 전부에 하드 타임아웃 추가 — `runBufferedProcess`(timer+kill+clearTimeout, 로그 512KB 캡)+`runFfmpegCli`(라벨별 한국어 에러 메시지, signal이면 "제한 시간 초과") 신설하고, SVC/AuK/Seed-VC/Vevo2/Tools의 모든 ffmpeg 인라인 promise(참조 정규화, 조각 자르기/정리/연결, 입력 정규화, 최종 변환)를 대체. (E2) AuK fetch 전부에 per-request 타임아웃 — `aukFetchJson`에 `signal: AbortSignal.timeout`(설정/작업 등록 5분, 폴 10초·남은시간에 비례, 결과 3분), 20분 폴 deadline은 fetch 간에만 적용되는 함정 해소. (P1) 청크/멀티잡 시 동일 설정 반복 PUT 건너뛰기 — `selectAukConfiguration`에 instance-scoped(`createStudioServer` 소유) `configCache` 도입, AudioAuK 모델 재로드 절약. 테스트 23개·tsc 통과. 지식 `PATTERNS.md`(프로세스 deadline/cache 패턴)·`trouble-shooting.md`(E1/E2 기록)에 flush.
 - **Last Checkpoint:** 2026-09-22 AuK 노래 음색 변조의 기본 프롬프트를 `Keep the lyrics, melody, phrasing and rhythm unchanged and change the timbre to: "${textDescription}".`로 확정하고, 기본 목표 음색을 `a deep adult male with a warm, resonant baritone voice`로 설정. 백엔드 테스트 23개와 TypeScript 검사 통과.
 - **Last Checkpoint:** 2026-09-22 Seed-VC/Vevo2도 AuK와 동일한 10초 청크(2초 겹침·테두리 1초 트림)로 긴 보컬을 변환하도록 확장 — 길이 의존 붕괴(10초 OK/2분 노이즈, 원곡=ref여도 붕괴)를 사용자 실험으로 확정 후 `applyVocalTimbreCore`에 통합(모든 조각에 동일 참조 클립 재사용, `onProgress`, `{ok, warning, chunkCount}` 반환). Tools는 `runAukTool`에 `chunk` 플래그 신설(위치/길이 무관 지시문 전용)하고 TTS는 `splitSpeechText`+`concatBuffers`로 긴 텍스트를 자동 분할 생성. 테스트 2건 추가(legacy 26초→3조각·같은 ref·atrim/concat·게인/게이트 유지, audio-tools chunk:true→3잡/3업로드·동일 instruction·warning, chunk 해제→단일 경로) — 23개 전부 통과, tsc 통과. DDSP-SVC는 프레임 기반이라 청크 불필요 확인.
 - **Last Checkpoint:** 2026-09-21 AuK Base 저 guidance 추가 실험. 동일 첫 10초·seed 424242·steps 32·sway -1·Prompt Enhance 끔 조건에서 guidance 0/0.2/0.5 결과를 생성하고 WAV/FLAC 및 개별 JSON 기록을 `test/auk-base-low-guidance/`에 저장. 세 WAV 모두 10초이며 해시가 달라 실제 파라미터별 결과임을 확인.
@@ -27,6 +28,7 @@
 
 | Wave | 작업 내용 | 상태 |
 |------|-----------|------|
+| 46 | 코드 리뷰 후 안정성/성능 수정 — (E1) ffmpeg 전 경로 hard deadline(`runBufferedProcess`/`runFfmpegCli`), (E2) AuK fetch 전부 per-request 타임아웃(폴·설정·업로드·결과), (P1) 반복 잡 동일 설정 PUT 건너뛰기(instance-scoped config cache, 청크당 모델 재로드 방지). 테스트 23개·tsc 통과 | Done |
 | 44 | Seed-VC/Vevo2 10초 청크 변환 확장(길이 붕괴 회피, 같은 참조 재사용, onProgress/warning/chunkCount), Tools 오디오 도구 `chunk` 플래그+긴 TTS 자동 분할, 테스트 2건 추가 → 23개 통과 | Done |
 | 36 | `todo.md` 밀린 항목 정리 — "커버 종단 검증" 재현 안 됨 확인(이미 해결됨), ABC 파일 가져오기 종단 검증, EQ/전체 설정 프리셋 내보내기·가져오기 신규 구현+검증. 남은 큰 항목은 새 엔진 설치/설계 결정 필요해 보류 | Done |
 | 35 | DDSP-SVC 품질 개선 실험(Phase 2) 4종 완료 — pitch extractor/vocoder는 추론만 재실행(저비용), feature encoder는 HubertSoft 실제 재학습(100k스텝, ~3시간)까지 완료해 비교, 데이터셋 확대는 실행 불가로 결론. 종합 결론: "음색이 좁다"는 데이터셋 크기 한계일 가능성이 높음 | Done |
