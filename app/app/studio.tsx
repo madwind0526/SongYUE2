@@ -2077,23 +2077,27 @@ function nonverbalInstruction(values: Record<string, string>, audioSeconds: numb
     : `Add a ${values.sound} at the beginning of the speech.`;
 }
 // Estimates how long it takes to say the given text aloud at a normal adult pace: Korean
-// ≈235 syllables/min (midpoint of the typical 210-260 SPM range) and English ≈2.5 words/sec
-// (the AuK node guidance, which is safer than the 180-200 WPM human range because the engine
-// drops words when the duration budget runs short). Minimum 1 second, capped at 1 hour.
+// Spoken-text length estimate used as the AuK "seconds" budget. The engine synthesizes exactly
+// the requested number of seconds and fills any leftover time with invented speech (a 10s estimate
+// for English text that takes ~9s to say produces a ~1s fabricated tail). The base rates stay
+// human-speech midpoint (Korean ≈235 SPM, English ≈150 WPM) but are scaled by 0.9 so the budget
+// lands on the shorter side and ends right after the words instead of continue generating.
+// Minimum 1 second, capped at 1 hour.
 function estimateSpeechSeconds(text: string): number {
   const trimmed = (text || '').trim();
   const koreanSyllables = (trimmed.match(/[\uAC00-\uD7A3]/g) || []).length;
   const englishWords = (trimmed.match(/[A-Za-z0-9]+(?:['′-][A-Za-z0-9]+)*/g) || []).length;
   const minutes = koreanSyllables / 235 + englishWords / 150;
-  return Math.max(1, Math.min(3600, Math.round(minutes * 60)));
+  return Math.max(1, Math.min(3600, Math.round(minutes * 60 * 0.9)));
 }
 
 // TTS는 10초를 넘는 클립에서 환각이 생기므로, 긴 텍스트를 사람 말하기 속도 기준으로 10초 이하가
-// 되는 조각으로 나눠 각각 생성한 뒤 이어붙인다. 줄 단위로 나누고, 한 줄이 여전히 넘치면 문장
+// 되는 조각으로 나눠 각각 생성한 뒤 이어붙인다. maxSpeechSeconds는 청크(초) 설정을 따라가되,
+// 10초 이상이면 환각 한계로 10초에 고정한다. 줄 단위로 나누고, 한 줄이 여전히 넘치면 문장
 // 단위로 더 쪼갠다. (도구의 지시문 자체는 각 조각에 같은 방식으로 재조립되므로 말할 내용만
 // 조각별 텍스트로 교체하면 된다.)
-function splitSpeechText(text: string): string[] {
-  const MAX_SPEECH_SECONDS = 10;
+function splitSpeechText(text: string, maxSpeechSeconds: number): string[] {
+  const MAX_SPEECH_SECONDS = Math.max(1, Math.min(10, maxSpeechSeconds));
   const lines = (text || '').replace(/\r\n/g, '\n').split('\n').map(line => line.trim()).filter(Boolean);
   const segments: string[] = [];
   const clauseSplit = (line: string) => line.split(/(?<=[.!?。])\s+/).map(s => s.trim()).filter(Boolean);
@@ -2117,12 +2121,33 @@ function splitSpeechText(text: string): string[] {
   return segments.length ? segments : [];
 }
 // The AuK engine echoes the instruction's dominant language into the speech it generates, so the
-// instruction scaffolding must be written in the language of the spoken text (English scaffolding +
-// Korean text falls back to Chinese). Pick ko/en scaffolding from whichever script wins.
-function usesKorean(text: string): boolean {
-  const hangul = (text || '').match(/[\uAC00-\uD7A3]/g) || [];
-  const latin = (text || '').match(/[A-Za-z]/g) || [];
-  return hangul.length >= latin.length && hangul.length > 0;
+// TTS scaffolding must be written in the language of the spoken text (English scaffolding + Korean
+// text falls back to Chinese). The content script decides the phrasing: English-only, Korean-only,
+// or mixed English+Korean. For mixed content the scaffolding is written in the dominant script and
+// explicitly names the minority script so it keeps its own pronunciation. The engine also fills the
+// whole requested seconds budget even after the words are spoken, so every template pins the exact
+// content in quotes and tells the model to stop after it. Korean content is especially prone to
+// falling back to Chinese, so the Korean templates forbid other languages outright.
+function ttsScript(text: string): 'en' | 'ko' | 'mixed' {
+  const source = text || '';
+  const hangul = (source.match(/[\uAC00-\uD7A3]/g) || []).length;
+  const latin = (source.match(/[A-Za-z]/g) || []).length;
+  if (hangul > 0 && latin === 0) return 'ko';
+  if (latin > 0 && hangul === 0) return 'en';
+  if (hangul === 0 && latin === 0) return 'en';
+  return 'mixed';
+}
+function descriptionTtsInstruction(text: string, description: string, language: 'auto' | 'ko' | 'en' = 'auto'): string {
+  const script = language === 'auto' ? ttsScript(text) : language;
+  if (script === 'ko') return `다음 음성 설명의 목소리로, 아래 말할 내용만 한국어로 읽어 주세요. 중국어나 다른 언어를 절대 섞지 마세요. 말할 내용: "${text}". 내용을 다 말한 뒤에는 멈추고 더 말하지 마세요. 음성 설명: "${description}".`;
+  if (script === 'mixed') return `다음 내용은 한국어와 영어가 섞여 있습니다. 한국어 부분은 한국어 발음으로, 영어 부분은 영어 발음으로 읽어 주세요. 아래 말할 내용만 읽고, 내용을 다 말한 뒤에는 멈추세요. 말할 내용: "${text}". 음성 설명: "${description}".`;
+  return `Speak only in English and never mix in another language. Read the content below exactly once with the voice described, then stop. Content to speak: "${text}". Voice description: "${description}".`;
+}
+function cloneTtsInstruction(text: string, language: 'auto' | 'ko' | 'en' = 'auto'): string {
+  const script = language === 'auto' ? ttsScript(text) : language;
+  if (script === 'ko') return `다음 말할 내용만 한국어로, 같은 목소리로 읽어 주세요. 중국어나 다른 언어를 절대 섞지 마세요. 말할 내용: "${text}". 내용을 다 말한 뒤에는 멈추세요.`;
+  if (script === 'mixed') return `다음 내용은 한국어와 영어가 섞여 있습니다. 같은 목소리로, 한국어 부분은 한국어 발음, 영어 부분은 영어 발음으로 읽어 주세요. 아래 말할 내용만 읽고 다 말한 뒤에는 멈추세요. 말할 내용: "${text}".`;
+  return `Say the following with the same voice, then stop: "${text}".`;
 }
 const AUK_TOOL_CATEGORIES = [
   { id: 'tts', label: 'TTS 생성' },
@@ -2137,10 +2162,10 @@ const AUK_TOOLS: AukTool[] = [
       { key: 'description', label: '음색 설명', type: 'text', placeholder: '예) 따뜻하고 부드러운 남성 재즈 보컬' },
       { key: 'text', label: '말할 내용', type: 'textarea', placeholder: '여러 줄로 입력해 주세요. 실제 발화할 텍스트입니다.' },
     ],
-    instruction: v => usesKorean(v.text) ? `아래 내용을 소리 내어 읽어 주세요. 실제 말할 내용: "${v.text}". 목소리는 "${v.description}"으로 설명됩니다.` : `Speak the text below aloud. The content to speak is: "${v.text}". The speaker's voice is described as "${v.description}".`, description: 'Text를 음색 설명에 맞는 목소리(sound)로 변경합니다.' },
+    instruction: v => descriptionTtsInstruction(v.text, v.description), description: 'Text를 음색 설명에 맞는 목소리(sound)로 변경합니다.' },
   { id: 'voice-cloning', label: 'TTS 생성 (Ref-T2S)', category: 'tts', audio: 'required', audioLabel: '참조 목소리', referenceOnly: true, showSeconds: true,
     fields: [{ key: 'text', label: '말할 내용', type: 'textarea', placeholder: '여러 줄로 입력해 주세요. 실제 발화할 텍스트입니다.' }],
-    instruction: v => usesKorean(v.text) ? `다음 내용을 같은 목소리로 읽어 주세요: "${v.text}".` : `Say the following with the same voice: "${v.text}".`, description: 'Text를 참조 목소리(sound)로 변경합니다.' },
+    instruction: v => cloneTtsInstruction(v.text), description: 'Text를 참조 목소리(sound)로 변경합니다.' },
   { id: 'edit-lyrics', label: '가사/대사 편집', category: 'edit', audio: 'required', audioLabel: '변경할 오디오', fields: [],
     instruction: () => '', description: '선택한 Function에 따라 가사/대사를 수정합니다.' },
   { id: 'raise-pitch', label: '피치 올리기', category: 'adjust', audio: 'required', audioLabel: '수정할 오디오',
@@ -2216,11 +2241,14 @@ function AudioToolsPage({ notify, onCreated }: { notify: (text: string, error?: 
   const [editFunctionId, setEditFunctionId] = useState<'replace' | 'insert-before' | 'insert-after' | 'remove'>('replace');
   const editFunction = EDIT_FUNCTIONS.find(item => item.id === editFunctionId) || EDIT_FUNCTIONS[0];
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
-  const [seconds, setSeconds] = useState(10);
+  const [seconds, setSeconds] = useState(0);
+  const [speechLanguage, setSpeechLanguage] = useState<'auto' | 'en' | 'ko'>('auto');
   const [checkpoint, setCheckpoint] = useState<AukCheckpoint>('flash');
-  const [aukModelVariant, setAukModelVariant] = useState<AukModelVariant>('w4a8');
-  const [aukTextEncoder, setAukTextEncoder] = useState<AukTextEncoder>('w4a8');
+  const [aukModelVariant, setAukModelVariant] = useState<AukModelVariant>('bf16');
+  const [aukTextEncoder, setAukTextEncoder] = useState<AukTextEncoder>('int8');
   const [aukVae, setAukVae] = useState<'auk'>('auk');
+  const [chunkSeconds, setChunkSeconds] = useState(10);
+  const [overlapSeconds, setOverlapSeconds] = useState(2);
   const [audioName, setAudioName] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -2257,7 +2285,7 @@ function AudioToolsPage({ notify, onCreated }: { notify: (text: string, error?: 
     if (nextCategoryId === 'quality' && first) setQualitySelection([first.id]);
     if (first) {
       setFieldValues(defaultsFor(first.fields));
-      setSeconds(first.audio === 'none' ? 10 : 0);
+      setSeconds(0);
     }
     setErrorText('');
   }
@@ -2307,7 +2335,7 @@ function AudioToolsPage({ notify, onCreated }: { notify: (text: string, error?: 
   function selectTool(nextTool: AukTool) {
     setToolId(nextTool.id);
     setFieldValues(defaultsFor(nextTool.fields));
-    setSeconds(nextTool.audio === 'none' ? 10 : 0);
+    setSeconds(0);
     setErrorText('');
   }
   function selectEditFunction(next: typeof editFunctionId) {
@@ -2365,16 +2393,18 @@ function AudioToolsPage({ notify, onCreated }: { notify: (text: string, error?: 
       if (audioBlobRef.current) audioDataUrl = await readFileAsDataUrl(audioBlobRef.current);
       for (const runTool of runTools) {
         const runValues = { ...defaultsFor(runTool.fields), ...fieldValues };
-        const instructionFor = (values: Record<string, string>) => (isEdit ? editInstruction(editFunctionId, values) : runTool.id === 'add-nonverbal' ? nonverbalInstruction(values, pickedAudioSeconds) : runTool.instruction(values));
+        const instructionFor = (values: Record<string, string>) => (isEdit ? editInstruction(editFunctionId, values) : runTool.id === 'add-nonverbal' ? nonverbalInstruction(values, pickedAudioSeconds) : (runTool.id === 'voice-description-tts' || runTool.id === 'voice-cloning') && speechLanguage !== 'auto' ? (runTool.id === 'voice-description-tts' ? descriptionTtsInstruction(values.text, values.description, speechLanguage) : cloneTtsInstruction(values.text, speechLanguage)) : runTool.instruction(values));
         // 긴 오디오로 내용을 처리하는 도구(조절/변형/품질개선 등)는 서버가 10초 창으로 나눠 순차
         // 처리하고 이어붙인다. 비언어음 추가(위치가 전체 길이 기준)와 참조 목소리(클론 원본)는 제외,
         // 가사/대사 편집은 텍스트 앵커 문제로 제외(단일 잡으로 처리).
-        const chunkContentAudio = !isEdit && runTool.audio === 'required' && runTool.referenceOnly !== true && runTool.id !== 'add-nonverbal' && pickedAudioSeconds > 10;
-        // TTS는 긴 텍스트를 10초 이하 발화 조각으로 나눠 각각 생성한 뒤 이어붙인다. 사용자가 출력
-        // 길이를 직접 지정한 경우(seconds > 0)에는 그 의도를 존중해 분할하지 않는다.
-        const splitTts = runTool.showSeconds && seconds === 0 && estimateSpeechSeconds(runValues.text || '') > 10;
+        const chunkContentAudio = !isEdit && runTool.audio === 'required' && runTool.referenceOnly !== true && runTool.id !== 'add-nonverbal' && pickedAudioSeconds > chunkSeconds;
+        // TTS는 긴 텍스트를 청크(초) 설정 이하(최대 10초) 발화 조각으로 나눠 각각 생성한 뒤
+        // 이어붙인다. 사용자가 출력 길이를 직접 지정한 경우(seconds > 0)에는 그 의도를 존중해
+        // 분할하지 않는다.
+        const ttsSegmentSeconds = Math.max(1, Math.min(10, chunkSeconds));
+        const splitTts = runTool.showSeconds && seconds === 0 && estimateSpeechSeconds(runValues.text || '') > ttsSegmentSeconds;
         if (splitTts) {
-          const segments = splitSpeechText(runValues.text || '');
+          const segments = splitSpeechText(runValues.text || '', ttsSegmentSeconds);
           const buffers: AudioBuffer[] = [];
           for (const segment of segments) {
             const segSeconds = estimateSpeechSeconds(segment);
@@ -2393,7 +2423,7 @@ function AudioToolsPage({ notify, onCreated }: { notify: (text: string, error?: 
           // from the text length. AudioAuK rejects seconds=0 when no reference audioId exists,
           // so a computed positive value is sent whenever the user left it at 0.
           const resolvedSeconds = runTool.showSeconds ? (seconds > 0 ? seconds : estimateSpeechSeconds(runValues.text || instruction)) : 0;
-          const result = await api<{ dataUrl: string; warning?: string | null }>('/audio-tools/auk', 'POST', { task: 'tts', instruction, audioDataUrl, checkpoint, modelVariant: aukModelVariant, textEncoder: aukTextEncoder, vae: aukVae, seconds: resolvedSeconds, chunk: chunkContentAudio });
+          const result = await api<{ dataUrl: string; warning?: string | null }>('/audio-tools/auk', 'POST', { task: 'tts', instruction, audioDataUrl, checkpoint, modelVariant: aukModelVariant, textEncoder: aukTextEncoder, vae: aukVae, seconds: resolvedSeconds, chunk: chunkContentAudio, chunkSeconds, overlapSeconds });
           if (result.warning) setWarningText(result.warning);
           audioDataUrl = result.dataUrl;
         }
@@ -2434,7 +2464,7 @@ function AudioToolsPage({ notify, onCreated }: { notify: (text: string, error?: 
 
   return <section className="library-page page-scroll">
     <div className="page-heading library-heading">
-      <div><span className="eyebrow">AudioAuK 기반</span><h1>Tools<span className="small-badge">실험적</span></h1><p>완성곡과 무관하게 텍스트→음성 생성, 가사/대사 편집, 피치·속도·음량 조절, 음성 변형, 품질 개선을 바로 실행합니다.</p></div>
+      <div><span className="eyebrow">AudioAuK 기반</span><h1>Audio Tools</h1><p>완성곡과 무관하게 텍스트→음성 생성, 가사/대사 편집, 피치·속도·음량 조절, 음성 변형, 품질 개선을 바로 실행합니다.</p></div>
     </div>
     <div className="audio-tools-tabs" role="tablist" aria-label="도구 카테고리">
       {AUK_TOOL_CATEGORIES.map(category => <button key={category.id} type="button" className={categoryId === category.id ? 'active' : ''} aria-pressed={categoryId === category.id} onClick={() => selectCategory(category.id)}>{category.label}</button>)}
@@ -2447,7 +2477,12 @@ function AudioToolsPage({ notify, onCreated }: { notify: (text: string, error?: 
           <button type="button" className={checkpoint === 'base' ? 'active' : ''} aria-pressed={checkpoint === 'base'} onClick={() => selectAukCheckpoint('base')} disabled={running}>Base</button>
         </div>
         <AukRuntimeSelectors checkpoint={checkpoint} modelVariant={aukModelVariant} textEncoder={aukTextEncoder} vae={aukVae} disabled={running} onModelVariant={setAukModelVariant} onTextEncoder={setAukTextEncoder} onVae={setAukVae}/>
-        <span className="field-hint">기본값은 실제 음색 실험에서 가장 안정적이었던 Flash W4A8 + Qwen W4A8입니다. Base는 32스텝으로 더 느리며, 현재 입력에서는 노래 품질이 더 좋지 않았습니다.</span>
+        <div className="auk-runtime-options">
+          <label>청크(초)<Input type="number" min={1} max={120} value={chunkSeconds} onChange={event => setChunkSeconds(Math.max(1, Math.min(120, Number(event.target.value) || 10)))} disabled={running}/></label>
+          <label>겹침(초)<Input type="number" min={0} value={overlapSeconds} onChange={event => setOverlapSeconds(Math.max(0, Math.min(Math.floor(chunkSeconds / 2), Number(event.target.value) || 0)))} disabled={running}/></label>
+        </div>
+        <span className="field-hint">긴 오디오는 입력한 청크(초) 단위로 나눠 순차 처리하고 겹침(초)만큼 겹친 뒤 이어붙입니다. 겹침이 클수록 경계가 자연스럽지만 처리량이 늘어나며, 겹침은 청크의 절반 이하로 자동 조정됩니다.</span>
+        <span className="field-hint">기본값은 Flash BF16 + Qwen INT8(권장)입니다. Base는 32스텝으로 더 느리며, 현재 입력에서는 노래 품질이 더 좋지 않았습니다.</span>
         {tool.audio !== 'none' && isEdit && <div>
           <div className="at-transcribe-options-head">Whisper Option 결정</div>
           <div className="at-transcribe-options"><label>전사 언어<select value={transcribeLanguage} onChange={event => setTranscribeLanguage(event.target.value as typeof transcribeLanguage)} aria-label="전사 언어"><option value="auto">자동 감지</option><option value="korean">한국어</option><option value="english">영어</option></select></label><label>Whisper 모델<select value={whisperModel} onChange={event => setWhisperModel(event.target.value)} aria-label="Whisper 모델"><option value="tiny">tiny</option><option value="base">base</option><option value="small">small</option><option value="medium">medium</option><option value="large-v3">large-v3</option><option value="large-v3-turbo">large-v3-turbo</option></select></label></div>
@@ -2492,7 +2527,8 @@ function AudioToolsPage({ notify, onCreated }: { notify: (text: string, error?: 
           <div className="at-function-fields">{editFunction.fields.map(field => renderField(field))}</div>
         </>}
         {tool.fields.map(field => renderField(field))}
-        {tool.showSeconds && <label className="at-field">출력 길이(초)<Input type="number" min={0} max={3600} value={seconds} onChange={event => setSeconds(Math.min(3600, Math.max(0, Number(event.target.value) || 0)))} disabled={running}/><span className="field-hint">0을 넣으면 일반적인 말하기 속도를 기준으로 텍스트 길이에서 시간을 계산하고, 숫자를 넣으면 그 길이(초)에 맞춰 만듭니다. 10초를 넘는 긴 텍스트는 발화 조각으로 나눠 생성한 뒤 자동으로 이어붙여 환각을 줄입니다.{(() => { const est = estimateSpeechSeconds(fieldValues.text || ''); return est > 10 ? ` 현재 텍스트는 약 ${est}초로 추정되며 자동 분할해 처리합니다.` : ''; })()}</span></label>}
+        {categoryId === 'tts' && <label className="at-field">발화 언어<select value={speechLanguage} onChange={event => setSpeechLanguage(event.target.value as 'auto' | 'en' | 'ko')} disabled={running}><option value="auto">자동 (내용 문자에 맞춤)</option><option value="ko">한국어</option><option value="en">English</option></select><span className="field-hint">자동이면 말할 내용의 문자(한글/영어/혼합)에 맞춰 지시문을 만들고, 수동으로 고르면 그 언어 발음이 나오도록 지시문을 강제합니다. AuK 다중언어 TTS가 가끔 언어를 섞으므로 한국어가 중국어처럼 들리면 다시 실행해 보세요.</span></label>}
+        {tool.showSeconds && <label className="at-field">출력 길이(초)<Input type="number" min={0} max={3600} value={seconds} onChange={event => setSeconds(Math.min(3600, Math.max(0, Number(event.target.value) || 0)))} disabled={running}/><span className="field-hint">0을 넣으면 일반적인 말하기 속도를 기준으로 텍스트 길이에서 시간을 계산하고, 숫자를 넣으면 그 길이(초)에 맞춰 만듭니다. 긴 텍스트는 청크(초) 설정(최대 10초) 이하의 발화 조각으로 나눠 생성한 뒤 자동으로 이어붙여 끝부분 환각을 줄입니다.{(() => { const est = estimateSpeechSeconds(fieldValues.text || ''); return est > Math.min(10, chunkSeconds) ? ` 현재 텍스트는 약 ${est}초로 추정되며 최대 ${Math.min(10, chunkSeconds)}초 조각으로 자동 분할해 처리합니다.` : ''; })()}</span></label>}
         {isEdit && <div className="at-field">
           <span className="at-field-label">감지된 텍스트 (전사)</span>
           {transcribing ? <div className="at-transcribing"><LoaderCircle className="spin"/>텍스트 인식 중...</div> : <Textarea rows={6} readOnly className="at-textarea at-readonly" value={transcript || '오디오를 선택하면 이곳에 인식된 가사/대사가 표시됩니다.'}/>}
@@ -2630,13 +2666,13 @@ const TIMBRE_ENGINES: { id: TimbreEngine; label: string }[] = [
 const DEFAULT_AUK_TIMBRE_DESCRIPTION = 'a deep adult male with a warm, resonant baritone voice';
 const AUK_MODEL_VARIANTS: Record<AukCheckpoint, { id: AukModelVariant; label: string }[]> = {
   flash: [
-    { id: 'w4a8', label: 'W4A8 · 0.88GB (권장)' },
-    { id: 'bf16', label: 'BF16 · 3.06GB' },
+    { id: 'w4a8', label: 'W4A8 · 0.88GB' },
+    { id: 'bf16', label: 'BF16 · 3.06GB (권장)' },
     { id: 'fp32', label: 'FP32 · 6.12GB' },
   ],
   base: [
     { id: 'w4a8', label: 'W4A8 · 0.88GB' },
-    { id: 'bf16', label: 'BF16 · 3.06GB' },
+    { id: 'bf16', label: 'BF16 · 3.06GB (권장)' },
   ],
 };
 
@@ -2652,7 +2688,7 @@ function AukRuntimeSelectors({ checkpoint, modelVariant, textEncoder, vae, disab
 }) {
   return <div className="auk-runtime-options">
     <label>모델 정밀도<select value={modelVariant} onChange={event => onModelVariant(event.target.value as AukModelVariant)} disabled={disabled}>{AUK_MODEL_VARIANTS[checkpoint].map(option => <option key={option.id} value={option.id}>{option.label}</option>)}</select></label>
-    <label>텍스트 인코더<select value={textEncoder} onChange={event => onTextEncoder(event.target.value as AukTextEncoder)} disabled={disabled}><option value="w4a8">Qwen W4A8 · 3.18GB (권장)</option><option value="int8">Qwen INT8 · 4.67GB</option></select></label>
+    <label>텍스트 인코더<select value={textEncoder} onChange={event => onTextEncoder(event.target.value as AukTextEncoder)} disabled={disabled}><option value="w4a8">Qwen W4A8 · 3.18GB</option><option value="int8">Qwen INT8 · 4.67GB (권장)</option></select></label>
     <label>VAE<select value={vae} onChange={event => onVae(event.target.value as 'auk')} disabled={disabled}><option value="auk">AuK VAE FP32 · 0.64GB</option></select></label>
   </div>;
 }
@@ -2671,9 +2707,11 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
   const [preparing, setPreparing] = useState(false);
   const [engine, setEngine] = useState<TimbreEngine>('seed_vc');
   const [checkpoint, setCheckpoint] = useState<AukCheckpoint>('flash');
-  const [aukModelVariant, setAukModelVariant] = useState<AukModelVariant>('w4a8');
-  const [aukTextEncoder, setAukTextEncoder] = useState<AukTextEncoder>('w4a8');
+  const [aukModelVariant, setAukModelVariant] = useState<AukModelVariant>('bf16');
+  const [aukTextEncoder, setAukTextEncoder] = useState<AukTextEncoder>('int8');
   const [aukVae, setAukVae] = useState<'auk'>('auk');
+  const [chunkSeconds, setChunkSeconds] = useState(10);
+  const [overlapSeconds, setOverlapSeconds] = useState(2);
   const [whisperModel, setWhisperModel] = useState('large-v3');
   const [aukLanguage, setAukLanguage] = useState<'auto' | 'korean' | 'english'>('auto');
   const [textDescription, setTextDescription] = useState(DEFAULT_AUK_TIMBRE_DESCRIPTION);
@@ -2852,7 +2890,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
     try {
       await withEstimatedProgress(async () => {
         const dataUrl = await readFileAsDataUrl(referenceBlobRef.current as Blob);
-        const result = await api<{ ok: boolean; warning: string | null }>(`/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl, engine, seedF0Condition, seedAutoF0Adjust, seedInferenceSteps, vevoRoute });
+        const result = await api<{ ok: boolean; warning: string | null }>(`/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl, engine, seedF0Condition, seedAutoF0Adjust, seedInferenceSteps, vevoRoute, chunkSeconds, overlapSeconds });
         setWarningText(result.warning || '');
         const ctx = t.ensureAudioContext();
         const [vocalsResponse, instrumentalResponse] = await Promise.all([
@@ -2883,7 +2921,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
     setWarningText('');
     try {
       await withEstimatedProgress(async () => {
-        const result = await api<{ ok: boolean; warning: string | null; transcript: string | null; chunkCount: number }>(`/timbre-transform/${previewId}/auk/apply`, 'POST', { textDescription: textDescription.trim(), checkpoint, modelVariant: aukModelVariant, textEncoder: aukTextEncoder, vae: aukVae, lyrics: sourceLyrics || undefined, whisper: whisperModel, language: aukLanguage });
+        const result = await api<{ ok: boolean; warning: string | null; transcript: string | null; chunkCount: number }>(`/timbre-transform/${previewId}/auk/apply`, 'POST', { textDescription: textDescription.trim(), checkpoint, modelVariant: aukModelVariant, textEncoder: aukTextEncoder, vae: aukVae, lyrics: sourceLyrics || undefined, whisper: whisperModel, language: aukLanguage, chunkSeconds, overlapSeconds });
         setWarningText(result.warning || '');
         setTranscript(result.transcript);
         const ctx = t.ensureAudioContext();
@@ -2974,6 +3012,12 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
             {TIMBRE_ENGINES.map(item => <button key={item.id} type="button" className={`timbre-model-btn${engine === item.id ? ' active' : ''}`} onClick={() => setEngine(item.id)} disabled={busy}>{item.label}</button>)}
           </div>
 
+          {engine !== 'ddsp' && <div className="timbre-engine-options">
+            <div className="timbre-auk-option-head" style={{ marginTop: 16 }}>긴 보컬 자동 분할 기준</div>
+            <div className="auk-runtime-options" style={{ gridTemplateColumns: '1fr 1fr' }}><label>청크(초)<Input type="number" min={1} max={120} value={chunkSeconds} onChange={event => setChunkSeconds(Math.max(1, Math.min(120, Number(event.target.value) || 10)))} disabled={busy}/></label><label>겹침(초)<Input type="number" min={0} value={overlapSeconds} onChange={event => setOverlapSeconds(Math.max(0, Math.min(Math.floor(chunkSeconds / 2), Number(event.target.value) || 0)))} disabled={busy}/></label></div>
+            <p className="field-hint">긴 보컬은 청크(초) 단위로 나눠 순차 처리하고 겹침(초)만큼 겹친 뒤 연결합니다. 겹침은 청크의 절반 이하로 자동 조정되며, 겹친 양쪽을 겹침의 절반만큼 잘라 이어붙입니다.</p>
+          </div>}
+
           {engine === 'seed_vc' && <div className="timbre-engine-options">
             <div className="timbre-auk-option-head" style={{ marginTop: 18 }}>Seed-VC 실행 옵션</div>
             <label className="timbre-option-check"><input type="checkbox" checked={seedF0Condition} onChange={event => setSeedF0Condition(event.target.checked)} disabled={busy}/>원곡 음정선 사용 (F0 condition)</label>
@@ -2995,12 +3039,12 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
               <Button variant={checkpoint === 'base' ? undefined : 'outline'} size="sm" onClick={() => selectTimbreAukCheckpoint('base')} disabled={busy}>Base</Button>
             </div>
             <AukRuntimeSelectors checkpoint={checkpoint} modelVariant={aukModelVariant} textEncoder={aukTextEncoder} vae={aukVae} disabled={busy} onModelVariant={setAukModelVariant} onTextEncoder={setAukTextEncoder} onVae={setAukVae}/>
-            <p className="field-hint">기본값: Flash W4A8 · Qwen W4A8 · AuK VAE FP32. Base에는 설치된 FP32 체크포인트가 없어 W4A8/BF16만 표시됩니다.</p>
+            <p className="field-hint">기본값: Flash BF16 · Qwen INT8 · AuK VAE FP32. Base에는 설치된 FP32 체크포인트가 없어 W4A8/BF16만 표시됩니다.</p>
             <div className="timbre-auk-option-head" style={{ marginTop: 16 }}>Whisper Option 결정</div>
             <div className="timbre-transcribe-options">전사 언어<select value={aukLanguage} onChange={event => setAukLanguage(event.target.value as 'auto' | 'korean' | 'english')} aria-label="전사 언어" disabled={busy}><option value="auto">자동 감지</option><option value="korean">한국어</option><option value="english">영어</option></select>Whisper 모델<select value={whisperModel} onChange={event => setWhisperModel(event.target.value)} aria-label="Whisper 모델" disabled={busy}><option value="tiny">tiny</option><option value="base">base</option><option value="small">small</option><option value="medium">medium</option><option value="large-v3">large-v3</option><option value="large-v3-turbo">large-v3-turbo</option></select></div>
             <p className="field-hint">가사가 저장된 곡은 전사 없이 그대로 쓰므로 이 전사 선택은 가사가 없는 외부 오디오에서만 적용됩니다.</p>
             <Textarea value={textDescription} onChange={event => setTextDescription(event.target.value)} placeholder="목표 음색 텍스트 설명 (필수) (예: 따뜻하고 부드러운 남성 재즈 보컬)" disabled={busy} rows={3}/>
-            <p className="field-hint">AuK는 참조 audio를 사용하지 않습니다. 긴 보컬은 10초 단위로 나누고 2초씩 겹쳐 처리한 뒤, 겹친 양쪽을 1초씩 잘라 자동으로 연결합니다. 목소리의 색(톤·무게·성별 등)을 구체적으로 설명해 주세요.</p>
+            <p className="field-hint">AuK는 참조 audio를 사용하지 않습니다. 긴 보컬은 {chunkSeconds}초 단위로 나누고 {overlapSeconds}초씩 겹쳐 처리한 뒤, 겹친 양쪽을 {Math.max(0, overlapSeconds / 2)}초씩 잘라 자동으로 연결합니다. 목소리의 색(톤·무게·성별 등)을 구체적으로 설명해 주세요.</p>
           </div>}
 
           {engine === 'ddsp' && <div className="timbre-engine-options">
@@ -4327,7 +4371,7 @@ export default function Studio() {
     return <section className="library-page page-scroll"><div className="page-heading library-heading"><div><span className="eyebrow">심볼릭 작곡 보관함</span><h1>ABC 악보</h1><p>열기로 검사·수정하고, 더블 클릭하면 지금 곡에 바로 불러옵니다.</p></div><div className="playlist-detail-actions"><Button variant="ghost" size="icon" aria-label={settings.viewMode === 'card' ? '목록 보기' : '카드 보기'} onClick={() => void setViewMode(settings.viewMode === 'card' ? 'list' : 'card')}>{settings.viewMode === 'card' ? <ListMusic/> : <LayoutGrid/>}</Button><Button onClick={() => navigate('create')}><Plus/>만들기로 이동</Button></div></div>{abcNotes.length ? <div className={`project-list ${settings.viewMode === 'card' ? 'card-view' : ''}`}>{abcNotes.map(note => <article className="song-card status-abc" key={note.id}><button className="song-symbol status-abc" aria-label={`${note.title} 열기`} onDoubleClick={() => loadAbcNote(note)} onClick={() => openAbcNote(note)}>{note.coverPath ? <img className="song-cover" src={abcNoteCoverUrl(note)} alt=""/> : <FileText size={24}/>}</button><button className="song-info" onDoubleClick={() => loadAbcNote(note)} onClick={() => openAbcNote(note)}><strong>{note.title}</strong><p>{new Date(note.createdAt).toLocaleDateString('ko-KR')}</p></button><Popover><PopoverTrigger render={<Button variant="ghost" size="icon" aria-label={`${note.title} 더보기`}/>}><MoreVertical/></PopoverTrigger><PopoverContent className="song-menu" align="end"><button className="song-menu-item" onClick={() => openAbcNote(note)}><Pencil size={15}/>열기</button><button className="song-menu-item" onClick={() => loadAbcNote(note)}><ArrowRight size={15}/>불러오기</button><button className="song-menu-item" onClick={() => openAbcNoteCoverPicker(note)}><ImageIcon size={15}/>앨범 표지 {note.coverPath ? '변경' : '등록'}</button>{note.coverPath && <button className="song-menu-item" onClick={() => void deleteAbcNoteCover(note)}><X size={15}/>앨범 표지 삭제</button>}<button className="song-menu-item danger" onClick={() => void deleteAbcNote(note)}><Trash2 size={15}/>삭제</button></PopoverContent></Popover></article>)}</div> : <div className="empty-library"><div className="empty-icon"><FileText size={42} strokeWidth={1.25}/></div><h2>저장된 악보가 없어요</h2><p>만들기 화면에서 심볼릭 작곡을 만들고 "라이브러리에 저장"을 눌러 보세요.</p></div>}</section>;
   }
   return <div className="studio-shell">
-    <aside className={`sidebar ${mobileNav ? 'mobile-open' : ''}`}><button className="brand" onClick={() => navigate('create')} aria-label="SongYUE2 만들기로 이동"><span className="brand-symbol"><AudioLines size={25}/></span><span>Song<b>YUE2</b><small>by madwind</small></span></button><div className="sidebar-main"><nav aria-label="주 메뉴">{([{ id: 'create', icon: Sparkles }, { id: 'home', icon: Home }, { id: 'projects', icon: Folder }, { id: 'library', icon: ListMusic }, { id: 'playlists', icon: ListPlus }, { id: 'abc', icon: FileText }, { id: 'favorites', icon: Heart }] as const).map(({ id, icon: Icon }) => <button className={`nav-item ${page === id ? 'active' : ''}`} onClick={() => navigate(id)} key={id} aria-current={page === id ? 'page' : undefined}><Icon size={19}/><span>{titles[id]}</span>{id === 'create' && <Plus size={15} className="nav-plus"/>}</button>)}</nav><div className="sidebar-divider"/><div className="sidebar-subhead"><span>최근 프로젝트</span><button aria-label="프로젝트 보기" onClick={() => navigate('projects')}><Plus size={14}/></button></div>{(() => { const recentDrafts = projects.filter(item => item.status === 'draft').slice(0, 4); return recentDrafts.length ? recentDrafts.map(item => <button className="recent-item" key={item.id} onClick={() => loadProject(item)}><span className="recent-dot"/>{item.title}</button>) : <p className="sidebar-empty">새로운 아이디어가<br/>음악이 되는 곳.</p>; })()}</div><div className="sidebar-bottom"><nav aria-label="도구 메뉴"><button className="nav-item" onClick={() => { setCompareOpen(true); setMobileNav(false); }}><GitCompare size={18}/>음원 비교</button><button className={`nav-item ${page === 'restore' ? 'active' : ''}`} onClick={() => navigate('restore')}><Upload size={18}/>음원 복원 (실험적)</button><button className="nav-item" onClick={() => { setTimbreTransformOpen(true); setMobileNav(false); }}><WandSparkles size={18}/>음색 변조 (평가중)</button><button className={`nav-item ${page === 'tools' ? 'active' : ''}`} onClick={() => navigate('tools')}><SlidersHorizontal size={18}/>Tools (실험적)</button><button className={`nav-item ${page === 'models' ? 'active' : ''}`} onClick={() => navigate('models')}><Cpu size={18}/>모델 관리</button><button className={`nav-item ${page === 'settings' ? 'active' : ''}`} onClick={() => navigate('settings')}><Settings2 size={18}/>설정</button><button className="nav-item" onClick={() => { setHelp(true); setMobileNav(false); }}><CircleHelp size={18}/>도움말</button></nav><div className="profile"><span className="avatar"><Headphones size={18}/></span><div>나의 스튜디오<small>로컬 워크스페이스</small></div><span className="version">0.1</span></div></div></aside>
+    <aside className={`sidebar ${mobileNav ? 'mobile-open' : ''}`}><button className="brand" onClick={() => navigate('create')} aria-label="SongYUE2 만들기로 이동"><span className="brand-symbol"><AudioLines size={25}/></span><span>Song<b>YUE2</b><small>by madwind</small></span></button><div className="sidebar-main"><nav aria-label="주 메뉴">{([{ id: 'create', icon: Sparkles }, { id: 'home', icon: Home }, { id: 'projects', icon: Folder }, { id: 'library', icon: ListMusic }, { id: 'playlists', icon: ListPlus }, { id: 'abc', icon: FileText }, { id: 'favorites', icon: Heart }] as const).map(({ id, icon: Icon }) => <button className={`nav-item ${page === id ? 'active' : ''}`} onClick={() => navigate(id)} key={id} aria-current={page === id ? 'page' : undefined}><Icon size={19}/><span>{titles[id]}</span>{id === 'create' && <Plus size={15} className="nav-plus"/>}</button>)}</nav><div className="sidebar-divider"/><div className="sidebar-subhead"><span>최근 프로젝트</span><button aria-label="프로젝트 보기" onClick={() => navigate('projects')}><Plus size={14}/></button></div>{(() => { const recentDrafts = projects.filter(item => item.status === 'draft').slice(0, 4); return recentDrafts.length ? recentDrafts.map(item => <button className="recent-item" key={item.id} onClick={() => loadProject(item)}><span className="recent-dot"/>{item.title}</button>) : <p className="sidebar-empty">새로운 아이디어가<br/>음악이 되는 곳.</p>; })()}</div><div className="sidebar-bottom"><nav aria-label="도구 메뉴"><button className="nav-item" onClick={() => { setCompareOpen(true); setMobileNav(false); }}><GitCompare size={18}/>음원 비교</button><button className={`nav-item ${page === 'restore' ? 'active' : ''}`} onClick={() => navigate('restore')}><Upload size={18}/>음원 복원 (실험적)</button><button className="nav-item" onClick={() => { setTimbreTransformOpen(true); setMobileNav(false); }}><WandSparkles size={18}/>음색 변조 (평가중)</button><button className={`nav-item ${page === 'tools' ? 'active' : ''}`} onClick={() => navigate('tools')}><SlidersHorizontal size={18}/>Audio Tools</button><button className={`nav-item ${page === 'models' ? 'active' : ''}`} onClick={() => navigate('models')}><Cpu size={18}/>모델 관리</button><button className={`nav-item ${page === 'settings' ? 'active' : ''}`} onClick={() => navigate('settings')}><Settings2 size={18}/>설정</button><button className="nav-item" onClick={() => { setHelp(true); setMobileNav(false); }}><CircleHelp size={18}/>도움말</button></nav><div className="profile"><span className="avatar"><Headphones size={18}/></span><div>나의 스튜디오<small>로컬 워크스페이스</small></div><span className="version">0.1</span></div></div></aside>
     {mobileNav && <button className="nav-scrim" aria-label="메뉴 닫기" onClick={() => setMobileNav(false)}/>}
     <main className="main-shell"><header className="topbar"><div className="topbar-title"><Button variant="ghost" size="icon" className="mobile-menu" aria-label="메뉴 열기" onClick={() => setMobileNav(true)}><Menu/></Button><span className="breadcrumb">작업 공간</span><ChevronRight size={14}/><strong>{titles[page]}</strong></div><Popover open={modelOpen} onOpenChange={setModelOpen}><PopoverTrigger render={<Button variant="outline" className="model-trigger" aria-label="음악 모델 선택"/>}><AudioLines size={17}/><span>{model.name}</span><span className="model-recommended">{model.id === 'yue2-q4' ? '추천' : model.engine}</span><ChevronDown size={15}/></PopoverTrigger><PopoverContent className="model-menu" align="start"><div className="menu-heading">음악 생성 모델<span>새 작업에 적용할 모델을 선택하세요</span></div>{models.map(item => <button key={item.id} className={`model-option ${draft.modelId === item.id ? 'selected' : ''}`} disabled={item.selectable === false} onClick={() => { if (item.selectable === false) return; update({ modelId: item.id }); setModelOpen(false); }}><Cpu size={18}/><span><strong>{item.name}<em>{item.badge}</em></strong><small>{item.detail} · {item.size}</small></span>{draft.modelId === item.id && <Check size={17}/>}</button>)}<div className="model-menu-footer">모델 파일과 실행 엔진의 준비 상태는 별도로 확인합니다.<button onClick={() => { navigate('models'); setModelOpen(false); }}>모델 관리 <ArrowRight size={13}/></button></div></PopoverContent></Popover><div className="device-status"><span className={`status-dot ${online ? '' : 'offline'}`}/><span>{online ? '로컬 연결됨' : '로컬 연결 대기'}</span><span className="device-divider"/><Cpu size={14}/><span>RTX 5070 <span className="muted">· 12 GB</span></span></div></header>
     {page === 'create' ? <div className="creation-layout"><section className="composer" aria-label="노래 편집기"><div className="composer-scroll"><div className="composer-heading"><div><h1>어떤 노래를 만들까요?</h1></div><Music2 size={24}/></div><div className="mode-switch" aria-label="제작 모드"><button className={draft.mode === 'simple' ? 'active' : ''} aria-pressed={draft.mode === 'simple'} onClick={() => update({ mode: 'simple' })}>간편 모드</button><button className={draft.mode === 'custom' ? 'active' : ''} aria-pressed={draft.mode === 'custom'} onClick={() => update({ mode: 'custom' })}>직접 만들기<SlidersHorizontal size={14}/></button></div><div className="mode-switch vocal-mode-switch" aria-label="보컬 여부"><button className={!draft.instrumental ? 'active' : ''} aria-pressed={!draft.instrumental} onClick={() => update({ instrumental: false })}><Mic size={14}/>보컬+악기</button><button className={draft.instrumental ? 'active' : ''} aria-pressed={draft.instrumental} onClick={() => update({ instrumental: true })}><Guitar size={14}/>악기만</button></div>

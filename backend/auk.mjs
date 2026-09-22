@@ -106,8 +106,8 @@ function freshSeed() { return randomInt(0, 2147483647); }
 async function selectAukConfiguration(fetchImpl, endpoint, { checkpoint, modelVariant, textEncoder, vae }, configCache = null) {
   const family = AUK_MODELS[checkpoint] ? checkpoint : 'flash';
   const variants = AUK_MODELS[family];
-  const selected = variants[modelVariant] || variants.w4a8;
-  const encoder = AUK_ENCODERS[textEncoder] || AUK_ENCODERS.w4a8;
+  const selected = variants[modelVariant] || variants.bf16 || variants.w4a8;
+  const encoder = AUK_ENCODERS[textEncoder] || AUK_ENCODERS.int8 || AUK_ENCODERS.w4a8;
   const vaeName = AUK_VAES[vae] || AUK_VAES.auk;
   // A chunked job submits many jobs back-to-back with the same {model, encoder, vae, precision},
   // and AudioAuK re-loads those weights on every /api/settings PUT -- skip the redundant PUT when

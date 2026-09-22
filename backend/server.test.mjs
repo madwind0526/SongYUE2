@@ -1448,7 +1448,7 @@ test('음색 변조 - AuK 탭: 레퍼런스만 있으면 소스를 전사해 그
   assert.equal(refOnly.data.transcript, '가짜로 인식된 가사입니다');
   assert.ok(auk.calls.some(c => c.pathname === '/api/transcribe' && c.method === 'POST'), 'expected a transcription step when a reference clip is given');
   const settingsCallRef = auk.calls.filter(c => c.pathname === '/api/settings' && c.method === 'PUT').at(-1);
-  assert.equal(JSON.parse(settingsCallRef.body).engine.model, 'auk_flash_w4a8.safetensors', 'expected the "flash" checkpoint choice to reach AudioAuK');
+  assert.equal(JSON.parse(settingsCallRef.body).engine.model, 'auk_flash_bf16.safetensors', 'expected the "flash" checkpoint choice to reach AudioAuK');
   const ttsJobCallRef = auk.calls.filter(c => c.pathname === '/api/jobs' && c.method === 'POST').at(-1);
   const ttsBodyRef = JSON.parse(ttsJobCallRef.body);
   assert.match(ttsBodyRef.instruction, /^다음 내용을 같은 목소리로 읽어 주세요: "가짜로 인식된 가사입니다"\.$/);
@@ -1637,7 +1637,7 @@ test('Tools 메뉴 - AuK 작업: 완성곡과 무관하게 독립 오디오(선�
   assert.ok(pitchBody.audioId, 'expected the uploaded audioId to be wired into the job');
   assert.match(pitchBody.instruction, /Raise the pitch by 2 semitones/);
   const settingsCall = auk.calls.filter(c => c.pathname === '/api/settings' && c.method === 'PUT').at(-1);
-  assert.equal(JSON.parse(settingsCall.body).engine.model, 'auk_base_w4a8.safetensors');
+  assert.equal(JSON.parse(settingsCall.body).engine.model, 'auk_base_bf16.safetensors');
 
   // 긴 오디오+지시문(chunk:true)은 10초 창으로 나눠 각각 AuK 잡을 돌리고 이어붙인다 -- 결과는
   // 여전히 dataUrl, 환각 회피용 warning/chunkCount 포함. 참조 목소리나 시점 앵커가 필요한 도구는
@@ -1701,7 +1701,7 @@ test('Tools 메뉴 - 전사: 오디오를 업로드해 Whisper STT로 전사하�
   assert.ok(auk.calls.some(c => c.pathname === '/api/audio' && c.method === 'POST'), 'expected the audio to be uploaded to AudioAuK');
   assert.ok(auk.calls.some(c => c.pathname === '/api/transcribe' && c.method === 'POST'), 'expected a transcription job on AudioAuK');
   const settingsCall = auk.calls.filter(c => c.pathname === '/api/settings' && c.method === 'PUT').at(-1);
-  assert.equal(JSON.parse(settingsCall.body).engine.model, 'auk_base_w4a8.safetensors', 'expected the checkpoint choice to reach AudioAuK');
+  assert.equal(JSON.parse(settingsCall.body).engine.model, 'auk_base_bf16.safetensors', 'expected the checkpoint choice to reach AudioAuK');
 });
 
 test('음색 변조 - DDSP-SVC 탭: 목표 스텝에 도달하면 실제로 학습 프로세스를 죽이고(방치 사고 재발 방지), 그 체크포인트로 추론+후처리까지 끝난다', async t => {

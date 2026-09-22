@@ -80,7 +80,6 @@ const DEFAULT_AUDIO_AUK_ENDPOINT = 'http://127.0.0.1:4312';
 const DEFAULT_AUDIO_AUK_PATH = 'C:\\Claude\\AudioAuK';
 const AUK_CHUNK_SECONDS = 10;
 const AUK_OVERLAP_SECONDS = 2;
-const AUK_EDGE_TRIM_SECONDS = AUK_OVERLAP_SECONDS / 2;
 const DEFAULT_DDSP_SVC_PATH = path.join('test', 'DDSP-SVC');
 const COMFYUI_GENERATE_DEADLINE_MS = GENERATE_TIMEOUT_MS;
 const COMFYUI_MAX_DURATION_SECONDS = 240;
@@ -101,11 +100,19 @@ const DEFAULT_VISUALIZER_AMPLITUDE = 2;
 const VOCAL_HINTS = { male: ', male vocal', female: ', female vocal', duet: ', duet: male and female vocals' };
 const vocalHint = (gender) => VOCAL_HINTS[gender] || '';
 
-function buildAukChunkPlan(durationSeconds) {
+// Chunk/overlap come from the API as {chunkSeconds, overlapSeconds} (UI defaults 10s/2s). Overlap
+// is clamped to at most half the chunk so the plan always strides forward.
+function resolveChunkParams(chunkSeconds, overlapSeconds) {
+  const chunk = Number.isFinite(chunkSeconds) && chunkSeconds >= 1 ? Math.min(120, Math.round(chunkSeconds)) : AUK_CHUNK_SECONDS;
+  const maxOverlap = Math.floor(chunk / 2);
+  const overlap = Number.isFinite(overlapSeconds) && overlapSeconds >= 0 ? Math.min(maxOverlap, Math.round(overlapSeconds)) : Math.min(maxOverlap, AUK_OVERLAP_SECONDS);
+  return { chunkSeconds: chunk, overlapSeconds: overlap, edgeTrimSeconds: overlap / 2 };
+}
+function buildAukChunkPlan(durationSeconds, chunkSeconds = AUK_CHUNK_SECONDS, overlapSeconds = AUK_OVERLAP_SECONDS) {
   const chunks = [];
-  const stride = AUK_CHUNK_SECONDS - AUK_OVERLAP_SECONDS;
+  const stride = Math.max(1, chunkSeconds - overlapSeconds);
   for (let start = 0; start < durationSeconds - 0.001;) {
-    const duration = Math.min(AUK_CHUNK_SECONDS, durationSeconds - start);
+    const duration = Math.min(chunkSeconds, durationSeconds - start);
     chunks.push({ start, duration });
     if (start + duration >= durationSeconds - 0.001) break;
     start += stride;
@@ -865,10 +872,11 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       // 잘라 이어붙인다 -- AuK text-only 분기와 완전히 같은 패턴을 SVC CLI 경로에 적용한 것.
       const durationMs = await measureDurationMs(originalVocalsWav);
       const durationSeconds = durationMs ? durationMs / 1000 : 0;
-      const useChunking = durationSeconds > AUK_CHUNK_SECONDS;
-      const chunkPlan = useChunking ? buildAukChunkPlan(durationSeconds) : [];
+      const chunkParams = resolveChunkParams(options.chunkSeconds, options.overlapSeconds);
+      const useChunking = durationSeconds > chunkParams.chunkSeconds;
+      const chunkPlan = useChunking ? buildAukChunkPlan(durationSeconds, chunkParams.chunkSeconds, chunkParams.overlapSeconds) : [];
       const warning = useChunking
-        ? `긴 보컬을 ${AUK_CHUNK_SECONDS}초 단위(겹침 ${AUK_OVERLAP_SECONDS}초)로 ${chunkPlan.length}개로 나눠 같은 참조 목소리로 변환한 뒤 연결했습니다. 조각 경계 부근에서 음색 전환이 어색할 수 있습니다.`
+        ? `긴 보컬을 ${chunkParams.chunkSeconds}초 단위(겹침 ${chunkParams.overlapSeconds}초)로 ${chunkPlan.length}개로 나눠 같은 참조 목소리로 변환한 뒤 연결했습니다. 조각 경계 부근에서 음색 전환이 어색할 수 있습니다.`
         : null;
 
       const convertedVocals = path.join(workDir, 'converted-vocals.wav');
@@ -886,8 +894,8 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           if (svcEngine === 'vevo2') await runVevo2Svc(chunkSource, voiceRefWav, rawOutput, options.vevoRoute);
           else await runSeedVcSvc(chunkSource, voiceRefWav, rawOutput, options);
           const stitchedPart = path.join(workDir, `chunk-${String(index).padStart(3, '0')}-stitched.wav`);
-          const trimStart = index === 0 ? 0 : AUK_EDGE_TRIM_SECONDS;
-          const trimEnd = index === chunkPlan.length - 1 ? null : Math.max(trimStart, chunk.duration - AUK_EDGE_TRIM_SECONDS);
+          const trimStart = index === 0 ? 0 : chunkParams.edgeTrimSeconds;
+          const trimEnd = index === chunkPlan.length - 1 ? null : Math.max(trimStart, chunk.duration - chunkParams.edgeTrimSeconds);
           const trimFilter = `atrim=start=${trimStart.toFixed(3)}${trimEnd === null ? '' : `:end=${trimEnd.toFixed(3)}`},asetpts=PTS-STARTPTS`;
           await runFfmpeg(['-y', '-i', rawOutput, '-af', trimFilter, '-ar', '44100', '-ac', '1', stitchedPart], '보컬 결과 조각 정리');
           stitchedParts.push(stitchedPart);
@@ -913,7 +921,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   // submitAukJob() 주석 참고 -- 이 함수는 SongYUE2 쪽 준비(보컬 스템 확보, 참조 오디오 정규화,
   // 결과 후처리/저장)만 담당한다.
   // stems: prepareTimbrePreview()가 이미 채워둔 스템 캐시 디렉터리(project 무관, applyVocalTimbreCore와 같은 계약).
-  async function applyAukTimbreCore(stems, { referenceDataUrl, textDescription, checkpoint, modelVariant, textEncoder, vae, lyrics, whisper, language, onProgress }) {
+  async function applyAukTimbreCore(stems, { referenceDataUrl, textDescription, checkpoint, modelVariant, textEncoder, vae, lyrics, whisper, language, chunkSeconds, overlapSeconds, onProgress }) {
     const description = text(textDescription, 500).trim();
     let referenceBuffer = null;
     let referenceExt = null;
@@ -944,10 +952,11 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     try {
       const durationMs = await measureDurationMs(originalVocalsWav);
       const durationSeconds = durationMs ? durationMs / 1000 : 0;
-      const useChunking = !referenceBuffer && durationSeconds > AUK_CHUNK_SECONDS;
-      const chunkPlan = useChunking ? buildAukChunkPlan(durationSeconds) : [];
+      const chunkParams = resolveChunkParams(chunkSeconds, overlapSeconds);
+      const useChunking = !referenceBuffer && durationSeconds > chunkParams.chunkSeconds;
+      const chunkPlan = useChunking ? buildAukChunkPlan(durationSeconds, chunkParams.chunkSeconds, chunkParams.overlapSeconds) : [];
       const warning = useChunking
-        ? `긴 보컬을 ${AUK_CHUNK_SECONDS}초 단위(겹침 ${AUK_OVERLAP_SECONDS}초)로 ${chunkPlan.length}개 처리해 연결했습니다.`
+        ? `긴 보컬을 ${chunkParams.chunkSeconds}초 단위(겹침 ${chunkParams.overlapSeconds}초)로 ${chunkPlan.length}개 처리해 연결했습니다.`
         : durationMs && durationMs > 30000
           ? '참조 음성을 사용하는 AuK TTS는 긴 음원에서 결과가 노이즈로 무너지는 경향이 있습니다. 30초 이하에서 더 안정적입니다.'
           : null;
@@ -989,8 +998,8 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           const stitchedPart = path.join(workDir, `chunk-${String(index).padStart(3, '0')}-stitched.wav`);
           await writeFile(rawOutput, chunkResult.outputBuffer);
 
-          const trimStart = index === 0 ? 0 : AUK_EDGE_TRIM_SECONDS;
-          const trimEnd = index === chunkPlan.length - 1 ? null : Math.max(trimStart, chunk.duration - AUK_EDGE_TRIM_SECONDS);
+          const trimStart = index === 0 ? 0 : chunkParams.edgeTrimSeconds;
+          const trimEnd = index === chunkPlan.length - 1 ? null : Math.max(trimStart, chunk.duration - chunkParams.edgeTrimSeconds);
           const trimFilter = `atrim=start=${trimStart.toFixed(3)}${trimEnd === null ? '' : `:end=${trimEnd.toFixed(3)}`},asetpts=PTS-STARTPTS`;
           await runFfmpeg(['-y', '-i', rawOutput, '-af', trimFilter, '-ar', '44100', '-ac', '1', stitchedPart], 'AuK 결과 조각 정리');
           stitchedParts.push(stitchedPart);
@@ -1043,7 +1052,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     await runFfmpegCli(['-y', '-i', source, '-ar', '44100', '-ac', '1', audioFilePath], '입력 오디오 변환');
     return audioFilePath;
   }
-  async function runAukTool({ task, instruction, audioDataUrl, checkpoint, modelVariant, textEncoder, vae, seconds, chunk }) {
+  async function runAukTool({ task, instruction, audioDataUrl, checkpoint, modelVariant, textEncoder, vae, seconds, chunk, chunkSeconds, overlapSeconds }) {
     const cleanTask = text(task, 100).trim();
     const cleanInstruction = text(instruction, 2000).trim();
     if (!cleanTask || !cleanInstruction) throw fail(400, '작업 종류와 지시문이 필요합니다.');
@@ -1064,10 +1073,11 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       // 단일 잡으로 보낸다.
       const durationMs = audioFilePath ? await measureDurationMs(audioFilePath) : null;
       const durationSeconds = durationMs ? durationMs / 1000 : 0;
-      const useChunking = chunk === true && audioFilePath && durationMs !== null && durationSeconds > AUK_CHUNK_SECONDS;
-      const chunkPlan = useChunking ? buildAukChunkPlan(durationSeconds) : [];
+      const chunkParams = resolveChunkParams(chunkSeconds, overlapSeconds);
+      const useChunking = chunk === true && audioFilePath && durationMs !== null && durationSeconds > chunkParams.chunkSeconds;
+      const chunkPlan = useChunking ? buildAukChunkPlan(durationSeconds, chunkParams.chunkSeconds, chunkParams.overlapSeconds) : [];
       const warning = useChunking
-        ? `긴 오디오를 ${AUK_CHUNK_SECONDS}초 단위(겹침 ${AUK_OVERLAP_SECONDS}초)로 ${chunkPlan.length}개로 나눠 순차 처리하고 연결했습니다. 조각 경계 부근에서 오디오가 어색할 수 있습니다.`
+        ? `긴 오디오를 ${chunkParams.chunkSeconds}초 단위(겹침 ${chunkParams.overlapSeconds}초)로 ${chunkPlan.length}개로 나눠 순차 처리하고 연결했습니다. 조각 경계 부근에서 오디오가 어색할 수 있습니다.`
         : null;
 
       const runFfmpeg = (args, label) => runFfmpegCli(args, label);
@@ -1092,8 +1102,8 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           await runFfmpeg(['-y', '-i', audioFilePath, '-af', sourceFilter, '-ar', '44100', '-ac', '1', chunkSource], '입력 조각 생성');
           const rawOutput = await runToolJob(chunkSource, index);
           const stitchedPart = path.join(workDir, `chunk-${String(index).padStart(3, '0')}-stitched.wav`);
-          const trimStart = index === 0 ? 0 : AUK_EDGE_TRIM_SECONDS;
-          const trimEnd = index === chunkPlan.length - 1 ? null : Math.max(trimStart, chunk.duration - AUK_EDGE_TRIM_SECONDS);
+          const trimStart = index === 0 ? 0 : chunkParams.edgeTrimSeconds;
+          const trimEnd = index === chunkPlan.length - 1 ? null : Math.max(trimStart, chunk.duration - chunkParams.edgeTrimSeconds);
           const trimFilter = `atrim=start=${trimStart.toFixed(3)}${trimEnd === null ? '' : `:end=${trimEnd.toFixed(3)}`},asetpts=PTS-STARTPTS`;
           await runFfmpeg(['-y', '-i', rawOutput, '-af', trimFilter, '-ar', '44100', '-ac', '1', stitchedPart], '결과 조각 정리');
           stitchedParts.push(stitchedPart);
@@ -2288,6 +2298,8 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           autoF0Adjust: input.seedAutoF0Adjust,
           inferenceSteps: input.seedInferenceSteps,
           vevoRoute: input.vevoRoute,
+          chunkSeconds: input.chunkSeconds,
+          overlapSeconds: input.overlapSeconds,
         }, onProgress)); }
         finally { generating = false; generationStatus = null; }
       }
@@ -2304,7 +2316,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           generationStatus.progress = progress;
           generationStatus.detail = detail;
         };
-        try { return send(200, await applyAukTimbreCore(path.join(dir, 'stems'), { referenceDataUrl: input.referenceDataUrl, textDescription: input.textDescription, checkpoint: input.checkpoint, modelVariant: input.modelVariant, textEncoder: input.textEncoder, vae: input.vae, lyrics: input.lyrics, whisper: input.whisper, language: input.language, onProgress })); }
+        try { return send(200, await applyAukTimbreCore(path.join(dir, 'stems'), { referenceDataUrl: input.referenceDataUrl, textDescription: input.textDescription, checkpoint: input.checkpoint, modelVariant: input.modelVariant, textEncoder: input.textEncoder, vae: input.vae, lyrics: input.lyrics, whisper: input.whisper, language: input.language, chunkSeconds: input.chunkSeconds, overlapSeconds: input.overlapSeconds, onProgress })); }
         finally { generating = false; generationStatus = null; }
       }
       // "Tools" 메뉴: 완성곡과 무관한 독립 AuK 작업. /projects/:id 스코프가 아니라 /audio-save와
@@ -2315,7 +2327,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
         generating = true;
         generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 60000 };
-        try { return send(200, await runAukTool({ task: input.task, instruction: input.instruction, audioDataUrl: input.audioDataUrl, checkpoint: input.checkpoint, modelVariant: input.modelVariant, textEncoder: input.textEncoder, vae: input.vae, seconds: input.seconds, chunk: input.chunk === true })); }
+        try { return send(200, await runAukTool({ task: input.task, instruction: input.instruction, audioDataUrl: input.audioDataUrl, checkpoint: input.checkpoint, modelVariant: input.modelVariant, textEncoder: input.textEncoder, vae: input.vae, seconds: input.seconds, chunk: input.chunk === true, chunkSeconds: input.chunkSeconds, overlapSeconds: input.overlapSeconds })); }
         finally { generating = false; generationStatus = null; }
       }
       // "Tools" 메뉴(가사/대사 편집 탭): 선택한 오디오를 AudioAuK Whisper STT로 전사해 가사 후보를
