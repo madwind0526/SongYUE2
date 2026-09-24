@@ -135,4 +135,5 @@ DDSP-SVC 탭은 실제 GPU로 목표 스텝을 작게 잡아(`targetStep: 300`) 
 - [x] STT는 Qwen3-ASR, Nemotron 남기고 VibeVoice-ASR 삭제, TTS는 Qwen3-TTS/VoxCPM2 남기고 OmniVoice/Fish/Chatterbox 삭제. 지운 모델의 버튼은 남기고 선택하면 "모델 받기" 안내. STT 실측(합성 한국어 9클립): Nemotron CER 0.000 · Qwen3 1.7B 0.003 · Qwen3 0.6B 0.018 · VibeVoice 0.097(7~17배 느림).
 - [x] YuE2 Q4/BF16(+F32 VAE) 삭제, 기본 모델을 Q8로 변경, 모델 목록은 디스크 실재 기준.
 - [ ] 결정 대기: 원본 Python 모델(7.3GB)은 "악기만"/ABC 기능에 필요 — 그 기능을 안 쓰면 삭제 가능.
-- [ ] 결정 대기: `C:\Claude\AudioAUK`(42GB, 소스 미커밋·library 오디오 605개) 삭제, `test/ACE-Step-1.5`(19GB, `lora-data/` 포함) 삭제.
+- [ ] 결정 대기: `C:\Claude\AudioAUK`(42GB, 소스 미커밋·library 오디오 605개는 AuK 실험 결과물) 삭제.
+- [x] `test/ACE-Step-1.5`(ACE 저장소 복제, `lora-data/` 포함) 삭제 완료(2026-09-25, 사용하지 않음).
