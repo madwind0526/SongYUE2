@@ -2918,7 +2918,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
               <Button variant="outline" size="sm" onClick={() => setRvcManageOpen(true)} disabled={busy} style={{ marginTop: 8 }}><Trash2 size={13}/>목소리 관리 ({rvcInstalled.length})</Button>
               <Button variant="outline" size="sm" onClick={() => { setRvcSearchOpen(true); if (!rvcResults) void searchRvcOnline(); }} disabled={busy} style={{ marginTop: 4 }}><Search size={13}/>온라인에서 RVC 목소리 찾기</Button>
               <p className="field-hint">받은 목소리는 위 "내장 목소리" 목록에 "이름 · 다운로드"로 추가됩니다. 인덱스 파일이 함께 있는 목소리만 검색 블렌딩을 쓸 수 있습니다. 개인 용도로 쓰되, 실존 인물의 목소리로 타인을 속이는 용도에는 쓰지 마세요.</p>
-              <p className="field-hint">RVC는 참조 audio가 아니라 내장 목소리 4개 중 하나로 바꿉니다. 원곡과 음역이 다르면 음높이(반음)로 맞추세요. 검색 블렌딩은 default 목소리에서는 쓸 수 없고(엔진이 비정상 종료), manthos·chocola·fraise에서만 동작합니다.</p>
+              <p className="field-hint">RVC는 참조 audio가 아니라 목소리 하나를 골라 바꿉니다(기본 제공 4개와 온라인에서 받은 목소리). 원곡과 음역이 다르면 음높이(반음)로 맞추세요. 검색 블렌딩은 인덱스가 있는 목소리에서만 쓸 수 있고, default와 인덱스가 없는 목소리에서는 자동으로 꺼집니다.</p>
             </>}
             {engine === 'meanvc2' && <>
               <div className="runtime-options"><label>정밀도<select value={meanvcPrecision} onChange={event => setMeanvcPrecision(event.target.value as 'q4_k' | 'fp32')} disabled={busy}><option value="q4_k">Q4 (342MB)</option><option value="fp32">FP32 (1.6GB)</option></select></label></div>
