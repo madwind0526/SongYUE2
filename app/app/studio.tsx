@@ -2565,10 +2565,11 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
   const [rvcPreviewing, setRvcPreviewing] = useState(false);
   const [rvcSearch, setRvcSearch] = useState('');
   const [rvcSearchOpen, setRvcSearchOpen] = useState(false);
+  const [rvcManageOpen, setRvcManageOpen] = useState(false);
   const [rvcSearching, setRvcSearching] = useState(false);
   const [rvcResults, setRvcResults] = useState<{ repo: string; downloads: number; license: string }[] | null>(null);
   const [rvcDownloads, setRvcDownloads] = useState<Record<string, { state: string; receivedBytes: number; totalBytes: number; error: string | null; repo: string }>>({});
-  const [rvcInstalled, setRvcInstalled] = useState<{ id: string; slug: string; name: string; repo: string }[]>([]);
+  const [rvcInstalled, setRvcInstalled] = useState<{ id: string; slug: string; name: string; repo: string; hasIndex: boolean }[]>([]);
   const rvcPreviewAudioRef = useRef<HTMLAudioElement | null>(null);
   const [rvcVoice, setRvcVoice] = useState('default');
   const [rvcSemitone, setRvcSemitone] = useState('0');
@@ -2914,7 +2915,8 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
               <div className="runtime-options" style={{ gridTemplateColumns: '1fr' }}><label>내장 목소리<div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6 }}><select style={{ flex: 1, minWidth: 0 }} value={rvcVoice} onChange={event => setRvcVoice(event.target.value)} disabled={busy}>{(vcFamily?.voices || [{ id: 'default', label: 'default' }]).map(voice => <option key={voice.id} value={voice.id} style={voice.id.startsWith('user:') ? { color: '#7ee787' } : undefined}>{voice.label}</option>)}</select><Button variant="outline" size="sm" aria-label="목소리 듣기" title="원본 보컬 앞 8초를 이 목소리로 바꿔 들어봅니다" disabled={busy || rvcPreviewing || !previewId || !vcModelReady} onClick={() => void previewRvcVoice()}>{rvcPreviewing ? <LoaderCircle className="spin" size={13}/> : <Play size={13}/>}</Button></div></label>
                 </div>
               <div className="runtime-options" style={{ gridTemplateColumns: '1fr 1fr' }}><label>음높이(반음)<Input type="text" inputMode="decimal" value={rvcSemitone} onChange={event => setRvcSemitone(event.target.value)} onBlur={() => setRvcSemitone(String(Math.max(-24, Math.min(24, Math.round(Number(rvcSemitone)) || 0))))} disabled={busy}/></label><label>검색 블렌딩(0~1)<Input type="text" inputMode="decimal" title={rvcVoice === 'default' ? 'default 목소리는 검색 인덱스가 없어 블렌딩을 쓸 수 없습니다(0으로 처리).' : undefined} value={(rvcVoice === 'default' || vcFamily?.voices?.find(voice => voice.id === rvcVoice && (voice as { hasIndex?: boolean }).hasIndex === false) !== undefined) ? '0' : rvcRetrieval} onChange={event => setRvcRetrieval(event.target.value)} onBlur={() => setRvcRetrieval(String(Math.max(0, Math.min(1, Number(rvcRetrieval) || 0))))} disabled={busy || (rvcVoice === 'default' || vcFamily?.voices?.find(voice => voice.id === rvcVoice && (voice as { hasIndex?: boolean }).hasIndex === false) !== undefined)}/></label></div>
-              <Button variant="outline" size="sm" onClick={() => { setRvcSearchOpen(true); if (!rvcResults) void searchRvcOnline(); }} disabled={busy} style={{ marginTop: 8 }}><Search size={13}/>온라인에서 RVC 목소리 찾기</Button>
+              <Button variant="outline" size="sm" onClick={() => setRvcManageOpen(true)} disabled={busy} style={{ marginTop: 8 }}><Trash2 size={13}/>목소리 관리 ({rvcInstalled.length})</Button>
+              <Button variant="outline" size="sm" onClick={() => { setRvcSearchOpen(true); if (!rvcResults) void searchRvcOnline(); }} disabled={busy} style={{ marginTop: 4 }}><Search size={13}/>온라인에서 RVC 목소리 찾기</Button>
               <p className="field-hint">받은 목소리는 위 "내장 목소리" 목록에 "이름 · 다운로드"로 추가됩니다. 인덱스 파일이 함께 있는 목소리만 검색 블렌딩을 쓸 수 있습니다. 개인 용도로 쓰되, 실존 인물의 목소리로 타인을 속이는 용도에는 쓰지 마세요.</p>
               <p className="field-hint">RVC는 참조 audio가 아니라 내장 목소리 4개 중 하나로 바꿉니다. 원곡과 음역이 다르면 음높이(반음)로 맞추세요. 검색 블렌딩은 default 목소리에서는 쓸 수 없고(엔진이 비정상 종료), manthos·chocola·fraise에서만 동작합니다.</p>
             </>}
@@ -3054,6 +3056,19 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
     </DialogContent>
     <MultiFileLibraryPicker open={sourcePickerOpen} onClose={() => setSourcePickerOpen(false)} onConfirm={paths => paths[0] && void pickSource(paths[0])} title="원본 audio 선택" description="음색을 바꿀 원본 오디오 파일을 골라 주세요."/>
     <MultiFileLibraryPicker open={referencePickerOpen} onClose={() => setReferencePickerOpen(false)} onConfirm={paths => paths[0] && void pickReference(paths[0])} title="참조 audio 선택" description="목표 음색의 참조 오디오 파일을 골라 주세요."/>
+    <Dialog open={rvcManageOpen} onOpenChange={setRvcManageOpen}>
+      <DialogContent className="studio-dialog voice-convert-browser-dialog" style={{ width: 520 }}>
+        <DialogTitle>받은 RVC 목소리 관리</DialogTitle>
+        <DialogDescription>온라인에서 받은 목소리입니다. 삭제하면 "내장 목소리" 목록에서도 사라집니다.</DialogDescription>
+        <div style={{ display: 'grid', gap: 6, maxHeight: 380, overflowY: 'auto' }}>
+          {rvcInstalled.length === 0 && <span className="field-hint">받은 목소리가 없습니다. "온라인에서 RVC 목소리 찾기"로 받을 수 있습니다.</span>}
+          {rvcInstalled.map(voice => <div key={voice.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={voice.repo}><span style={{ color: '#7ee787', fontWeight: 600 }}>{voice.name}</span><small style={{ opacity: 0.6 }}> · {voice.repo}{voice.hasIndex ? ' · 블렌딩 가능' : ' · 블렌딩 불가'}</small></span>
+            <Button variant="outline" size="sm" aria-label="삭제" title="이 목소리 삭제" onClick={() => void deleteRvcOnline(voice.id)} disabled={busy}><Trash2 size={13}/></Button>
+          </div>)}
+        </div>
+      </DialogContent>
+    </Dialog>
     <Dialog open={rvcSearchOpen} onOpenChange={setRvcSearchOpen}>
       <DialogContent className="studio-dialog voice-convert-browser-dialog" style={{ width: 560 }}>
         <DialogTitle>온라인에서 RVC 목소리 찾기</DialogTitle>
