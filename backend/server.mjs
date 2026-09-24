@@ -750,7 +750,12 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   }
   async function runMeanVc2Svc(vocalsWav, voiceRefWav, outputWav, options = {}) {
     const precision = options.meanvcPrecision === 'fp32' ? 'fp32' : 'q4_k';
-    await runSvcCli(['--task', 'vc', '--family', 'meanvc2', '--model', await vcModelPath('meanvc2', '120ms/40ms', precision), '--backend', 'cuda', '--audio', vocalsWav, '--voice-ref', voiceRefWav, '--out', outputWav], 'MeanVC2 엔진을 실행할 수 없습니다.');
+    // MeanVC2's WavLM speaker encoder allocates memory that grows with the square of the reference length
+    // (measured: 40 s ok, 60 s wants ~100 GB and dies with cudaMalloc out of memory), and a few seconds are
+    // enough to capture a voice, so only the first 20 s of the reference are used.
+    const trimmedRef = path.join(path.dirname(outputWav), `meanvc-ref-${randomUUID().slice(0, 8)}.wav`);
+    await runFfmpegCli(['-y', '-i', voiceRefWav, '-t', '20', '-ar', '16000', '-ac', '1', trimmedRef], '참조 오디오 자르기');
+    await runSvcCli(['--task', 'vc', '--family', 'meanvc2', '--model', await vcModelPath('meanvc2', '120ms/40ms', precision), '--backend', 'cuda', '--audio', vocalsWav, '--voice-ref', trimmedRef, '--out', outputWav], 'MeanVC2 엔진을 실행할 수 없습니다.');
   }
   async function runVevo2Svc(vocalsWav, voiceRefWav, outputWav, route = 'style_preserved_svc') {
     // style_preserved_svc is vevo2's default svc route: convert the source singing to the target

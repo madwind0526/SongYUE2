@@ -2633,7 +2633,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
           <div className="at-section-head">모델 (MeanVC2)</div>
           <div className="runtime-options" style={{ gridTemplateColumns: '1fr' }}><label>정밀도<select value={meanvcPrecision} onChange={event => setMeanvcPrecision(event.target.value as 'q4_k' | 'fp32')} disabled={running}><option value="q4_k">Q4 (342MB)</option><option value="fp32">FP32 (1.6GB)</option></select></label></div>
           {renderModelStatus(meanvcInfo, 'meanvc2', 'vc', '120ms/40ms', meanvcPrecision)}
-          <span className="field-hint">참조 음성의 목소리로 말소리를 바꾸는 제로샷 변환입니다(언어 무관). 말소리용이라 노래는 깨질 수 있어, 노래는 음색 변조 메뉴(Seed-VC·Vevo·RVC 등)를 쓰세요.</span>
+          <span className="field-hint">참조 음성의 목소리로 말소리를 바꾸는 제로샷 변환입니다(언어 무관). 참조 음성은 앞 20초만 사용합니다. 말소리용이라 노래는 깨질 수 있어, 노래는 음색 변조 메뉴(Seed-VC·Vevo·RVC 등)를 쓰세요.</span>
         </>}
         {needsAudio && <div>
           <div className="at-section-head" style={{ marginTop: 18 }}>{audioLabel} 선택</div>

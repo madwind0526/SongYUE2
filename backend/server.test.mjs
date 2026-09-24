@@ -1905,6 +1905,10 @@ test('음색 변조 - RVC/MeanVC2: RVC는 참조 없이 내장 목소리로, Mea
   const meanCalls = fakeSpawn.calls.slice(before).filter(c => c.args.includes('meanvc2'));
   assert.equal(meanCalls.length, 1);
   assert.ok(meanCalls[0].args.includes('--voice-ref') && meanCalls[0].args.includes('--audio'));
+  // the reference is cut to its first 20 s before MeanVC2 sees it (a long reference exhausts GPU memory)
+  const trimCall = fakeSpawn.calls.slice(before).find(c => c.engine === 'ffmpeg' && c.args.includes('-t') && c.args[c.args.indexOf('-t') + 1] === '20');
+  assert.ok(trimCall, 'expected the reference to be trimmed to 20 s');
+  assert.equal(meanCalls[0].args[meanCalls[0].args.indexOf('--voice-ref') + 1], trimCall.args.at(-1));
 });
 
 test('RVC 목소리 검색/다운로드: RVC 모델만 라이선스 표기와 함께 보여주고, 내려받은 목소리는 목록에 나타나 voice_model_path로 변환된다', async t => {
