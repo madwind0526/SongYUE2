@@ -2924,11 +2924,11 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
         </>}
         {isVc && <div>
           <div className="at-section-head" style={{ marginTop: 18 }}>실시간 변환 (마이크 → 참조 목소리)</div>
-          <div className="voice-convert-topbar" style={{ justifyContent: 'flex-start', gap: 10 }}>
+          <div className="voice-convert-topbar" style={{ justifyContent: 'flex-start', gap: 10, flexWrap: 'nowrap' }}>
             {liveState === 'idle' || liveState === 'starting'
               ? <Button variant="outline" onClick={() => void startLive()} disabled={running || liveState === 'starting' || !meanvcInfo?.installed}>{liveState === 'starting' ? <LoaderCircle className="spin" size={14}/> : <Mic size={14}/>}실시간 변환 시작</Button>
               : <Button variant="outline" onClick={() => void stopLive()} disabled={liveState === 'stopping'}><Square size={13}/>정지</Button>}
-            <label className="at-function" style={{ padding: '6px 9px' }}><input type="checkbox" checked={liveListen} onChange={event => setLiveListen(event.target.checked)}/>변환된 소리 듣기</label>
+            <label className="at-function" style={{ flex: 'none', display: 'inline-flex', flexDirection: 'row', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', padding: '6px 9px' }}><input type="checkbox" checked={liveListen} onChange={event => setLiveListen(event.target.checked)}/>변환된 소리 듣기</label>
           </div>
           {liveState !== 'idle' && <div style={{ marginTop: 8, display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 8px', alignItems: 'center', fontSize: 12, color: '#a9b8a4' }}>
             <span>입력</span><div style={{ height: 8, borderRadius: 4, background: '#232b23' }}><div style={{ height: 8, borderRadius: 4, background: '#7ee787', width: `${Math.min(100, liveInLevel * 400)}%`, transition: 'width 80ms' }}/></div>
