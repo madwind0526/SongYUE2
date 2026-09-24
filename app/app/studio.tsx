@@ -2155,6 +2155,10 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
   const micStreamRef = useRef<MediaStream | null>(null);
   const recChunksRef = useRef<Blob[]>([]);
   const recStateRef = useRef<'idle' | 'recording' | 'paused'>('idle');
+  const micCanvasRef = useRef<HTMLCanvasElement>(null);
+  const micAnalyserRef = useRef<AnalyserNode | null>(null);
+  const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const micDeviceInUseRef = useRef('');
   const audioBlobRef = useRef<Blob | null>(null);
   const resultDataUrlRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -2242,6 +2246,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
   }
 
   function selectCategory(nextCategoryId: string) {
+    if (micPanelOpen) closeMicPanel();
     setCategoryId(nextCategoryId);
     setErrorText('');
     setWarningText('');
@@ -2295,27 +2300,97 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
     setMicDevices(inputs);
     setMicId(previous => (inputs.some(device => device.id === previous) ? previous : inputs[0]?.id || ''));
   }
+  // One persistent input stream feeds both the live waveform (AnalyserNode, not routed to the speakers, so no echo)
+  // and the recorder; it is (re)opened for the chosen device and closed with the panel.
+  function closeMicStream() {
+    micSourceRef.current?.disconnect();
+    micSourceRef.current = null;
+    micAnalyserRef.current = null;
+    micStreamRef.current?.getTracks().forEach(track => track.stop());
+    micStreamRef.current = null;
+    micDeviceInUseRef.current = '';
+  }
+  async function ensureMicStream(deviceId: string): Promise<MediaStream> {
+    if (micStreamRef.current && micDeviceInUseRef.current === deviceId) return micStreamRef.current;
+    closeMicStream();
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: deviceId ? { exact: deviceId } : undefined, echoCancellation: false, noiseSuppression: false } });
+    micStreamRef.current = stream;
+    micDeviceInUseRef.current = deviceId;
+    const ctx = t.ensureAudioContext();
+    if (ctx.state === 'suspended') await ctx.resume();
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 2048;
+    const source = ctx.createMediaStreamSource(stream);
+    source.connect(analyser);
+    micSourceRef.current = source;
+    micAnalyserRef.current = analyser;
+    return stream;
+  }
   async function openMicPanel() {
     setMicPanelOpen(true);
+    setErrorText('');
     try {
-      // A short permission probe first: device labels are only exposed after the user allowed the microphone.
-      const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
-      probe.getTracks().forEach(track => track.stop());
+      // Opening the stream first also unlocks the device labels (only exposed after the user allowed the microphone).
+      await ensureMicStream(micId);
       await refreshMics();
     } catch { setErrorText('마이크를 사용할 수 없습니다. 브라우저의 마이크 권한을 허용했는지 확인해 주세요.'); }
   }
+  function closeMicPanel() {
+    if (recStateRef.current !== 'idle') { recorderRef.current?.stop(); setRec('idle'); }
+    closeMicStream();
+    setMicPanelOpen(false);
+  }
+  // Switching the input device while idle re-opens the monitor on the new device.
+  useEffect(() => {
+    if (!micPanelOpen || recState !== 'idle' || !micId || micDeviceInUseRef.current === micId) return;
+    void ensureMicStream(micId).catch(() => setErrorText('선택한 입력 장치를 열 수 없습니다.'));
+  }, [micId, micPanelOpen, recState]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Live oscilloscope: the time-domain signal of the microphone, red while recording.
+  useEffect(() => {
+    if (!micPanelOpen) return;
+    let frame = 0;
+    const draw = () => {
+      frame = requestAnimationFrame(draw);
+      const canvas = micCanvasRef.current;
+      if (!canvas) return;
+      const ctx2d = canvas.getContext('2d');
+      if (!ctx2d) return;
+      const width = canvas.clientWidth * (window.devicePixelRatio || 1);
+      const height = canvas.clientHeight * (window.devicePixelRatio || 1);
+      if (canvas.width !== width) canvas.width = width;
+      if (canvas.height !== height) canvas.height = height;
+      ctx2d.clearRect(0, 0, width, height);
+      ctx2d.strokeStyle = 'rgba(120,140,120,0.35)';
+      ctx2d.beginPath();
+      ctx2d.moveTo(0, height / 2);
+      ctx2d.lineTo(width, height / 2);
+      ctx2d.stroke();
+      const analyser = micAnalyserRef.current;
+      if (!analyser) return;
+      const data = new Uint8Array(analyser.fftSize);
+      analyser.getByteTimeDomainData(data);
+      ctx2d.lineWidth = 2 * (window.devicePixelRatio || 1);
+      ctx2d.strokeStyle = recStateRef.current === 'recording' ? '#f87171' : recStateRef.current === 'paused' ? '#a3a3a3' : '#7ee787';
+      ctx2d.beginPath();
+      for (let index = 0; index < data.length; index += 1) {
+        const x = (index / (data.length - 1)) * width;
+        const y = (data[index] / 255) * height;
+        if (index === 0) ctx2d.moveTo(x, y); else ctx2d.lineTo(x, y);
+      }
+      ctx2d.stroke();
+    };
+    draw();
+    return () => cancelAnimationFrame(frame);
+  }, [micPanelOpen]);
   function setRec(next: 'idle' | 'recording' | 'paused') { recStateRef.current = next; setRecState(next); }
   async function startRecording() {
     setErrorText('');
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: micId ? { exact: micId } : undefined, echoCancellation: false, noiseSuppression: false } });
-      micStreamRef.current = stream;
+      const stream = await ensureMicStream(micId);
       const recorder = new MediaRecorder(stream);
       recChunksRef.current = [];
       recorder.ondataavailable = event => { if (event.data.size) recChunksRef.current.push(event.data); };
       recorder.onstop = () => {
-        stream.getTracks().forEach(track => track.stop());
-        micStreamRef.current = null;
         const blob = new Blob(recChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
         // Decode and re-encode as WAV so the backend gets a format it accepts.
         blob.arrayBuffer().then(bytes => t.ensureAudioContext().decodeAudioData(bytes)).then(decoded => applyPickedAudio(audioBufferToWavBlob(decoded), '마이크 녹음.wav')).catch(() => setErrorText('녹음을 처리하지 못했습니다.'));
@@ -2339,7 +2414,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
     const timer = window.setInterval(() => setRecSeconds(previous => previous + 0.25), 250);
     return () => window.clearInterval(timer);
   }, [recState]);
-  useEffect(() => () => { try { recorderRef.current?.state !== 'inactive' && recorderRef.current?.stop(); } catch { /* ignore */ } micStreamRef.current?.getTracks().forEach(track => track.stop()); }, []);
+  useEffect(() => () => { try { recorderRef.current?.state !== 'inactive' && recorderRef.current?.stop(); } catch { /* ignore */ } closeMicStream(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   async function run() {
     if (needsAudio && !audioBlobRef.current) { setErrorText(`${audioLabel}를 먼저 선택해 주세요.`); return; }
     if (isVc && !refBlobRef.current) { setErrorText('목표 목소리의 참조 오디오를 먼저 선택해 주세요.'); return; }
@@ -2542,8 +2617,10 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
             <Button variant="outline" size="sm" aria-label={recState === 'paused' ? '녹음 계속' : '일시정지'} title={recState === 'paused' ? '녹음 계속' : '일시정지'} onClick={pauseRecording} disabled={recState === 'idle'}>{recState === 'paused' ? <Play size={13}/> : <Pause size={13}/>}</Button>
             <Button variant="outline" size="sm" aria-label="정지" title="정지하고 원본으로 사용" onClick={stopRecording} disabled={recState === 'idle'}><Square size={13}/></Button>
             <span className="pp-seek-time" style={{ minWidth: 48, textAlign: 'right', color: recState === 'recording' ? '#f87171' : undefined }}>{formatSeekTime(recSeconds)}</span>
+            <Button variant="outline" size="sm" aria-label="마이크 닫기" title="마이크 닫기" onClick={closeMicPanel} disabled={running}><X size={13}/></Button>
           </div>
-          <span className="field-hint">{recState === 'recording' ? '녹음 중… 말한 뒤 정지를 누르면 아래 원본 파형으로 들어갑니다.' : recState === 'paused' ? '일시정지됨. 재생 아이콘으로 이어서 녹음합니다.' : '입력 장치를 고르고 녹음 버튼(●)을 누르세요. 정지하면 원본 오디오가 됩니다.'}</span>
+          <canvas ref={micCanvasRef} aria-label="마이크 실시간 파형" style={{ width: '100%', height: 90, marginTop: 8, borderRadius: 8, background: '#161d12', border: '1px solid #2b352b' }}/>
+          <span className="field-hint">{recState === 'recording' ? '녹음 중… 말한 뒤 정지를 누르면 아래 원본 파형으로 들어갑니다.' : recState === 'paused' ? '일시정지됨. 재생 아이콘으로 이어서 녹음합니다.' : '말하면 위 파형이 움직입니다(입력 레벨 확인). 준비되면 녹음 버튼(●)을 누르세요. 정지하면 원본 오디오가 됩니다.'}</span>
         </div>}
         {!sourceBuffer && !resultBuffer && transcript === null && !(isVc && micPanelOpen) ? <div className="audio-tools-result-empty"><CircleHelp size={18}/><p>왼쪽에서 조건을 입력하고 "실행"을 누르면<br/>결과가 이곳에 표시됩니다.</p></div> : <>
           {sourceBuffer && needsAudio && <div className={atRowClass('source', 'dry')}>
