@@ -3277,7 +3277,7 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
   const [tab, setTab] = useState<'mine' | 'catalog' | 'hub'>('mine');
   const [mine, setMine] = useState<AdapterList | null>(null);
   const [catalog, setCatalog] = useState<CatalogEntry[] | null>(null);
-  const [picked, setPicked] = useState<string[]>([]);
+  const [deleting, setDeleting] = useState('');
   const [kind, setKind] = useState('');
   const [hub, setHub] = useState<HubRepo[] | null>(null);
   const [hubError, setHubError] = useState('');
@@ -3320,9 +3320,15 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
         if (state.status === 'failed') throw new Error(state.error || '다운로드에 실패했습니다.');
       }
       await reload(); void reloadCatalog();
-      setPicked([]); setUnitsPicked([]);
+      setUnitsPicked([]);
     } catch (error) { notify((error as Error).message, true); }
     finally { setJob(null); }
+  }
+  async function removeCatalogEntry(entry: CatalogEntry) {
+    const installedItem = (mine?.adapters || []).find(item => item.source?.catalogId === entry.id);
+    if (!installedItem) return;
+    try { await api(`/adapters/${encodeURIComponent(installedItem.name)}`, 'DELETE'); notify(`"${entry.name}"을(를) 삭제했습니다.`); setDeleting(''); await reload(); await reloadCatalog(); }
+    catch (error) { notify((error as Error).message, true); }
   }
   async function importFiles() {
     try {
@@ -3348,14 +3354,13 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
     .sort((a, b) => sort === 'likes' ? b.likes - a.likes : sort === 'samples' ? b.sampleCount - a.sampleCount : b.updatedAt.localeCompare(a.updatedAt));
   const catalogKinds = [...new Set((catalog || []).map(entry => entry.kind))];
   const catalogShown = (catalog || []).filter(entry => !kind || entry.kind === kind);
-  const pickedBytes = (catalog || []).filter(entry => picked.includes(entry.id)).reduce((sum, entry) => sum + entry.bytes, 0);
   const unitsBytes = (detail?.units || []).filter(unit => unitsPicked.includes(unit.path)).reduce((sum, unit) => sum + unit.size, 0);
 
   return <section className="adapter-page page-scroll">
-    <div className="page-heading"><span className="eyebrow">노래의 색깔을 바꾸는 작은 모델</span><h1>LoRA 관리</h1><p>스타일, 아티스트, 사운드를 가르치는 작은 추가 모델입니다. 카탈로그나 허깅페이스에서 받고, 곡을 만들 때 "고급 설정"에서 골라 각 부분의 강도를 조절합니다.</p></div>
+    <div className="page-heading"><span className="eyebrow">노래의 색깔을 바꾸는 작은 모델</span><h1>LoRA 관리</h1><p>스타일, 아티스트, 사운드를 가르치는 작은 추가 모델입니다. 추천 목록이나 허깅페이스에서 받고, 곡을 만들 때 "고급 설정"에서 골라 각 부분의 강도를 조절합니다.</p></div>
     <div className="adapter-tabs" role="tablist">
       <button role="tab" aria-selected={tab === 'mine'} className={tab === 'mine' ? 'active' : ''} onClick={() => setTab('mine')}>Installed{mine ? ` (${mine.adapters.length})` : ''}</button>
-      <button role="tab" aria-selected={tab === 'catalog'} className={tab === 'catalog' ? 'active' : ''} onClick={() => setTab('catalog')}>카탈로그</button>
+      <button role="tab" aria-selected={tab === 'catalog'} className={tab === 'catalog' ? 'active' : ''} onClick={() => setTab('catalog')}>추천</button>
       <button role="tab" aria-selected={tab === 'hub'} className={tab === 'hub' ? 'active' : ''} onClick={() => setTab('hub')}>허깅페이스</button>
     </div>
     {mine && !mine.engineReady && <p className="field-hint warning">LoRA로 곡을 만들려면 엔진 파일이 더 필요합니다 (없는 것: {mine.missing.join(', ')}). docs/models.md의 "LoRA 엔진"을 확인해 주세요.</p>}
@@ -3368,21 +3373,24 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
         <Textarea value={importPaths} placeholder="C:/Users/me/loras/my-style.safetensors" aria-label="가져올 파일 경로" onChange={event => setImportPaths(event.target.value)}/>
       </div>
       {mine ? (mine.adapters.length ? <div className="adapter-grid">{mine.adapters.map(item => <AdapterCard key={item.name} item={item} onChanged={() => void reload()} notify={notify} running={running} setRunning={setRunning}/>)}</div>
-        : <div className="empty-library"><h2>받은 LoRA가 아직 없어요</h2><p>카탈로그에서 마음에 드는 것을 받거나, 가지고 있는 파일을 가져오세요.</p><Button variant="outline" className="soft-button" onClick={() => setTab('catalog')}><Search/>카탈로그 보기</Button></div>)
+        : <div className="empty-library"><h2>받은 LoRA가 아직 없어요</h2><p>추천 목록에서 마음에 드는 것을 받거나, 가지고 있는 파일을 가져오세요.</p><Button variant="outline" className="soft-button" onClick={() => setTab('catalog')}><Search/>추천 목록 보기</Button></div>)
         : <p className="field-hint"><LoaderCircle className="spin" size={14}/> 불러오는 중…</p>}
     </>}
 
     {tab === 'catalog' && <>
-      <p className="field-hint">고른 것을 한 번에 받습니다. 작곡은 곡의 구조·멜로디를, 사운드는 악기와 음색을 바꿉니다.</p>
+      <p className="field-hint">받고 싶은 카드의 다운로드 아이콘을 누르세요. 받은 카드는 파란색이고, 휴지통 아이콘으로 지웁니다. 작곡은 곡의 구조·멜로디를, 사운드는 악기와 음색을 바꿉니다.</p>
       {catalogKinds.length > 0 && <div className="adapter-chiprow"><span>종류</span><button className={!kind ? 'active' : ''} onClick={() => setKind('')}>전체</button>{catalogKinds.map(item => <button key={item} className={kind === item ? 'active' : ''} onClick={() => setKind(kind === item ? '' : item)}>{KIND_LABEL[item] || item}</button>)}</div>}
       {!catalog && <p className="field-hint"><LoaderCircle className="spin" size={14}/> 불러오는 중…</p>}
-      <div className="adapter-grid catalog">{catalogShown.map(entry => <label key={entry.id} className={`adapter-card catalog${picked.includes(entry.id) ? ' selected' : ''}${entry.installed ? ' installed' : ''}`}>
-        <div className="adapter-card-head"><span className="adapter-check"><input type="checkbox" disabled={entry.installed || Boolean(job)} checked={picked.includes(entry.id)} onChange={event => setPicked(event.target.checked ? [...picked, entry.id] : picked.filter(id => id !== entry.id))}/><strong>{entry.name}</strong></span><span className="adapter-badge kind">{entry.kindLabel}</span></div>
+      <div className="adapter-grid catalog">{catalogShown.map(entry => <article key={entry.id} className={`adapter-card catalog${entry.installed ? ' installed' : ''}`}>
+        <div className="adapter-card-head"><strong>{entry.name}</strong><span className="adapter-card-tools"><span className="adapter-badge kind">{entry.kindLabel}</span>{entry.installed
+          ? (deleting === entry.id
+            ? <button type="button" className="adapter-icon-btn danger confirm" aria-label={`${entry.name} 삭제 확인`} onClick={event => { event.preventDefault(); event.stopPropagation(); void removeCatalogEntry(entry); }}><Trash2 size={14}/>삭제?</button>
+            : <button type="button" className="adapter-icon-btn danger" aria-label={`${entry.name} 삭제`} title="삭제" onClick={event => { event.preventDefault(); event.stopPropagation(); setDeleting(entry.id); }} onBlur={() => setDeleting('')}><Trash2 size={15}/></button>)
+          : <button type="button" className="adapter-icon-btn" aria-label={`${entry.name} 다운로드`} title="다운로드" disabled={Boolean(job)} onClick={event => { event.preventDefault(); event.stopPropagation(); void runInstall('/adapters/catalog/install', { ids: [entry.id] }); }}><Download size={15}/></button>}</span></div>
         <div className="adapter-meta"><span className={`adapter-chip stage-${entry.stage}`}>{STAGE_LABEL[entry.stage] || entry.stage}</span>{entry.trigger && <span className="adapter-chip trigger">트리거 {entry.trigger}</span>}<span className="adapter-sub">{entry.author}</span></div>
         <p className="adapter-desc">{entry.description}</p>
         <div className="adapter-foot"><a href={entry.page} target="_blank" rel="noreferrer" onClick={event => event.stopPropagation()}><span title={entry.license ? `허깅페이스에 적힌 라이선스: ${entry.license}` : '저장소에 라이선스가 적혀 있지 않습니다'}>{licenseLabel(entry.license)}</span> · 원본 페이지</a><span>{entry.installed ? <b className="adapter-done"><Check size={13}/>받음</b> : formatSize(entry.bytes)}</span></div>
-      </label>)}</div>
-      {picked.length > 0 && <div className="adapter-pickbar"><Button disabled={Boolean(job)} onClick={() => void runInstall('/adapters/catalog/install', { ids: picked })}><Download size={14}/>선택한 {picked.length}개 받기 · {formatSize(pickedBytes)}</Button><Button variant="outline" onClick={() => setPicked([])}>선택 해제</Button></div>}
+      </article>)}</div>
     </>}
 
     {tab === 'hub' && <>
@@ -3431,7 +3439,7 @@ function AdapterPicker({ selected, onChange, openManager, style, onInsertTrigger
   const toggle = (item: AdapterItem, on: boolean) => onChange(on ? [...selected, { name: item.name, arScale: item.scales.ar, narScale: item.scales.nar }] : selected.filter(entry => entry.name !== item.name));
   const setScale = (name: string, part: 'arScale' | 'narScale', value: number) => onChange(selected.map(entry => entry.name === name ? { ...entry, [part]: value } : entry));
   return <div className="wide-field adapter-picker"><span className="field-label">LoRA <button type="button" className="link-button" onClick={openManager}>관리·받기</button></span>
-    {list.adapters.length === 0 ? <span className="vocal-gender-hint">받은 LoRA가 없습니다. "관리·받기"에서 카탈로그나 허깅페이스의 LoRA를 받을 수 있습니다.</span> : list.adapters.map(item => {
+    {list.adapters.length === 0 ? <span className="vocal-gender-hint">받은 LoRA가 없습니다. "관리·받기"에서 추천 목록이나 허깅페이스의 LoRA를 받을 수 있습니다.</span> : list.adapters.map(item => {
       const chosen = selected.find(entry => entry.name === item.name);
       const hasAr = item.stage === 'ar' || item.stage === 'both' || item.stage === 'unknown';
       const hasNar = item.stage === 'nar' || item.stage === 'both' || item.stage === 'unknown';

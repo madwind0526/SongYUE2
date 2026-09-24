@@ -133,7 +133,7 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 | PATCH `/api/adapters/:name` | `{displayName?, note?}` 이름·메모 수정 |
 | DELETE `/api/adapters/:name` | 삭제(폴더째) |
 | POST `/api/adapters/:name/verify` | yue-server를 잠깐 띄워 이 LoRA를 읽을 수 있는지, 어느 쪽(작곡/사운드)을 바꾸는지 확인해 메타에 기록. 다른 작업 중이면 409 |
-| GET `/api/adapters/catalog` | 카탈로그 `{entries:[{id, kind, kindLabel, stage, name, description, tip, trigger, scales, bytes, files, license, page, installed}]}` |
+| GET `/api/adapters/catalog` | 추천 탭의 목록(카탈로그) `{entries:[{id, kind, kindLabel, stage, name, description, tip, trigger, scales, bytes, files, license, page, installed}]}` |
 | POST `/api/adapters/catalog/install` | `{ids:[...]}` → 202 `{jobId}` (백그라운드 다운로드, 커밋 고정) |
 | GET `/api/adapters/hub/search?q=` | 허깅페이스의 YuE2 어댑터 저장소를 분류해서 반환(10분 캐시) |
 | GET `/api/adapters/hub/detail?repo=owner/name` | README 요약, 샘플 음원, 받을 수 있는 파일(`units`) |

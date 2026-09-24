@@ -10,7 +10,15 @@
 button.adapter-card, label.adapter-card { cursor: pointer; }
 .adapter-card:hover { border-color: #4b5d48; }
 .adapter-card.selected { border-color: #8fbf7f; background: #222d21; }
-.adapter-card.installed { opacity: .65; }
+/* an already downloaded catalog entry: a clearly different background instead of being dimmed */
+.adapter-card.installed { background: #1a3f66; border: 2px solid #5aa9f0; padding: 13px 15px; }
+.adapter-card.installed:hover { border-color: #8cc6ff; }
+.adapter-card.installed .adapter-card-head strong { color: #ffffff; }
+.adapter-card.installed .adapter-desc { color: #d6e6f7; }
+.adapter-card.installed .adapter-sub, .adapter-card.installed .adapter-foot { color: #a9c8e8; }
+.adapter-card.installed .adapter-badge.kind { background: #2c5a8c; color: #dcecff; }
+.adapter-card.installed .adapter-chip { border-color: #4b7fb3; color: #cfe2f7; }
+.adapter-card.installed .adapter-done { color: #7fe8b0; }
 .adapter-card-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .adapter-card-head strong { font-size: 14px; color: #eaf3e2; }
 .adapter-check { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -88,3 +96,11 @@ button.adapter-card, label.adapter-card { cursor: pointer; }
 .adapter-grid:not(.hub) { grid-auto-rows: 1fr; align-items: stretch; }
 .adapter-grid:not(.hub) > .adapter-card { height: 100%; }
 .adapter-card .adapter-foot, .adapter-card .adapter-actions { margin-top: auto; }
+
+.adapter-card-tools { display: flex; align-items: center; gap: 6px; flex: none; }
+.adapter-icon-btn { display: inline-flex; align-items: center; justify-content: center; gap: 4px; min-width: 28px; height: 28px; padding: 0 6px; border-radius: 7px; border: 1px solid #4b5d48; background: #26322500; color: #b9d6ad; font-size: 12px; cursor: pointer; }
+.adapter-icon-btn:hover:not(:disabled) { background: #33462f; color: #eaf3e2; }
+.adapter-icon-btn:disabled { opacity: .4; cursor: not-allowed; }
+.adapter-icon-btn.danger { border-color: #7a4a44; color: #e5a19a; }
+.adapter-icon-btn.danger:hover:not(:disabled) { background: #4a2f2b; color: #ffd0ca; }
+.adapter-icon-btn.confirm { background: #5a2f2a; color: #ffd0ca; }
