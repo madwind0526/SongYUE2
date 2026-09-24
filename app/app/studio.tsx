@@ -3243,7 +3243,10 @@ function AdapterCard({ item, onChanged, notify, running, setRunning }: { item: A
   return <article className="adapter-card">
     <div className="adapter-card-head">
       {editing ? <Input value={title} maxLength={120} onChange={event => setTitle(event.target.value)} aria-label="LoRA 이름"/> : <strong>{item.displayName}</strong>}
-      {item.kind && <span className="adapter-badge kind">{KIND_LABEL[item.kind] || item.kind}</span>}
+      <span className="adapter-card-tools">{item.kind && <span className="adapter-badge kind">{KIND_LABEL[item.kind] || item.kind}</span>}
+        {confirming
+          ? <button type="button" className="adapter-icon-btn danger confirm" aria-label={`${item.displayName} 삭제 확인`} onClick={() => void remove()}><Trash2 size={14}/>삭제?</button>
+          : <button type="button" className="adapter-icon-btn danger" aria-label={`${item.displayName} 삭제`} title="삭제" onClick={() => setConfirming(true)} onBlur={() => setConfirming(false)}><Trash2 size={15}/></button>}</span>
     </div>
     <div className="adapter-meta">
       <span className={`adapter-chip stage-${item.stage}`}>{STAGE_LABEL[item.stage] || item.stage}</span>
@@ -3262,7 +3265,7 @@ function AdapterCard({ item, onChanged, notify, running, setRunning }: { item: A
       {editing ? <><Button size="sm" onClick={() => void save()}><Check size={14}/>저장</Button><Button size="sm" variant="outline" onClick={() => { setEditing(false); setTitle(item.displayName); setNote(item.note); }}>취소</Button></>
         : <><Button size="sm" variant="outline" onClick={() => setEditing(true)}><Pencil size={14}/>이름·메모</Button>
           <Button size="sm" variant="outline" disabled={running} onClick={() => void verify()}>{busy ? <LoaderCircle className="spin" size={14}/> : <ShieldCheck size={14}/>}엔진 검사</Button>
-          {confirming ? <><Button size="sm" variant="destructive" onClick={() => void remove()}>정말 삭제</Button><Button size="sm" variant="outline" onClick={() => setConfirming(false)}>취소</Button></> : <Button size="sm" variant="outline" onClick={() => setConfirming(true)}><Trash2 size={14}/>삭제</Button>}</>}
+</>}
     </div>
   </article>;
 }
