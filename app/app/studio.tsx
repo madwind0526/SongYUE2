@@ -3058,15 +3058,6 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
       <DialogContent className="studio-dialog voice-convert-browser-dialog" style={{ width: 560 }}>
         <DialogTitle>온라인에서 RVC 목소리 찾기</DialogTitle>
         <DialogDescription>HuggingFace에 공개된 RVC 목소리를 검색해 받습니다. 받은 목소리는 "내장 목소리" 목록에 초록색으로 추가됩니다.</DialogDescription>
-              {rvcInstalled.length > 0 && <>
-                <div className="timbre-option-head" style={{ marginTop: 4 }}>받은 목소리 ({rvcInstalled.length})</div>
-                <div style={{ display: 'grid', gap: 4, maxHeight: 140, overflowY: 'auto' }}>
-                  {rvcInstalled.map(voice => <div key={voice.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={voice.repo}><span style={{ color: '#7ee787', fontWeight: 600 }}>{voice.name}</span><small style={{ color: '#7ee787' }}> · 받음</small></span>
-                    <Button variant="outline" size="sm" aria-label="삭제" title="이 목소리 삭제" onClick={() => void deleteRvcOnline(voice.id)} disabled={busy}><Trash2 size={13}/></Button>
-                  </div>)}
-                </div>
-              </>}
               <div style={{ display: 'flex', gap: 6 }}>
                 <Input type="text" placeholder="예) anime, korean, singer (비우면 인기순)" value={rvcSearch} onChange={event => setRvcSearch(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void searchRvcOnline(); }} disabled={busy}/>
                 <Button variant="outline" size="sm" aria-label="검색" disabled={busy || rvcSearching} onClick={() => void searchRvcOnline()}>{rvcSearching ? <LoaderCircle className="spin" size={13}/> : <Search size={13}/>}</Button>
