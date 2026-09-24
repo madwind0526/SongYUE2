@@ -61,13 +61,13 @@ LoRA/LoKr 어댑터는 audio.cpp가 읽지 못해서, **어댑터를 고른 곡�
 | `yue-server.exe` 와 dll (CUDA 빌드, 약 207 MB) | `engine/yue-server/` | YuE2 Studio 포터블의 `resources/yue2-cpp/` 폴더 전체를 복사하거나, `github.com/timoncool/yue2.cpp`를 CMake(CUDA)로 빌드 |
 | `YuE2-3B-Q8_0.gguf` (3.8 GB) | `models/yue-server/` | 허깅페이스 `Serveurperso/YuE2-GGUF` |
 | `YuE2-Vae-F32.gguf` (0.5 GB) | `models/yue-server/` | 같은 저장소 |
-| LoRA 어댑터 | `models/yue-adapters/<이름>/` | 앱의 "LoRA 관리" 화면에서 받기("추천" 탭·"허깅페이스" 탭)·가져오기 |
+| LoRA 어댑터 | `models/yue-adapters/<이름>/` | 앱의 "LoRA 관리" 화면에서 받기("Preset" 탭·"허깅페이스" 탭)·가져오기 |
 
 - **이 앱의 `models/audio-cpp/Yue2-3B-GGUF/yue2-3b-q8_0.gguf`는 yue-server에서 쓸 수 없습니다.** yue-server는 토크나이저가 들어 있는 GGUF를 요구하는데(로드 시 `Tokenizer not found in …`), audio.cpp용 GGUF는 토크나이저를 별도 sidecar 파일로 둡니다. 그래서 위 두 파일이 따로 필요합니다(합계 약 4.3 GB 추가).
 - 포트는 `127.0.0.1:8189`(`C:\Claude\PORTS.md`). "노래 만들기" 때 필요하면 앱이 시작하고 곡이 끝나면 종료하므로 GPU 메모리를 계속 점유하지 않습니다. 이미 같은 포트에서 서버가 떠 있으면 그것을 재사용하고 끄지 않습니다.
 - 어댑터 폴더 하나 = LoRA 하나입니다. 폴더에 `.safetensors` 파일이 1~2개(작곡 쪽 AR과 사운드 쪽 NAR을 따로 받은 경우 2개)와 앱이 적는 `songyue2-adapter.json`(이름, 종류, 설명, 트리거 단어, 추천 강도, 출처와 커밋)이 들어갑니다. 직접 넣은 폴더도 인식하며, 그때는 `adapter_config.json`의 `"ar": true` 여부로 AR/NAR을 추정하고 "엔진 검사"를 누르면 엔진이 알려 주는 실제 범위(작곡/사운드)로 바뀝니다.
 - 확인한 형식: PEFT/일반 LoRA(`lora_A/lora_B`), ComfyUI용 파일, bf16 파일, LoKr 모두 로드됨. DoRA·LoHa·PiSSA 델타는 엔진이 거부합니다. AR(작곡) 쪽만 바꾸는 파일, NAR(사운드) 쪽만 바꾸는 파일, 둘 다 바꾸는 파일이 있고, 곡 만들기의 LoRA 선택은 **작곡 강도와 사운드 강도를 따로** 받습니다(yue-server의 `ar_scale`/`nar_scale`).
-- **추천 탭**(내부 이름은 catalog, `backend/adapter-catalog.json`)는 `node scripts/build-adapter-catalog.mjs`로 만듭니다. 각 항목의 설명·추천 강도·트리거는 공개 모델 카드를 보고 손으로 적고, 파일 크기와 다운로드가 고정되는 커밋은 허깅페이스 API에서 읽습니다. 모든 파일을 실제로 yue-server에 로드해 AR/NAR 범위를 확인했습니다.
+- **Preset 탭**(내부 이름은 catalog, `backend/adapter-catalog.json`)는 `node scripts/build-adapter-catalog.mjs`로 만듭니다. 각 항목의 설명·추천 강도·트리거는 공개 모델 카드를 보고 손으로 적고, 파일 크기와 다운로드가 고정되는 커밋은 허깅페이스 API에서 읽습니다. 모든 파일을 실제로 yue-server에 로드해 AR/NAR 범위를 확인했습니다.
 - **허깅페이스 탭**은 `yue2` 검색 결과에서 YuE2 어댑터만 골라(다른 모델의 LoRA, 모델 변환본 제외) 태그·언어·라이선스·샘플 수·파일 이름에서 분류하고, 저장소를 열면 README 첫 문단과 샘플 음원, 받을 수 있는 파일을 보여 줍니다. 작곡(AR) 파일 1개와 사운드(NAR) 파일 1개를 함께 고르면 하나의 LoRA로 묶습니다.
 - 제한: LoRA를 쓰는 곡은 "악기만" 모드를 지원하지 않습니다(악기만은 audio.cpp 쪽에서 무보컬 악보를 만들어 쓰는 방식이라 이 엔진에 옮기지 않았습니다). 같은 시드여도 audio.cpp와 yue-server의 결과는 다릅니다. 비상업(cc-by-nc) 라이선스인 LoRA가 많아 화면에 "비상업용"으로 표시합니다.
 - 실측(RTX 5070 12 GB): 30초 곡 약 14초, 1분 39초 곡 34초(추론 단계 32).

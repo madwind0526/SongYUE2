@@ -3302,7 +3302,7 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
 
   const reload = () => api<AdapterList>('/adapters').then(setMine).catch(error => notify((error as Error).message, true));
   const reloadCatalog = () => api<{ entries: CatalogEntry[] }>('/adapters/catalog').then(result => setCatalog(result.entries)).catch(error => notify((error as Error).message, true));
-  useEffect(() => { void reload(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void reload(); void reloadCatalog(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (tab === 'catalog') void reloadCatalog(); }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
   async function loadHub() {
     setHubLoading(true); setHubError('');
@@ -3363,10 +3363,10 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
   const unitsBytes = (detail?.units || []).filter(unit => unitsPicked.includes(unit.path)).reduce((sum, unit) => sum + unit.size, 0);
 
   return <section className="adapter-page page-scroll">
-    <div className="page-heading"><span className="eyebrow">노래의 색깔을 바꾸는 작은 모델</span><h1>LoRA 관리</h1><p>스타일, 아티스트, 사운드를 가르치는 작은 추가 모델입니다. 추천 목록이나 허깅페이스에서 받고, 곡을 만들 때 "고급 설정"에서 골라 각 부분의 강도를 조절합니다.</p></div>
+    <div className="page-heading"><span className="eyebrow">노래의 색깔을 바꾸는 작은 모델</span><h1>LoRA 관리</h1><p>스타일, 아티스트, 사운드를 가르치는 작은 추가 모델입니다. Preset이나 허깅페이스에서 받고, 곡을 만들 때 "고급 설정"에서 골라 각 부분의 강도를 조절합니다.</p></div>
     <div className="adapter-tabs" role="tablist">
       <button role="tab" aria-selected={tab === 'mine'} className={tab === 'mine' ? 'active' : ''} onClick={() => setTab('mine')}>Installed{mine ? ` (${mine.adapters.length})` : ''}</button>
-      <button role="tab" aria-selected={tab === 'catalog'} className={tab === 'catalog' ? 'active' : ''} onClick={() => setTab('catalog')}>추천</button>
+      <button role="tab" aria-selected={tab === 'catalog'} className={tab === 'catalog' ? 'active' : ''} onClick={() => setTab('catalog')}>Preset{catalog ? ` (${catalog.length})` : ''}</button>
       <button role="tab" aria-selected={tab === 'hub'} className={tab === 'hub' ? 'active' : ''} onClick={() => setTab('hub')}>허깅페이스</button>
     </div>
     {mine && !mine.engineReady && <p className="field-hint warning">LoRA로 곡을 만들려면 엔진 파일이 더 필요합니다 (없는 것: {mine.missing.join(', ')}). docs/models.md의 "LoRA 엔진"을 확인해 주세요.</p>}
@@ -3379,7 +3379,7 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
         <Textarea value={importPaths} placeholder="C:/Users/me/loras/my-style.safetensors" aria-label="가져올 파일 경로" onChange={event => setImportPaths(event.target.value)}/>
       </div>
       {mine ? (mine.adapters.length ? <div className="adapter-grid">{mine.adapters.map(item => <AdapterCard key={item.name} item={item} onChanged={() => void reload()} notify={notify} running={running} setRunning={setRunning}/>)}</div>
-        : <div className="empty-library"><h2>받은 LoRA가 아직 없어요</h2><p>추천 목록에서 마음에 드는 것을 받거나, 가지고 있는 파일을 가져오세요.</p><Button variant="outline" className="soft-button" onClick={() => setTab('catalog')}><Search/>추천 목록 보기</Button></div>)
+        : <div className="empty-library"><h2>받은 LoRA가 아직 없어요</h2><p>Preset에서 마음에 드는 것을 받거나, 가지고 있는 파일을 가져오세요.</p><Button variant="outline" className="soft-button" onClick={() => setTab('catalog')}><Search/>Preset 보기</Button></div>)
         : <p className="field-hint"><LoaderCircle className="spin" size={14}/> 불러오는 중…</p>}
     </>}
 
@@ -3445,7 +3445,7 @@ function AdapterPicker({ selected, onChange, openManager, style, onInsertTrigger
   const toggle = (item: AdapterItem, on: boolean) => onChange(on ? [...selected, { name: item.name, arScale: item.scales.ar, narScale: item.scales.nar }] : selected.filter(entry => entry.name !== item.name));
   const setScale = (name: string, part: 'arScale' | 'narScale', value: number) => onChange(selected.map(entry => entry.name === name ? { ...entry, [part]: value } : entry));
   return <div className="wide-field adapter-picker"><span className="field-label">LoRA <button type="button" className="link-button" onClick={openManager}>관리·받기</button></span>
-    {list.adapters.length === 0 ? <span className="vocal-gender-hint">받은 LoRA가 없습니다. "관리·받기"에서 추천 목록이나 허깅페이스의 LoRA를 받을 수 있습니다.</span> : list.adapters.map(item => {
+    {list.adapters.length === 0 ? <span className="vocal-gender-hint">받은 LoRA가 없습니다. "관리·받기"에서 Preset이나 허깅페이스의 LoRA를 받을 수 있습니다.</span> : list.adapters.map(item => {
       const chosen = selected.find(entry => entry.name === item.name);
       const hasAr = item.stage === 'ar' || item.stage === 'both' || item.stage === 'unknown';
       const hasNar = item.stage === 'nar' || item.stage === 'both' || item.stage === 'unknown';
