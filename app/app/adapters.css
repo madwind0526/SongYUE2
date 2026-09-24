@@ -118,3 +118,13 @@ button.adapter-card, label.adapter-card { cursor: pointer; }
 .adapter-import > strong { grid-column: 1 / -1; }
 .adapter-import-main { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .adapter-import .adapter-import-go { align-self: stretch; height: auto; min-height: 96px; flex-direction: column; gap: 8px; font-size: 15px; font-weight: 600; }
+
+/* import box, second version: 2 rows (drop zone / file names + name field on one line) with the button beside exactly those rows; the hint goes below */
+.adapter-import { grid-template-rows: auto auto auto; }
+.adapter-import .adapter-import-go { grid-row: 2; grid-column: 2; min-height: 0; }
+.adapter-import-main { grid-row: 2; grid-column: 1; }
+.adapter-import > .adapter-sub { grid-column: 1 / -1; }
+.adapter-import-namerow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; align-items: start; }
+.adapter-import-files.empty { padding: 9px 12px; border-radius: 7px; border: 1px dashed #364434; color: #667a60; font-size: 12.5px; }
+/* the chosen-file chip and the name field have the same height */
+.adapter-import-namerow .adapter-import-files li, .adapter-import-namerow .adapter-import-files.empty { min-height: 40px; box-sizing: border-box; display: flex; align-items: center; }
