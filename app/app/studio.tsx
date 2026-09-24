@@ -2156,6 +2156,9 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
   const recChunksRef = useRef<Blob[]>([]);
   const recStateRef = useRef<'idle' | 'recording' | 'paused'>('idle');
   const micCanvasRef = useRef<HTMLCanvasElement>(null);
+  const [micGain, setMicGain] = useState<'auto' | number>('auto');
+  const micGainRef = useRef<'auto' | number>('auto');
+  micGainRef.current = micGain;
   const micAnalyserRef = useRef<AnalyserNode | null>(null);
   const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const micDeviceInUseRef = useRef('');
@@ -2349,6 +2352,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
   useEffect(() => {
     if (!micPanelOpen) return;
     let frame = 0;
+    let smoothedPeak = 0.05; // slow-decaying peak used by the automatic sensitivity
     const draw = () => {
       frame = requestAnimationFrame(draw);
       const canvas = micCanvasRef.current;
@@ -2369,12 +2373,18 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
       if (!analyser) return;
       const data = new Uint8Array(analyser.fftSize);
       analyser.getByteTimeDomainData(data);
+      // Display sensitivity: automatic (scale so the recent peak fills ~80% of the height, never amplifying pure noise
+      // beyond x30) or a fixed multiplier. This only scales the picture, never the recorded audio.
+      let peak = 0;
+      for (let index = 0; index < data.length; index += 1) peak = Math.max(peak, Math.abs(data[index] - 128) / 128);
+      smoothedPeak = Math.max(peak, smoothedPeak * 0.985);
+      const gain = micGainRef.current === 'auto' ? Math.min(30, Math.max(1, 0.8 / Math.max(smoothedPeak, 0.03))) : micGainRef.current;
       ctx2d.lineWidth = 2 * (window.devicePixelRatio || 1);
       ctx2d.strokeStyle = recStateRef.current === 'recording' ? '#f87171' : recStateRef.current === 'paused' ? '#a3a3a3' : '#7ee787';
       ctx2d.beginPath();
       for (let index = 0; index < data.length; index += 1) {
         const x = (index / (data.length - 1)) * width;
-        const y = (data[index] / 255) * height;
+        const y = Math.min(height, Math.max(0, height / 2 - ((data[index] - 128) / 128) * gain * (height / 2)));
         if (index === 0) ctx2d.moveTo(x, y); else ctx2d.lineTo(x, y);
       }
       ctx2d.stroke();
@@ -2616,6 +2626,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
             <Button variant="outline" size="sm" aria-label="녹음 시작" title="녹음 시작" onClick={() => void startRecording()} disabled={recState !== 'idle' || running}><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 5, background: '#f87171' }}/></Button>
             <Button variant="outline" size="sm" aria-label={recState === 'paused' ? '녹음 계속' : '일시정지'} title={recState === 'paused' ? '녹음 계속' : '일시정지'} onClick={pauseRecording} disabled={recState === 'idle'}>{recState === 'paused' ? <Play size={13}/> : <Pause size={13}/>}</Button>
             <Button variant="outline" size="sm" aria-label="정지" title="정지하고 원본으로 사용" onClick={stopRecording} disabled={recState === 'idle'}><Square size={13}/></Button>
+            <select value={String(micGain)} onChange={event => setMicGain(event.target.value === 'auto' ? 'auto' : Number(event.target.value))} aria-label="파형 감도" title="파형 감도(화면 표시만 키움, 녹음에는 영향 없음)" style={{ background: '#232b23', color: '#e4ece0', border: '1px solid #3b493d', borderRadius: 6, padding: '5px 6px', fontSize: 12 }}><option value="auto">감도 자동</option><option value="1">×1</option><option value="2">×2</option><option value="4">×4</option><option value="8">×8</option><option value="16">×16</option></select>
             <span className="pp-seek-time" style={{ minWidth: 48, textAlign: 'right', color: recState === 'recording' ? '#f87171' : undefined }}>{formatSeekTime(recSeconds)}</span>
             <Button variant="outline" size="sm" aria-label="마이크 닫기" title="마이크 닫기" onClick={closeMicPanel} disabled={running}><X size={13}/></Button>
           </div>
