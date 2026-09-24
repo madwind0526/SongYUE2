@@ -3313,7 +3313,7 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
         await new Promise(resolve => setTimeout(resolve, 700));
         const state = await api<InstallJob>(`/adapters/hub/install/${jobId}`);
         setJob(state);
-        if (state.status === 'done') { notify(`LoRA ${state.names.length}개를 받았습니다. "내 LoRA"에서 확인하세요.`); break; }
+        if (state.status === 'done') { notify(`LoRA ${state.names.length}개를 받았습니다. "Installed" 탭에서 확인하세요.`); break; }
         if (state.status === 'failed') throw new Error(state.error || '다운로드에 실패했습니다.');
       }
       await reload(); void reloadCatalog();
@@ -3351,7 +3351,7 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
   return <section className="adapter-page page-scroll">
     <div className="page-heading"><span className="eyebrow">노래의 색깔을 바꾸는 작은 모델</span><h1>LoRA 관리</h1><p>스타일, 아티스트, 사운드를 가르치는 작은 추가 모델입니다. 카탈로그나 허깅페이스에서 받고, 곡을 만들 때 "고급 설정"에서 골라 각 부분의 강도를 조절합니다.</p></div>
     <div className="adapter-tabs" role="tablist">
-      <button role="tab" aria-selected={tab === 'mine'} className={tab === 'mine' ? 'active' : ''} onClick={() => setTab('mine')}>내 LoRA{mine ? ` · ${mine.adapters.length}` : ''}</button>
+      <button role="tab" aria-selected={tab === 'mine'} className={tab === 'mine' ? 'active' : ''} onClick={() => setTab('mine')}>Installed{mine ? ` (${mine.adapters.length})` : ''}</button>
       <button role="tab" aria-selected={tab === 'catalog'} className={tab === 'catalog' ? 'active' : ''} onClick={() => setTab('catalog')}>카탈로그</button>
       <button role="tab" aria-selected={tab === 'hub'} className={tab === 'hub' ? 'active' : ''} onClick={() => setTab('hub')}>허깅페이스</button>
     </div>
