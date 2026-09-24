@@ -2282,6 +2282,28 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         res.writeHead(200, { 'Content-Type': 'audio/wav', 'Content-Length': String(data.length), 'Cache-Control': 'no-store' });
         return res.end(data);
       }
+      // RVC voice preview: converts the first seconds of the loaded source vocal into the chosen voice (cached per settings).
+      const rvcPreviewMatch = pathname.match(/^\/api\/timbre-transform\/([^/]+)\/rvc-preview$/);
+      if (rvcPreviewMatch && req.method === 'POST') {
+        const input = await body(req, 64 * 1024);
+        const dir = timbrePreviewDir(rvcPreviewMatch[1]);
+        const vocals = path.join(dir, 'stems', 'vocals-original.wav');
+        if (!(await exists(vocals))) throw fail(404, '원본 오디오 준비 정보를 찾을 수 없습니다. 원본을 다시 선택해 주세요.');
+        const voice = text(input.rvcVoice, 20);
+        const semitone = Math.max(-24, Math.min(24, Math.round(Number(input.rvcSemitone)) || 0));
+        const blend = Math.max(0, Math.min(1, Number(input.rvcRetrieval) || 0));
+        const cacheFile = path.join(dir, `rvc-preview-${voice.replace(/[^\w-]+/g, '_')}-${semitone}-${blend}.wav`);
+        if (await exists(cacheFile)) return send(200, { dataUrl: `data:audio/wav;base64,${(await readFile(cacheFile)).toString('base64')}`, cached: true });
+        if (generating) throw fail(409, '이미 다른 작업을 실행 중입니다. 완료 후 다시 시도해 주세요.');
+        generating = true;
+        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 40000 };
+        try {
+          const clip = path.join(dir, 'rvc-preview-source.wav');
+          if (!(await exists(clip))) await runFfmpegCli(['-y', '-i', vocals, '-t', '8', '-ar', '44100', '-ac', '1', clip], 'RVC 미리듣기 입력 준비');
+          await runRvcSvc(clip, cacheFile, { rvcVoice: voice, rvcSemitone: semitone, rvcRetrieval: blend });
+          return send(200, { dataUrl: `data:audio/wav;base64,${(await readFile(cacheFile)).toString('base64')}`, cached: false });
+        } finally { generating = false; generationStatus = null; }
+      }
       const timbreLegacyApplyMatch = pathname.match(/^\/api\/timbre-transform\/([^/]+)\/legacy\/apply$/);
       if (timbreLegacyApplyMatch && req.method === 'POST') {
         const input = await body(req, 50 * 1024 * 1024);

@@ -1875,6 +1875,14 @@ test('음색 변조 - RVC/MeanVC2: RVC는 참조 없이 내장 목소리로, Mea
   assert.ok(rvcCall.args.includes('voice_id=chocola') && rvcCall.args.includes('semitone_shift=3') && rvcCall.args.includes('retrieval_blend=0.5'));
   assert.ok(!rvcCall.args.includes('--voice-ref'));
 
+  // voice preview: first 8 s of the source vocal through RVC, cached per voice/semitone/blend
+  const previewBefore = fakeSpawn.calls.length;
+  const rvcPreview = await callJson(`/api/timbre-transform/${previewId}/rvc-preview`, 'POST', { rvcVoice: 'fraise', rvcSemitone: 0, rvcRetrieval: 0 });
+  assert.equal(rvcPreview.status, 200);
+  assert.equal(rvcPreview.data.cached, false);
+  assert.ok(fakeSpawn.calls.slice(previewBefore).some(c => c.args.includes('voice_id=fraise')));
+  assert.equal((await callJson(`/api/timbre-transform/${previewId}/rvc-preview`, 'POST', { rvcVoice: 'fraise', rvcSemitone: 0, rvcRetrieval: 0 })).data.cached, true);
+
   // MeanVC2 is zero-shot from the reference clip and requires it
   assert.equal((await apply({ engine: 'meanvc2' })).status, 400);
   const mean = await apply({ engine: 'meanvc2', dataUrl: refDataUrl });
