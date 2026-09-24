@@ -10,6 +10,7 @@ import { parseNoteEvents, encodeMidiFile } from './midi.mjs';
 import { startDdspJob, killDdspJob } from './ddsp-svc.mjs';
 import { searchRvcVoices, downloadRvcVoice, listInstalledRvcVoices, resolveUserRvcVoice, deleteRvcVoice } from './rvcvoices.mjs';
 import { TYPECAST_LANGUAGES, typecastSubscription, listTypecastVoices, typecastSpeak, recommendTypecastVoice, cloneTypecastVoice, deleteTypecastVoice, TypecastError } from './typecast.mjs';
+import { readWavPcm16, wavFromPcm16, findSpeechSegments, spliceSegments } from './speechedit.mjs';
 import { ASR_FAMILIES, VC_FAMILIES, EDIT_FAMILIES, buildEditText, TTS_FAMILIES, STYLE_FAMILIES, presetVoice, findTtsModel, isTtsModelInstalled, listTtsModels, splitTtsText, splitTtsByScript, buildTtsArgs, downloadTtsModel } from './tts.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -1026,8 +1027,9 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     await runTtsCli(args, textOut);
     return (await readFile(textOut, 'utf8')).trim();
   }
-  // Speech editing (DotTTS Edit): edits words of a recording while keeping the speaker. The transcript comes from the
-  // UI (or from the ASR model when empty); the edits are turned into DotTTS edit tags.
+  // Speech editing (DotTTS Edit). DotTTS re-synthesizes everything it is given and can garble untouched words in
+  // long inputs, so the recording is split at silences into sentences: each sentence is transcribed (STT), only
+  // the sentences that contain an edit are re-synthesized, and the rest of the original samples stay untouched.
   async function editSpeech(input) {
     const model = findTtsModel('dotsedit', 'edit', '기본', text(input.precision, 12) || 'q8_0');
     if (!model) throw fail(400, '지원하지 않는 대사 편집 모델 조합입니다.');
@@ -1039,15 +1041,49 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     await mkdir(workDir, { recursive: true });
     try {
       const wav = await normalizeInputAudio(workDir, input.audioDataUrl);
+      const { rate, samples } = readWavPcm16(await readFile(wav));
+      const segments = findSpeechSegments(samples, rate);
+      if (!segments.length) throw fail(400, '오디오에서 말소리를 찾지 못했습니다.');
       const languageKey = text(input.language, 8);
-      let sourceText = text(input.sourceText, 4000).trim();
-      if (!sourceText) sourceText = await transcribeWav(workDir, wav, languageKey, text(input.asrFamily, 20), text(input.asrSize, 8), text(input.asrPrecision, 8));
-      let tagged;
-      try { tagged = buildEditText(sourceText, edits); } catch (error) { throw fail(400, error.message); }
-      const outputWav = path.join(workDir, 'edited.wav');
+      const providedText = text(input.sourceText, 4000).trim();
+      const segmentFile = async (index) => {
+        const file = path.join(workDir, `segment-${index}.wav`);
+        await writeFile(file, wavFromPcm16(samples.subarray(segments[index].start, segments[index].end), rate));
+        return file;
+      };
+      // Transcript of every sentence (a single-sentence recording uses the text the user typed, if any).
+      const transcripts = [];
+      for (let index = 0; index < segments.length; index += 1) {
+        if (segments.length === 1 && providedText) transcripts.push(providedText);
+        else transcripts.push(await transcribeWav(workDir, await segmentFile(index), languageKey, text(input.asrFamily, 20), text(input.asrSize, 8), text(input.asrPrecision, 8)));
+      }
+      // Give every edit to the first sentence that contains its text (every sentence when `all` is set).
+      const perSegment = segments.map(() => []);
+      for (const edit of edits) {
+        const hits = transcripts.map((value, index) => (value.includes(edit.find) ? index : -1)).filter((index) => index >= 0);
+        if (!hits.length) throw fail(400, `원문에서 "${edit.find}"을(를) 찾지 못했습니다. 인식된 문장: ${transcripts.join(' / ').slice(0, 300)}`);
+        for (const index of edit.all ? hits : hits.slice(0, 1)) perSegment[index].push(edit);
+      }
       const languageValue = model.family.languages[languageKey];
-      await runTtsCli(['--task', 'tts', '--family', model.family.cliFamily, '--model', path.join(root, model.relativePath), ...(languageValue ? ['--language', languageValue] : []), '--text', tagged, '--request-option', `source_audio=${wav}`, '--request-option', 'template_name=edit', '--out', outputWav]);
-      return { dataUrl: `data:audio/wav;base64,${(await readFile(outputWav)).toString('base64')}`, sourceText, taggedText: tagged };
+      const replacements = [];
+      const taggedLines = [];
+      for (let index = 0; index < segments.length; index += 1) {
+        if (!perSegment[index].length) continue;
+        let tagged;
+        try { tagged = buildEditText(transcripts[index], perSegment[index]); } catch (error) { throw fail(400, error.message); }
+        const editedRaw = path.join(workDir, `edited-${index}.wav`);
+        await runTtsCli(['--task', 'tts', '--family', model.family.cliFamily, '--model', path.join(root, model.relativePath), ...(languageValue ? ['--language', languageValue] : []), '--text', tagged, '--request-option', `source_audio=${await segmentFile(index)}`, '--request-option', 'template_name=edit', '--out', editedRaw]);
+        const editedWav = path.join(workDir, `edited-${index}-fit.wav`);
+        await runFfmpegCli(['-y', '-i', editedRaw, '-ar', String(rate), '-ac', '1', editedWav], '편집 결과 변환');
+        const edited = readWavPcm16(await readFile(editedWav)).samples;
+        // Short fades hide the seam between the original and the re-synthesized sentence.
+        const fade = Math.min(Math.round(rate * 0.005), Math.floor(edited.length / 2));
+        for (let position = 0; position < fade; position += 1) { edited[position] = Math.round(edited[position] * (position / fade)); edited[edited.length - 1 - position] = Math.round(edited[edited.length - 1 - position] * (position / fade)); }
+        replacements.push({ start: segments[index].start, end: segments[index].end, samples: edited });
+        taggedLines.push(tagged);
+      }
+      const merged = spliceSegments(samples, replacements);
+      return { dataUrl: `data:audio/wav;base64,${wavFromPcm16(merged, rate).toString('base64')}`, sourceText: transcripts.join(' '), taggedText: taggedLines.join(' / '), segmentCount: segments.length, editedCount: replacements.length };
     } finally {
       await rm(workDir, { recursive: true, force: true }).catch(() => {});
     }

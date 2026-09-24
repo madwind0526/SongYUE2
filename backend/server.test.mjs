@@ -1989,3 +1989,26 @@ test('speech edit builds DotTTS tags from word edits and validates its inputs', 
   assert.throws(() => buildEditText(source, [{ op: 'del', find: '없는말' }]), /찾지 못했습니다/);
   assert.throws(() => buildEditText(source, [{ op: 'del', find: '오후 세' }, { op: 'del', find: '세 시' }]), /겹칩니다/);
 });
+
+test('speech edit splits a recording at silences and splices re-synthesized sentences back', async () => {
+  const { findSpeechSegments, spliceSegments, wavFromPcm16, readWavPcm16 } = await import('./speechedit.mjs');
+  const rate = 16000;
+  const burst = (seconds) => Int16Array.from({ length: Math.round(seconds * rate) }, (_, index) => Math.round(Math.sin(index / 5) * 12000));
+  const silence = (seconds) => new Int16Array(Math.round(seconds * rate));
+  const parts = [silence(0.3), burst(1), silence(0.6), burst(1.5), silence(0.5), burst(0.2), silence(0.6), burst(1)];
+  const samples = new Int16Array(parts.reduce((sum, part) => sum + part.length, 0));
+  let position = 0;
+  for (const part of parts) { samples.set(part, position); position += part.length; }
+  const segments = findSpeechSegments(samples, rate);
+  // the 0.2 s blip is merged into its neighbor instead of becoming its own sentence
+  assert.equal(segments.length, 3);
+  assert.ok(segments[0].start < 0.3 * rate && segments[0].end > 1.3 * rate - 0.2 * rate);
+  const replacement = new Int16Array(100).fill(7);
+  const spliced = spliceSegments(samples, [{ start: segments[1].start, end: segments[1].end, samples: replacement }]);
+  assert.equal(spliced.length, samples.length - (segments[1].end - segments[1].start) + 100);
+  assert.deepEqual([...spliced.subarray(0, segments[1].start)], [...samples.subarray(0, segments[1].start)]);
+  assert.deepEqual([...spliced.subarray(spliced.length - 50)], [...samples.subarray(samples.length - 50)]);
+  const roundTrip = readWavPcm16(wavFromPcm16(samples.subarray(0, 2000), rate));
+  assert.equal(roundTrip.rate, rate);
+  assert.deepEqual([...roundTrip.samples], [...samples.subarray(0, 2000)]);
+});
