@@ -2627,15 +2627,15 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
         </>}
         {needsAudio && <div>
           <div className="at-section-head" style={{ marginTop: 18 }}>{audioLabel} 선택</div>
-          <div className="voice-convert-topbar">
+          <div className="voice-convert-topbar" style={{ justifyContent: 'flex-start' }}>
             <Button variant="outline" className="voice-convert-file-btn" onClick={() => fileInputRef.current?.click()} disabled={running} title={audioName || undefined}>
               <Upload size={14}/><span className="voice-convert-file-name">{audioName || `${audioLabel} 선택`}</span>
             </Button>
             <Button variant="outline" onClick={() => setAudioPickerOpen(true)} disabled={running}><FolderOpen size={14}/>라이브러리</Button>
+            {isVc && <Button variant="outline" style={{ marginLeft: 'auto' }} onClick={() => void openMicPanel()} disabled={running}><Mic size={14}/>마이크 입력 (녹음)</Button>}
             <input ref={fileInputRef} type="file" accept="audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/mp4,audio/ogg" hidden onChange={handlePickFile}/>
           </div>
           {isVc && <>
-            <Button variant="outline" size="sm" style={{ marginTop: 8 }} onClick={() => void openMicPanel()} disabled={running}><Mic size={13}/>마이크 입력 (녹음)</Button>
             <div className="at-section-head" style={{ marginTop: 18 }}>참조 목소리 선택 (목표 음색)</div>
             <div className="voice-convert-topbar">
               <Button variant="outline" className="voice-convert-file-btn" onClick={() => refInputRef.current?.click()} disabled={running} title={refName || undefined}>
