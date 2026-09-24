@@ -25,11 +25,7 @@
 
 ### 남은 일 (우선순위 순) — 각 단계의 상세 절차는 `progress.md` "다음 에이전트용 상세 계획" 참고
 
-- [ ] **P0. 마무리/정리** (먼저)
-  - [ ] 브라우저에서 새 Audio Tools(음성 인식·음성 조절 탭)와 음색 변조(AuK 탭 제거 확인) 화면 실확인
-  - [ ] README.md·docs/*.md·memory-bank/*·`test/tts-model-comparison/bench.mjs`(AuK Whisper 사용 중 → `/api/audio-tools/asr`로 교체)에서 AuK 언급 정리 (`grep -rni auk`)
-  - [ ] `scripts/download_models.py`의 audio.cpp-gguf prefixes와 `docs/audiocpp-setup.md`의 `-Models` 목록 갱신(앱 내 다운로드로 대체함을 문서화)
-  - [ ] memory-bank(STATE/CACHE flush, active-context) 갱신 후 커밋
+- [x] **P0. 마무리/정리** (완료 2026-09-24, 커밋 `6471683`): AuK 언급 정리(README/docs/memory-bank), `bench.mjs` 전사를 앱 ASR로 교체, `docs/audiocpp-setup.md`에 Audio Tools 모델 절차 추가, memory-bank flush. 화면 실확인·Typecast 유료 복제·VibeVoice-ASR은 사용자가 직접 확인함(더 할 일 없음). 남은 미커밋: EOL만 다른 `globals.css/layout.tsx/page.tsx/studio.css`(내용 변경 없음, 무시).
 - [x] **P0-b. 음성 인식 다중 모델 선택 + 다운로드** (완료 2026-09-24): Qwen3-ASR(0.6B/1.7B) / Nemotron 3.5 ASR / Fun-ASR-Nano(ko 미지원) / VibeVoice-ASR(약 10GB)를 모델→크기→정밀도로 선택, 미설치는 "모델 받기". 엔진에 `nemotron_asr,fun_asr_nano,vibevoice_asr` 빌드 포함. 한국어 실측: Qwen3-ASR 1.7B가 가장 정확, Nemotron은 일부 오인식. 남은 것: VibeVoice-ASR/Fun-ASR 실제 다운로드 후 동작 확인(VibeVoice는 VRAM 10GB 필요), 모델별 CER 비교표를 test/ 에 기록
 - [ ] **P1. 음성 변환에 RVC·MeanVC2 추가** (음색 변조 창의 모델 Selection 버튼 확장)
 - [x] **P2. TTS 추가 모델 옵션** (1차 완료 2026-09-24): VoxCPM2(design+ref, CER 0.000~0.017, 최고), OmniVoice(ref 전용, 참조 텍스트 자동 ASR) 추가. 한국어 미지원 모델은 제외 원칙. Supertonic 3 추가(프리셋 목소리 10개, 한/영/혼합 CER 0.000, 새 탭 "TTS (프리셋 목소리)"). Fish Audio S2 Pro INT8 추가·실측(한국어 CER 0.000, 혼합문 0.263, 생성 17~22초). 스타일 지시(선택) 입력칸을 CosyVoice3(instruct 템플릿)·VoxCPM2("(style)text")에 추가, 나머지 모델은 비활성. 미확인: Fish 스타일 태그 문법, Qwen3 CustomVoice(--instruct). IndexTTS2는 한국어 미표기라 제외. 남은 후보(선택): FireRedTTS3 — 필요 시 같은 절차(빌드 목록 추가→다운로드→`bench2.mjs`→`TTS_FAMILIES` 등록)로 추가
