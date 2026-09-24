@@ -3223,6 +3223,8 @@ function AdapterCard({ item, onChanged, notify, running, setRunning }: { item: A
   const [note, setNote] = useState(item.note);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  // the "삭제?" confirmation goes back to the plain icon after a few seconds
+  useEffect(() => { if (!confirming) return; const timer = window.setTimeout(() => setConfirming(false), 3000); return () => window.clearTimeout(timer); }, [confirming]);
   async function save() {
     try { await api(`/adapters/${encodeURIComponent(item.name)}`, 'PATCH', { displayName: title, note }); setEditing(false); onChanged(); }
     catch (error) { notify((error as Error).message, true); }
@@ -3245,7 +3247,7 @@ function AdapterCard({ item, onChanged, notify, running, setRunning }: { item: A
       {editing ? <Input value={title} maxLength={120} onChange={event => setTitle(event.target.value)} aria-label="LoRA 이름"/> : <strong>{item.displayName}</strong>}
       <span className="adapter-card-tools">{item.kind && <span className="adapter-badge kind">{KIND_LABEL[item.kind] || item.kind}</span>}
         {confirming
-          ? <button type="button" className="adapter-icon-btn danger confirm" aria-label={`${item.displayName} 삭제 확인`} onClick={() => void remove()}><Trash2 size={14}/>삭제?</button>
+          ? <button type="button" className="adapter-icon-btn danger confirm" aria-label={`${item.displayName} 삭제 확인`} autoFocus onBlur={() => setConfirming(false)} onClick={() => void remove()}><Trash2 size={14}/>삭제?</button>
           : <button type="button" className="adapter-icon-btn danger" aria-label={`${item.displayName} 삭제`} title="삭제" onClick={() => setConfirming(true)} onBlur={() => setConfirming(false)}><Trash2 size={15}/></button>}</span>
     </div>
     <div className="adapter-meta">
@@ -3281,6 +3283,7 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
   const [mine, setMine] = useState<AdapterList | null>(null);
   const [catalog, setCatalog] = useState<CatalogEntry[] | null>(null);
   const [deleting, setDeleting] = useState('');
+  useEffect(() => { if (!deleting) return; const timer = window.setTimeout(() => setDeleting(''), 3000); return () => window.clearTimeout(timer); }, [deleting]);
   const [kind, setKind] = useState('');
   const [hub, setHub] = useState<HubRepo[] | null>(null);
   const [hubError, setHubError] = useState('');
@@ -3387,7 +3390,7 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
       <div className="adapter-grid catalog">{catalogShown.map(entry => <article key={entry.id} className={`adapter-card catalog${entry.installed ? ' installed' : ''}`}>
         <div className="adapter-card-head"><strong>{entry.name}</strong><span className="adapter-card-tools"><span className="adapter-badge kind">{entry.kindLabel}</span>{entry.installed
           ? (deleting === entry.id
-            ? <button type="button" className="adapter-icon-btn danger confirm" aria-label={`${entry.name} 삭제 확인`} onClick={event => { event.preventDefault(); event.stopPropagation(); void removeCatalogEntry(entry); }}><Trash2 size={14}/>삭제?</button>
+            ? <button type="button" className="adapter-icon-btn danger confirm" aria-label={`${entry.name} 삭제 확인`} autoFocus onBlur={() => setDeleting('')} onClick={event => { event.preventDefault(); event.stopPropagation(); void removeCatalogEntry(entry); }}><Trash2 size={14}/>삭제?</button>
             : <button type="button" className="adapter-icon-btn danger" aria-label={`${entry.name} 삭제`} title="삭제" onClick={event => { event.preventDefault(); event.stopPropagation(); setDeleting(entry.id); }} onBlur={() => setDeleting('')}><Trash2 size={15}/></button>)
           : <button type="button" className="adapter-icon-btn" aria-label={`${entry.name} 다운로드`} title="다운로드" disabled={Boolean(job)} onClick={event => { event.preventDefault(); event.stopPropagation(); void runInstall('/adapters/catalog/install', { ids: [entry.id] }); }}><Download size={15}/></button>}</span></div>
         <div className="adapter-meta"><span className={`adapter-chip stage-${entry.stage}`}>{STAGE_LABEL[entry.stage] || entry.stage}</span>{entry.trigger && <span className="adapter-chip trigger">트리거 {entry.trigger}</span>}<span className="adapter-sub">{entry.author}</span></div>
