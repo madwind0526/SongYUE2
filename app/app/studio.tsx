@@ -3062,10 +3062,16 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
         <DialogDescription>온라인에서 받은 목소리입니다. 삭제하면 "내장 목소리" 목록에서도 사라집니다.</DialogDescription>
         <div style={{ display: 'grid', gap: 6, maxHeight: 380, overflowY: 'auto' }}>
           {rvcInstalled.length === 0 && <span className="field-hint">받은 목소리가 없습니다. "온라인에서 RVC 목소리 찾기"로 받을 수 있습니다.</span>}
-          {rvcInstalled.map(voice => <div key={voice.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={voice.repo}><span style={{ color: '#7ee787', fontWeight: 600 }}>{voice.name}</span><small style={{ opacity: 0.6 }}> · {voice.repo}{voice.hasIndex ? ' · 블렌딩 가능' : ' · 블렌딩 불가'}</small></span>
-            <Button variant="outline" size="sm" aria-label="삭제" title="이 목소리 삭제" onClick={() => void deleteRvcOnline(voice.id)} disabled={busy}><Trash2 size={13}/></Button>
-          </div>)}
+          {rvcInstalled.map(voice => {
+            // Title only: underscores become spaces and long names are cut with an ellipsis (full text in the tooltip).
+            const title = voice.name.replace(/_+/g, ' ').trim();
+            const shown = title.length > 28 ? `${title.slice(0, 28)}…` : title;
+            return <div key={voice.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#7ee787', fontWeight: 600 }} title={`${voice.name}
+${voice.repo}${voice.hasIndex ? ' · 블렌딩 가능' : ' · 블렌딩 불가'}`}>{shown}</span>
+              <Button variant="outline" size="sm" aria-label="삭제" title="이 목소리 삭제" onClick={() => void deleteRvcOnline(voice.id)} disabled={busy}><Trash2 size={13}/></Button>
+            </div>;
+          })}
         </div>
       </DialogContent>
     </Dialog>
