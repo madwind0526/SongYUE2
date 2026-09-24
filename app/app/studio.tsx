@@ -3306,7 +3306,7 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
 
   const reload = () => api<AdapterList>('/adapters').then(setMine).catch(error => notify((error as Error).message, true));
   const reloadCatalog = () => api<{ entries: CatalogEntry[] }>('/adapters/catalog').then(result => setCatalog(result.entries)).catch(error => notify((error as Error).message, true));
-  useEffect(() => { void reload(); void reloadCatalog(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void reload(); void reloadCatalog(); void loadHub(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (tab === 'catalog') void reloadCatalog(); }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
   async function loadHub() {
     setHubLoading(true); setHubError('');
@@ -3385,6 +3385,7 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
   }
 
   const installedKeys = new Set((mine?.adapters || []).filter(item => item.source).flatMap(item => item.source!.path.split(' + ').map(file => `${item.source!.repo}::${file}`)));
+  const repoInstalled = (item: HubRepo) => Boolean(item.defaultPaths) && item.defaultPaths!.every(path => installedKeys.has(`${item.id}::${path}`));
   const categories = [...new Set((hub || []).flatMap(item => item.categories))];
   const languages = [...new Set((hub || []).flatMap(item => item.languages))];
   const needle = query.trim().toLowerCase();
@@ -3406,7 +3407,7 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
     <div className="adapter-tabs" role="tablist">
       <button role="tab" aria-selected={tab === 'mine'} className={tab === 'mine' ? 'active' : ''} onClick={() => setTab('mine')}>Installed{mine ? ` (${mine.adapters.length})` : ''}</button>
       <button role="tab" aria-selected={tab === 'catalog'} className={tab === 'catalog' ? 'active' : ''} onClick={() => setTab('catalog')}>Preset{catalog ? ` (${catalog.filter(entry => !entry.installed).length}/${catalog.length})` : ''}</button>
-      <button role="tab" aria-selected={tab === 'hub'} className={tab === 'hub' ? 'active' : ''} onClick={() => setTab('hub')}>허깅페이스</button>
+      <button role="tab" aria-selected={tab === 'hub'} className={tab === 'hub' ? 'active' : ''} onClick={() => setTab('hub')}>허깅페이스{hub ? ` (${hub.filter(item => !repoInstalled(item)).length}/${hub.length})` : ''}</button>
     </div>
     {mine && !mine.engineReady && <p className="field-hint warning">LoRA로 곡을 만들려면 엔진 파일이 더 필요합니다 (없는 것: {mine.missing.join(', ')}). docs/models.md의 "LoRA 엔진"을 확인해 주세요.</p>}
     <InstallBar job={job} label="받는 중"/>
@@ -3461,7 +3462,7 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
         const got = (mine?.adapters || []).filter(adapter => adapter.source?.repo === item.id);
         // blue / trash only when everything this card's download icon fetches is already installed; a repo where you choose files
         // (or only one of its many files was installed from elsewhere) is just marked with how many files were received
-        const installed = Boolean(item.defaultPaths) && item.defaultPaths!.every(path => installedKeys.has(`${item.id}::${path}`));
+        const installed = repoInstalled(item);
         return <article key={item.id} className={`adapter-card catalog hub-card${installed ? ' installed' : ''}`} onClick={() => void openDetail(item.id)}>
           <div className="adapter-card-head"><strong>{item.title}</strong><span className="adapter-card-tools"><span className="adapter-badge">♥ {item.likes}</span>
             {installed
