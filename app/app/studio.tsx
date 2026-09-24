@@ -2134,6 +2134,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
   const [volumeDb, setVolumeDb] = useState('0');
   const [denoise, setDenoise] = useState(false);
   const [audioName, setAudioName] = useState<string | null>(null);
+  const [sourceFromMic, setSourceFromMic] = useState(false);
   const [running, setRunning] = useState(false);
   const [saving, setSaving] = useState(false);
   const [errorText, setErrorText] = useState('');
@@ -2267,9 +2268,10 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
     event.target.value = '';
     if (file) applyPickedAudio(file, file.name);
   }
-  function applyPickedAudio(file: Blob, name: string) {
+  function applyPickedAudio(file: Blob, name: string, fromMic = false) {
     audioBlobRef.current = file;
     setAudioName(name);
+    setSourceFromMic(fromMic);
     const ctx = t.ensureAudioContext();
     file.arrayBuffer().then(bytes => ctx.decodeAudioData(bytes)).then(decoded => t.setBuffer('source', decoded)).catch(() => {});
   }
@@ -2450,7 +2452,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
       recorder.onstop = () => {
         const blob = new Blob(recChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
         // Decode and re-encode as WAV so the backend gets a format it accepts.
-        blob.arrayBuffer().then(bytes => t.ensureAudioContext().decodeAudioData(bytes)).then(decoded => applyPickedAudio(audioBufferToWavBlob(decoded), '마이크 녹음.wav')).catch(() => setErrorText('녹음을 처리하지 못했습니다.'));
+        blob.arrayBuffer().then(bytes => t.ensureAudioContext().decodeAudioData(bytes)).then(decoded => applyPickedAudio(audioBufferToWavBlob(decoded), '마이크 녹음.wav', true)).catch(() => setErrorText('녹음을 처리하지 못했습니다.'));
       };
       recorderRef.current = recorder;
       recorder.start(250);
@@ -2532,6 +2534,14 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
       URL.revokeObjectURL(blobUrl);
       notify(`"${suggestedName}" 파일을 내려받았습니다.`);
     }
+  }
+  // Saves the microphone recording itself (only offered when the source came from the microphone).
+  async function handleSaveSource() {
+    if (!audioBlobRef.current) return;
+    setSaving(true);
+    try { await saveBlob(audioBlobRef.current, '마이크 녹음.wav'); }
+    catch (error) { if ((error as { name?: string }).name !== 'AbortError') setErrorText((error as Error).message); }
+    finally { setSaving(false); }
   }
   async function handleSave() {
     setSaving(true);
@@ -2723,6 +2733,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
             <TransportControls t={t} disabled={!sourceBuffer && !resultBuffer}/>
             <div className="pp-dialog-actions-right">
               <Button variant="outline" onClick={handleCancel} disabled={saving}>취소</Button>
+              {isVc && sourceFromMic && <Button variant="outline" onClick={() => void handleSaveSource()} disabled={saving}><Save size={15}/>원본 저장</Button>}
               <Button onClick={() => void handleSave()} disabled={!canSave}>{saving ? <LoaderCircle className="spin"/> : <Save size={15}/>}저장</Button>
             </div>
           </div>
