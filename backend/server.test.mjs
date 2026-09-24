@@ -1976,3 +1976,16 @@ test('RVC 목소리 검색/다운로드: RVC 모델만 라이선스 표기와 �
   assert.equal((await callJson('/api/rvc-voices/delete', 'POST', { id: 'user:good__voice_rvc' })).status, 200);
   assert.equal((await callJson('/api/rvc-voices')).data.installed.length, 0);
 });
+
+test('speech edit builds DotTTS tags from word edits and validates its inputs', async () => {
+  const { buildEditText } = await import('./tts.mjs');
+  const source = '오늘 회의는 오후 세 시에 시작합니다.';
+  assert.equal(buildEditText(source, [{ op: 'del', find: '오후 ' }]), '오늘 회의는 <del>오후 </del>세 시에 시작합니다.');
+  assert.equal(buildEditText(source, [{ op: 'ins', find: '시작', text: '바로' }]), '오늘 회의는 오후 세 시에 <ins>바로 </ins>시작합니다.');
+  assert.equal(buildEditText(source, [{ op: 'sub', find: '세', text: '네' }, { op: 'del', find: '오늘 ' }]), '<del>오늘 </del>회의는 오후 <sub targ="네">세</sub> 시에 시작합니다.');
+  assert.equal(buildEditText(source, [{ op: 'apd', find: '세 시에', text: '정확히' }]), '오늘 회의는 오후 세 시에<ins> 정확히</ins> 시작합니다.');
+  assert.equal(buildEditText('가 나 가 다 가', [{ op: 'sub', find: '가', text: '라', all: true }]), '<sub targ="라">가</sub> 나 <sub targ="라">가</sub> 다 <sub targ="라">가</sub>');
+  assert.equal(buildEditText('가 나 가', [{ op: 'del', find: '가' }]), '<del>가</del> 나 가');
+  assert.throws(() => buildEditText(source, [{ op: 'del', find: '없는말' }]), /찾지 못했습니다/);
+  assert.throws(() => buildEditText(source, [{ op: 'del', find: '오후 세' }, { op: 'del', find: '세 시' }]), /겹칩니다/);
+});

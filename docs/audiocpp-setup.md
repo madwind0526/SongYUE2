@@ -224,14 +224,18 @@ GGUF 모델로 최종 오디오를 생성하는 데는 이 문서만으로 충�
 | 모델 파일이 없다는 오류 | `scripts/download_models.py`를 아직 안 돌렸거나 중간에 중단됨 — 다시 실행하면 이어받기 |
 | VRAM 부족(OOM) | 더 작은 양자화(BF16→Q8→Q4) 또는 F16 VAE 조합으로 모델 선택 변경 |
 
-## Audio Tools 모델 (TTS / 음성 인식)
+## Audio Tools 모델 (TTS / 음성 인식 / 대사 편집)
 
 "오디오 도구" 페이지의 TTS·음성 인식 모델은 **앱에서 모델·크기·정밀도를 고르고 "모델 받기"로 내려받는다**(`backend/tts.mjs`의 카탈로그, 이어받기 지원, 저장 위치 `models/audio-cpp/audio.cpp-gguf/<폴더>/`). `scripts/download_models.py`의 프리픽스 목록에는 넣지 않았다.
 
 엔진에 패밀리가 컴파일돼 있어야 한다(없으면 "unsupported model family hint"). 재빌드는 `engine\audio.cpp\run-build.ps1`을 실행한다(로그 `build-asr.log`, 끝에 `EXIT=0` 확인). 현재 `-Models` 목록:
 
 ```
-yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc,vevo2,qwen3_tts,chatterbox,qwen3_asr,qwen3_forced_aligner,nemotron_asr,vibevoice_asr,voxcpm2,omnivoice,supertonic,fish_audio,magpie_tts,rvc,meanvc2
+yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc,vevo2,qwen3_tts,chatterbox,qwen3_asr,qwen3_forced_aligner,nemotron_asr,vibevoice_asr,voxcpm2,omnivoice,supertonic,fish_audio,magpie_tts,rvc,meanvc2,dots_tts
 ```
 
 새 모델을 추가하는 절차: ① `-Models`에 패밀리 추가 후 재빌드 ② `backend/tts.mjs`의 `TTS_FAMILIES`/`ASR_FAMILIES`에 파일·크기·정밀도 등록 ③ `buildTtsArgs`에 CLI 인자 분기 추가 ④ 한국어 문장으로 실측(`test/tts-model-comparison/`). 한국어를 지원하지 않는 모델은 넣지 않는다.
+
+### 대사 편집 (DotTTS Edit)
+
+Audio Tools의 "대사 편집" 탭은 `dots_tts` 패밀리의 DotTTS Edit(Q8 약 2.8GB, BF16 약 4.6GB, 폴더 `DotTTS-Edit-GGUF`)를 쓴다. `-Models`에 `dots_tts`가 있어야 한다. 원본 말소리 + 태그가 든 텍스트(`<sub targ="새 말">옛 말</sub>`, `<del>`, `<ins>`)로 편집하며, 태그 없이 원문/목표 문장만 주면 편집이 적용되지 않는다(실측). 화면은 원문(STT 자동 받아쓰기 가능)과 편집 항목(바꾸기/지우기/앞에 넣기/뒤에 넣기, "모두"=같은 말 전부)을 받아 서버(`buildEditText`)가 태그로 바꾼다. 한국어 실측: 지우기·넣기는 정확, 바꾸기는 한 글자 짧은 단어와 문장 전체 교체에서 발음이 어긋남. 노래는 지원하지 않는다. `--language`(ko/en/ja/zh) 지정 여부에 따라 결과가 달라질 수 있어 화면에서 고르게 했다.

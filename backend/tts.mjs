@@ -129,8 +129,47 @@ export const VC_FAMILIES = [
   },
 ];
 
+// Speech editing (change words inside an existing recording, keeping the voice): DotTTS Edit takes tagged text
+// (<sub targ="new">old</sub>, <del>, <ins>) plus the source audio. `languages` maps the UI id to its --language code.
+export const EDIT_FAMILIES = [
+  {
+    id: 'dotsedit', label: 'DotTTS Edit', cliFamily: 'dots_tts', languages: { ko: 'ko', en: 'en', ja: 'ja', zh: 'zh' },
+    variants: [{ mode: 'edit', size: '기본', files: { q8_0: ['DotTTS-Edit-GGUF', 'dots-tts-edit-q8_0.gguf', 2826], bf16: ['DotTTS-Edit-GGUF', 'dots-tts-edit-bf16.gguf', 4567] } }],
+  },
+];
+
+// Builds the tagged edit text from the transcript and a list of {op, find, text}; every `find` must occur in the
+// transcript (first occurrence, or every one with `all`) and edits may not overlap. Returns the tagged string.
+export function buildEditText(source, edits) {
+  const spans = [];
+  for (const edit of edits) {
+    let start = source.indexOf(edit.find);
+    if (start < 0) throw new Error(`원문에서 "${edit.find}"을(를) 찾지 못했습니다.`);
+    // `all` applies the edit to every occurrence instead of only the first one.
+    while (start >= 0) {
+      spans.push({ start, end: start + edit.find.length, edit });
+      start = edit.all ? source.indexOf(edit.find, start + edit.find.length) : -1;
+    }
+  }
+  spans.sort((a, b) => a.start - b.start);
+  for (let index = 1; index < spans.length; index += 1) {
+    if (spans[index].start < spans[index - 1].end) throw new Error('편집 위치가 서로 겹칩니다. 겹치지 않게 나누어 주세요.');
+  }
+  let out = '';
+  let cursor = 0;
+  for (const { start, end, edit } of spans) {
+    out += source.slice(cursor, start);
+    if (edit.op === 'del') out += `<del>${edit.find}</del>`;
+    else if (edit.op === 'ins') out += `<ins>${edit.text} </ins>${edit.find}`;
+    else if (edit.op === 'apd') out += `${edit.find}<ins> ${edit.text}</ins>`;
+    else out += `<sub targ="${edit.text.replace(/"/g, '')}">${edit.find}</sub>`;
+    cursor = end;
+  }
+  return out + source.slice(cursor);
+}
+
 export function findTtsModel(familyId, mode, size, precision) {
-  const family = [...TTS_FAMILIES, ...ASR_FAMILIES, ...VC_FAMILIES].find((item) => item.id === familyId);
+  const family = [...TTS_FAMILIES, ...ASR_FAMILIES, ...VC_FAMILIES, ...EDIT_FAMILIES].find((item) => item.id === familyId);
   const variant = family?.variants.find((item) => item.mode === mode && item.size === size);
   const file = variant?.files[precision];
   if (!family || !variant || !file) return null;

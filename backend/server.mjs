@@ -10,7 +10,7 @@ import { parseNoteEvents, encodeMidiFile } from './midi.mjs';
 import { startDdspJob, killDdspJob } from './ddsp-svc.mjs';
 import { searchRvcVoices, downloadRvcVoice, listInstalledRvcVoices, resolveUserRvcVoice, deleteRvcVoice } from './rvcvoices.mjs';
 import { TYPECAST_LANGUAGES, typecastSubscription, listTypecastVoices, typecastSpeak, recommendTypecastVoice, cloneTypecastVoice, deleteTypecastVoice, TypecastError } from './typecast.mjs';
-import { ASR_FAMILIES, VC_FAMILIES, TTS_FAMILIES, STYLE_FAMILIES, presetVoice, findTtsModel, isTtsModelInstalled, listTtsModels, splitTtsText, splitTtsByScript, buildTtsArgs, downloadTtsModel } from './tts.mjs';
+import { ASR_FAMILIES, VC_FAMILIES, EDIT_FAMILIES, buildEditText, TTS_FAMILIES, STYLE_FAMILIES, presetVoice, findTtsModel, isTtsModelInstalled, listTtsModels, splitTtsText, splitTtsByScript, buildTtsArgs, downloadTtsModel } from './tts.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const providers = new Set(['none', 'ollama', 'claude', 'chatgpt', 'gemini']);
@@ -985,8 +985,8 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const design = input.mode === 'design';
     const preset = input.mode === 'preset';
     const familyId = text(input.family, 40);
-    if ([...ASR_FAMILIES, ...VC_FAMILIES].some((item) => item.id === familyId)) {
-      const asrModel = findTtsModel(familyId, ASR_FAMILIES.some((item) => item.id === familyId) ? 'asr' : 'vc', text(input.size, 20), text(input.precision, 20));
+    if ([...ASR_FAMILIES, ...VC_FAMILIES, ...EDIT_FAMILIES].some((item) => item.id === familyId)) {
+      const asrModel = findTtsModel(familyId, ASR_FAMILIES.some((item) => item.id === familyId) ? 'asr' : EDIT_FAMILIES.some((item) => item.id === familyId) ? 'edit' : 'vc', text(input.size, 20), text(input.precision, 20));
       if (!asrModel) throw fail(400, '지원하지 않는 모델 조합입니다.');
       return { model: asrModel, mode: asrModel.variant.mode, design: false };
     }
@@ -1025,6 +1025,32 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const args = ['--task', 'asr', '--family', model.family.cliFamily, '--model', path.join(root, model.relativePath), '--audio', wav16, ...(languageValue ? ['--language', languageValue] : []), '--text', '', '--text-out', textOut];
     await runTtsCli(args, textOut);
     return (await readFile(textOut, 'utf8')).trim();
+  }
+  // Speech editing (DotTTS Edit): edits words of a recording while keeping the speaker. The transcript comes from the
+  // UI (or from the ASR model when empty); the edits are turned into DotTTS edit tags.
+  async function editSpeech(input) {
+    const model = findTtsModel('dotsedit', 'edit', '기본', text(input.precision, 12) || 'q8_0');
+    if (!model) throw fail(400, '지원하지 않는 대사 편집 모델 조합입니다.');
+    if (!(await isTtsModelInstalled(root, model))) throw fail(409, `${model.family.label} 모델이 설치되어 있지 않습니다. 모델 선택에서 '받기'를 눌러 내려받아 주세요.`);
+    const edits = (Array.isArray(input.edits) ? input.edits : []).slice(0, 20).map((item) => ({ op: ['sub', 'del', 'ins', 'apd'].includes(item?.op) ? item.op : 'sub', find: text(item?.find, 200), text: text(item?.text, 200), all: item?.all === true })).filter((item) => item.find);
+    if (!edits.length) throw fail(400, '편집할 부분을 하나 이상 입력해 주세요.');
+    if (edits.some((item) => item.op !== 'del' && !item.text.trim())) throw fail(400, '바꿀 말 또는 넣을 말을 입력해 주세요.');
+    const workDir = path.join(outputDirectory, `speech-edit-${randomUUID()}`);
+    await mkdir(workDir, { recursive: true });
+    try {
+      const wav = await normalizeInputAudio(workDir, input.audioDataUrl);
+      const languageKey = text(input.language, 8);
+      let sourceText = text(input.sourceText, 4000).trim();
+      if (!sourceText) sourceText = await transcribeWav(workDir, wav, languageKey, text(input.asrFamily, 20), text(input.asrSize, 8), text(input.asrPrecision, 8));
+      let tagged;
+      try { tagged = buildEditText(sourceText, edits); } catch (error) { throw fail(400, error.message); }
+      const outputWav = path.join(workDir, 'edited.wav');
+      const languageValue = model.family.languages[languageKey];
+      await runTtsCli(['--task', 'tts', '--family', model.family.cliFamily, '--model', path.join(root, model.relativePath), ...(languageValue ? ['--language', languageValue] : []), '--text', tagged, '--request-option', `source_audio=${wav}`, '--request-option', 'template_name=edit', '--out', outputWav]);
+      return { dataUrl: `data:audio/wav;base64,${(await readFile(outputWav)).toString('base64')}`, sourceText, taggedText: tagged };
+    } finally {
+      await rm(workDir, { recursive: true, force: true }).catch(() => {});
+    }
   }
   // Pitch/tempo via rubberband (independent), loudness via volume, optional broadband denoise via afftdn.
   async function adjustAudio(input) {
@@ -2384,7 +2410,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         return send(200, { ok: true });
       }
       if (req.method === 'GET' && pathname === '/api/audio-tools/tts/models') {
-        return send(200, { families: await listTtsModels(root, ttsDownloads), asr: await listTtsModels(root, ttsDownloads, ASR_FAMILIES), vc: await withInstalledRvcVoices(await listTtsModels(root, ttsDownloads, VC_FAMILIES)) });
+        return send(200, { families: await listTtsModels(root, ttsDownloads), asr: await listTtsModels(root, ttsDownloads, ASR_FAMILIES), vc: await withInstalledRvcVoices(await listTtsModels(root, ttsDownloads, VC_FAMILIES)), edit: await listTtsModels(root, ttsDownloads, EDIT_FAMILIES) });
       }
       if (req.method === 'POST' && pathname === '/api/audio-tools/tts/download') {
         const input = await body(req, 64 * 1024);
@@ -2460,6 +2486,15 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           } finally { await rm(workDir, { recursive: true, force: true }).catch(() => {}); }
           return send(200, { dataUrl });
         } finally { generating = false; generationStatus = null; }
+      }
+      if (req.method === 'POST' && pathname === '/api/audio-tools/edit') {
+        const input = await body(req, 50 * 1024 * 1024);
+        if (!(typeof input.audioDataUrl === 'string' && input.audioDataUrl.length)) throw fail(400, '편집할 원본 오디오가 필요합니다.');
+        if (generating) throw fail(409, '이미 다른 작업을 실행 중입니다. 완료 후 다시 시도해 주세요.');
+        generating = true;
+        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 30000 };
+        try { return send(200, await editSpeech(input)); }
+        finally { generating = false; generationStatus = null; }
       }
       if (req.method === 'POST' && pathname === '/api/audio-tools/adjust') {
         const input = await body(req, 50 * 1024 * 1024);

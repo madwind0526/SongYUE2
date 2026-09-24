@@ -2079,7 +2079,8 @@ function normalizeTtsSelection(families: TtsFamilyInfo[], mode: 'design' | 'ref'
 }
 const AUDIO_TOOL_CATEGORIES = [
   { id: 'tts', label: 'TTS 생성' },
-  { id: 'asr', label: '음성 인식' },
+  { id: 'asr', label: '음성 인식 (STT)' },
+  { id: 'edit', label: '대사 편집' },
   { id: 'adjust', label: '음성 조절' },
   { id: 'vc', label: '음색 변조' },
 ];
@@ -2129,6 +2130,13 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
   const [asrPrecision, setAsrPrecision] = useState('q8_0');
   const [asrLanguage, setAsrLanguage] = useState<'auto' | 'ko' | 'en' | 'ja' | 'zh'>('ko');
   const [transcript, setTranscript] = useState<string | null>(null);
+  // Speech editing (DotTTS Edit): transcript of the source + a list of word edits
+  const [editModels, setEditModels] = useState<TtsFamilyInfo[]>([]);
+  const [editPrecision, setEditPrecision] = useState('q8_0');
+  const [editLanguage, setEditLanguage] = useState<'auto' | 'ko' | 'en' | 'ja' | 'zh'>('ko');
+  const [editSourceText, setEditSourceText] = useState('');
+  const [editItems, setEditItems] = useState<{ op: 'sub' | 'del' | 'ins' | 'apd'; find: string; text: string; all: boolean }[]>([{ op: 'sub', find: '', text: '', all: false }]);
+  const [transcribing, setTranscribing] = useState(false);
   const [pitch, setPitch] = useState('0');
   const [speed, setSpeed] = useState('1');
   const [volumeDb, setVolumeDb] = useState('0');
@@ -2180,8 +2188,11 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
   const isTypecast = isTts && ttsFamily === 'typecast' && ttsMode !== 'preset' && typecastAvailable;
   const typecastFiltered = typecastVoices.filter(voice => (!typecastGender || voice.gender === typecastGender) && (!typecastAge || voice.age === typecastAge) && (!typecastUse || voice.useCases.includes(typecastUse)));
   const isVc = categoryId === 'vc';
-  const needsAudio = isAsr || categoryId === 'adjust' || isVc || (isTts && ttsMode === 'ref');
-  const audioLabel = isTts ? '참조 목소리' : isAsr ? '인식할 오디오' : isVc ? '원본 오디오' : '조절할 오디오';
+  const isEdit = categoryId === 'edit';
+  const needsAudio = isAsr || isEdit || categoryId === 'adjust' || isVc || (isTts && ttsMode === 'ref');
+  const audioLabel = isTts ? '참조 목소리' : isAsr ? '인식할 오디오' : isEdit ? '편집할 오디오' : isVc ? '원본 오디오' : '조절할 오디오';
+  const editVariant = editModels.find(family => family.id === 'dotsedit')?.variants[0];
+  const editPrecisionInfo = editVariant?.precisions.find(item => item.precision === editPrecision);
   const meanvcInfo = vcModels.find(family => family.id === 'meanvc2')?.variants[0]?.precisions.find(item => item.precision === meanvcPrecision);
   const ttsVariant = ttsVariantsFor(ttsModels, ttsFamily, ttsMode).find(variant => variant.size === ttsSize);
   const ttsVariantMode = ttsVariant?.mode || 'ref';
@@ -2190,13 +2201,14 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
   const asrFamilyInfo = asrModels.find(family => family.id === asrFamily) || asrModels[0];
   const asrVariant = asrFamilyInfo?.variants.find(variant => variant.size === asrSize);
   const asrPrecisionInfo = asrVariant?.precisions.find(item => item.precision === asrPrecision);
-  const anyDownloading = [...ttsModels, ...asrModels].some(family => family.variants.some(variant => variant.precisions.some(item => item.download?.state === 'running')));
+  const anyDownloading = [...ttsModels, ...asrModels, ...editModels].some(family => family.variants.some(variant => variant.precisions.some(item => item.download?.state === 'running')));
   async function refreshModels() {
     try {
-      const result = await api<{ families: TtsFamilyInfo[]; asr: TtsFamilyInfo[]; vc?: TtsFamilyInfo[] }>('/audio-tools/tts/models');
+      const result = await api<{ families: TtsFamilyInfo[]; asr: TtsFamilyInfo[]; vc?: TtsFamilyInfo[]; edit?: TtsFamilyInfo[] }>('/audio-tools/tts/models');
       setTtsModels(result.families);
       setAsrModels(result.asr || []);
       setVcModels(result.vc || []);
+      setEditModels(result.edit || []);
     } catch { /* backend may be restarting */ }
   }
   useEffect(() => { void refreshModels(); }, []);
@@ -2476,11 +2488,26 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
     return () => window.clearInterval(timer);
   }, [recState]);
   useEffect(() => () => { try { recorderRef.current?.state !== 'inactive' && recorderRef.current?.stop(); } catch { /* ignore */ } closeMicStream(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Fills the transcript box using the speech-recognition model chosen in the STT tab.
+  async function transcribeSource() {
+    if (!audioBlobRef.current) { setErrorText(`${audioLabel}를 먼저 선택해 주세요.`); return; }
+    setTranscribing(true);
+    setErrorText('');
+    try {
+      const result = await api<{ transcript: string }>('/audio-tools/asr', 'POST', { audioDataUrl: await readFileAsDataUrl(audioBlobRef.current), language: editLanguage === 'auto' ? '' : editLanguage, family: asrFamily, size: asrSize, precision: asrPrecision });
+      setEditSourceText(result.transcript || '');
+    } catch (error) { setErrorText((error as Error).message); }
+    finally { setTranscribing(false); }
+  }
+  function updateEditItem(index: number, patch: Partial<{ op: 'sub' | 'del' | 'ins' | 'apd'; find: string; text: string; all: boolean }>) {
+    setEditItems(items => items.map((item, position) => (position === index ? { ...item, ...patch } : item)));
+  }
   async function run() {
     if (needsAudio && !audioBlobRef.current) { setErrorText(`${audioLabel}를 먼저 선택해 주세요.`); return; }
     if (isVc && !refBlobRef.current) { setErrorText('목표 목소리의 참조 오디오를 먼저 선택해 주세요.'); return; }
     if (recStateRef.current !== 'idle') { setErrorText('녹음을 먼저 정지해 주세요.'); return; }
     if (isTts && !ttsText.trim()) { setErrorText("'말할 내용'을 입력해 주세요."); return; }
+    if (isEdit && !editItems.some(item => item.find.trim())) { setErrorText('편집할 부분(찾을 말)을 하나 이상 입력해 주세요.'); return; }
     if (isTts && !isTypecast && ttsMode === 'design' && !ttsDescription.trim()) { setErrorText("'음색 설명'을 입력해 주세요."); return; }
     setRunning(true);
     setErrorText('');
@@ -2488,7 +2515,11 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
     t.stopPlayback();
     try {
       const audioDataUrl = audioBlobRef.current ? await readFileAsDataUrl(audioBlobRef.current) : undefined;
-      if (isVc) {
+      if (isEdit) {
+        const result = await api<{ dataUrl: string; sourceText: string }>('/audio-tools/edit', 'POST', { audioDataUrl, sourceText: editSourceText, language: editLanguage === 'auto' ? '' : editLanguage, precision: editPrecision, asrFamily, asrSize, asrPrecision, edits: editItems.filter(item => item.find.trim()) });
+        setEditSourceText(result.sourceText);
+        await showResult(result.dataUrl);
+      } else if (isVc) {
         const referenceDataUrl = await readFileAsDataUrl(refBlobRef.current as Blob);
         const result = await api<{ dataUrl: string }>('/audio-tools/vc', 'POST', { audioDataUrl, referenceDataUrl, precision: meanvcPrecision });
         await showResult(result.dataUrl);
@@ -2549,7 +2580,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
     setSaving(true);
     try {
       if (isAsr && transcript) await saveBlob(new Blob([transcript], { type: 'text/plain;charset=utf-8' }), `${(audioName || '음성인식').replace(/\.[^.]+$/, '')}.txt`);
-      else if (resultDataUrlRef.current) await saveBlob(await (await fetch(resultDataUrlRef.current)).blob(), `${isTts ? tool.label : isVc ? '음색변조' : '음성조절'}.wav`.replace(/[\\/:*?"<>|()\s]+/g, '_'));
+      else if (resultDataUrlRef.current) await saveBlob(await (await fetch(resultDataUrlRef.current)).blob(), `${isTts ? tool.label : isVc ? '음색변조' : isEdit ? '대사편집' : '음성조절'}.wav`.replace(/[\\/:*?"<>|()\s]+/g, '_'));
     } catch (error) {
       if ((error as { name?: string }).name !== 'AbortError') setErrorText((error as Error).message);
     } finally { setSaving(false); }
@@ -2565,7 +2596,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
 
   return <section className="library-page page-scroll">
     <div className="page-heading library-heading">
-      <div><span className="eyebrow">audio.cpp 기반</span><h1>Audio Tools</h1><p>완성곡과 무관하게 텍스트→음성 생성, 음성 인식, 피치·속도·음량 조절, 말소리 음색 변조(마이크 녹음 지원)를 바로 실행합니다.</p></div>
+      <div><span className="eyebrow">audio.cpp 기반</span><h1>Audio Tools</h1><p>완성곡과 무관하게 텍스트→음성 생성, 음성 인식(STT), 대사 편집, 피치·속도·음량 조절, 말소리 음색 변조(마이크 녹음 지원)를 바로 실행합니다.</p></div>
     </div>
     <div className="audio-tools-tabs" role="tablist" aria-label="도구 카테고리">
       {AUDIO_TOOL_CATEGORIES.map(category => <button key={category.id} type="button" className={categoryId === category.id ? 'active' : ''} aria-pressed={categoryId === category.id} onClick={() => selectCategory(category.id)}>{category.label}</button>)}
@@ -2613,16 +2644,38 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
         </>}
         {isAsr && <>
           <div className="at-section-head">모델 선택</div>
-          <div className="audio-tools-model-switch" role="group" aria-label="음성 인식 모델">
+          <div className="audio-tools-model-switch" role="group" aria-label="음성 인식 (STT) 모델">
             {asrModels.map(family => <button key={family.id} type="button" className={asrFamily === family.id ? 'active' : ''} aria-pressed={asrFamily === family.id} onClick={() => setAsrFamily(family.id)} disabled={running}>{family.label}</button>)}
           </div>
           <div className="runtime-options">
-            <label>크기<select value={asrSize} onChange={event => setAsrSize(event.target.value)} disabled={running} aria-label="음성 인식 모델 크기">{(asrFamilyInfo?.variants || []).map(variant => <option key={variant.size} value={variant.size}>{variant.size}</option>)}</select></label>
-            <label>정밀도<select value={asrPrecision} onChange={event => setAsrPrecision(event.target.value)} disabled={running} aria-label="음성 인식 모델 정밀도">{(asrVariant?.precisions || []).map(item => <option key={item.precision} value={item.precision}>{TTS_PRECISION_LABELS[item.precision] || item.precision}{item.installed ? '' : ' · 받기 필요'}</option>)}</select></label>
+            <label>크기<select value={asrSize} onChange={event => setAsrSize(event.target.value)} disabled={running} aria-label="음성 인식 (STT) 모델 크기">{(asrFamilyInfo?.variants || []).map(variant => <option key={variant.size} value={variant.size}>{variant.size}</option>)}</select></label>
+            <label>정밀도<select value={asrPrecision} onChange={event => setAsrPrecision(event.target.value)} disabled={running} aria-label="음성 인식 (STT) 모델 정밀도">{(asrVariant?.precisions || []).map(item => <option key={item.precision} value={item.precision}>{TTS_PRECISION_LABELS[item.precision] || item.precision}{item.installed ? '' : ' · 받기 필요'}</option>)}</select></label>
           </div>
           {renderModelStatus(asrPrecisionInfo, asrFamily, 'asr', asrSize, asrPrecision)}
           {(asrFamilyInfo?.languages?.length ?? 1) > 0 && <label className="at-field">인식 언어<select value={asrLanguage} onChange={event => setAsrLanguage(event.target.value as typeof asrLanguage)} disabled={running}>{[['ko', '한국어'], ['en', 'English'], ['ja', '日本語'], ['zh', '中文']].filter(([id]) => !asrFamilyInfo?.languages || asrFamilyInfo.languages.includes(id)).map(([id, label]) => <option key={id} value={id}>{label}</option>)}<option value="auto">자동 감지</option></select><span className="field-hint">언어를 직접 지정하면 정확도가 더 높습니다. 모델마다 지원 언어 목록이 다릅니다.</span></label>}
           <span className="field-hint">모델 크기가 클수록 정확하지만 느리고 VRAM을 더 씁니다. VibeVoice-ASR는 약 10GB라 다른 GPU 작업과 함께 쓰면 메모리가 부족할 수 있습니다.</span>
+        </>}
+        {isEdit && <>
+          <div className="at-section-head">모델 선택 (DotTTS Edit)</div>
+          <div className="runtime-options">
+            <label>정밀도<select value={editPrecision} onChange={event => setEditPrecision(event.target.value)} disabled={running} aria-label="대사 편집 모델 정밀도">{(editVariant?.precisions || []).map(item => <option key={item.precision} value={item.precision}>{TTS_PRECISION_LABELS[item.precision] || item.precision}{item.installed ? '' : ' · 받기 필요'}</option>)}</select></label>
+            <label>언어<select value={editLanguage} onChange={event => setEditLanguage(event.target.value as typeof editLanguage)} disabled={running} aria-label="대사 편집 언어"><option value="ko">한국어</option><option value="en">English</option><option value="ja">日本語</option><option value="zh">中文</option><option value="auto">자동 감지</option></select></label>
+          </div>
+          {renderModelStatus(editPrecisionInfo, 'dotsedit', 'edit', '기본', editPrecision)}
+          <span className="field-hint">녹음된 말소리에서 일부 단어만 바꾸거나 지우거나 넣습니다(나머지 목소리·억양은 유지). 노래에는 쓸 수 없습니다. 언어를 직접 지정하면 결과가 달라질 수 있으니 두 가지를 모두 들어 보세요. 지우기·넣기는 안정적이고, 바꾸기는 한 글자짜리 짧은 단어에서 발음이 어긋날 수 있습니다. 정밀도가 높을수록 정확하지만 더 큽니다.</span>
+          <div className="at-section-head" style={{ marginTop: 18 }}>원문 (말한 내용)</div>
+          <Textarea rows={3} className="at-textarea" value={editSourceText} onChange={event => setEditSourceText(event.target.value)} placeholder="원본 오디오가 말하는 문장을 정확히 적어 주세요. 비워 두면 실행할 때 음성 인식(STT)으로 자동 입력합니다." disabled={running}/>
+          <div className="voice-convert-topbar" style={{ justifyContent: 'flex-start' }}><Button variant="outline" size="sm" onClick={() => void transcribeSource()} disabled={running || transcribing || !audioName}>{transcribing ? <LoaderCircle className="spin" size={13}/> : <Sparkles size={13}/>}받아쓰기 (STT)</Button><span className="field-hint">STT 탭에서 고른 음성 인식 모델을 씁니다.</span></div>
+          <div className="at-section-head" style={{ marginTop: 18 }}>편집 내용</div>
+          {editItems.map((item, index) => <div key={index} className="voice-convert-topbar" style={{ justifyContent: 'flex-start', gap: 6, flexWrap: 'nowrap' }}>
+            <select value={item.op} onChange={event => updateEditItem(index, { op: event.target.value as 'sub' | 'del' | 'ins' | 'apd' })} disabled={running} aria-label="편집 종류"><option value="sub">바꾸기</option><option value="del">지우기</option><option value="ins">앞에 넣기</option><option value="apd">뒤에 넣기</option></select>
+            <Input type="text" value={item.find} onChange={event => updateEditItem(index, { find: event.target.value })} placeholder={item.op === 'ins' ? '이 말 앞에' : item.op === 'apd' ? '이 말 뒤에' : '원문의 이 말을'} disabled={running} style={{ flex: 1, minWidth: 0 }}/>
+            {item.op !== 'del' && <Input type="text" value={item.text} onChange={event => updateEditItem(index, { text: event.target.value })} placeholder={item.op === 'ins' || item.op === 'apd' ? '넣을 말' : '바꿀 말'} disabled={running} style={{ flex: 1, minWidth: 0 }}/>}
+            <label className="at-function" title="같은 말이 여러 번 나오면 전부 적용" style={{ flex: 'none', display: 'inline-flex', flexDirection: 'row', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', padding: '6px 9px' }}><input type="checkbox" checked={item.all} onChange={event => updateEditItem(index, { all: event.target.checked })} disabled={running}/>모두</label>
+            <Button variant="outline" size="sm" aria-label="편집 항목 삭제" title="삭제" onClick={() => setEditItems(items => (items.length > 1 ? items.filter((_, position) => position !== index) : [{ op: 'sub', find: '', text: '', all: false }]))} disabled={running}><X size={13}/></Button>
+          </div>)}
+          <div className="voice-convert-topbar" style={{ justifyContent: 'flex-start' }}><Button variant="outline" size="sm" onClick={() => setEditItems(items => [...items, { op: 'sub', find: '', text: '', all: false }])} disabled={running || editItems.length >= 20}>+ 편집 항목 추가</Button></div>
+          <span className="field-hint">"찾을 말"은 원문에 있는 그대로 적어야 하고, 같은 말이 여러 번 나오면 기본은 첫 번째만 편집하고, "모두"를 체크하면 전부 편집합니다.</span>
         </>}
         {categoryId === 'adjust' && <>
           <div className="at-section-head">조절 값</div>
@@ -2721,7 +2774,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
           </div> : <div className={atRowClass('output', 'wet')}>
             <div className="audio-compare-toolbar">
               <button type="button" className="pp-waveform-label" aria-label="처리본 재생/일시정지" onClick={() => t.handleKeyClick('output')} disabled={!resultBuffer}>{t.activeKey === 'output' && t.isPlaying ? <Pause size={15}/> : <Play size={15}/>}</button>
-              <span className="stem-label audio-compare-label"><strong>처리본</strong><small>{isTts ? tool.label : isVc ? '음색 변조' : '음성 조절'}</small>{resultBuffer ? <span className="small-badge">완료</span> : <span className="small-badge">대기</span>}</span>
+              <span className="stem-label audio-compare-label"><strong>처리본</strong><small>{isTts ? tool.label : isVc ? '음색 변조' : isEdit ? '대사 편집' : '음성 조절'}</small>{resultBuffer ? <span className="small-badge">완료</span> : <span className="small-badge">대기</span>}</span>
               {resultBuffer && <span className="pp-seek-time audio-compare-duration">{formatSeekTime(resultBuffer.duration)}</span>}
             </div>
             <div className="audio-compare-charts">
@@ -2823,9 +2876,9 @@ const DDSP_STATUS_LABEL: Record<string, string> = {
 
 type TimbreEngine = 'seed_vc' | 'vevo2' | 'rvc' | 'ddsp';
 const TIMBRE_ENGINES: { id: TimbreEngine; label: string }[] = [
+  { id: 'rvc', label: 'RVC' },
   { id: 'seed_vc', label: 'Seed-VC' },
   { id: 'vevo2', label: 'Vevo' },
-  { id: 'rvc', label: 'RVC' },
   { id: 'ddsp', label: 'DDSP-SVC' },
 ];
 function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onDdspJobStarted, onDdspJobCleared }: {
@@ -2838,7 +2891,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
   const [referenceName, setReferenceName] = useState<string | null>(null);
   const referenceBlobRef = useRef<Blob | null>(null);
   const [preparing, setPreparing] = useState(false);
-  const [engine, setEngine] = useState<TimbreEngine>('seed_vc');
+  const [engine, setEngine] = useState<TimbreEngine>('rvc');
   const [chunkSeconds, setChunkSeconds] = useState(10);
   const [overlapSeconds, setOverlapSeconds] = useState(2);
   const [seedF0Condition, setSeedF0Condition] = useState(true);
