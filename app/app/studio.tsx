@@ -2156,6 +2156,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
   const recChunksRef = useRef<Blob[]>([]);
   const recStateRef = useRef<'idle' | 'recording' | 'paused'>('idle');
   const micCanvasRef = useRef<HTMLCanvasElement>(null);
+  const micSpectrumRef = useRef<HTMLCanvasElement>(null);
   const [micGain, setMicGain] = useState<'auto' | number>('auto');
   const micGainRef = useRef<'auto' | number>('auto');
   micGainRef.current = micGain;
@@ -2353,6 +2354,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
     if (!micPanelOpen) return;
     let frame = 0;
     let smoothedPeak = 0.05; // slow-decaying peak used by the automatic sensitivity
+    let smoothedSpectrumPeak = 0.2;
     const draw = () => {
       frame = requestAnimationFrame(draw);
       const canvas = micCanvasRef.current;
@@ -2388,6 +2390,51 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
         if (index === 0) ctx2d.moveTo(x, y); else ctx2d.lineTo(x, y);
       }
       ctx2d.stroke();
+
+      // Frequency view: X = frequency (0-8 kHz, where speech lives), Y = magnitude of each frequency band.
+      const specCanvas = micSpectrumRef.current;
+      const specCtx = specCanvas?.getContext('2d');
+      if (!specCanvas || !specCtx) return;
+      const ratio = window.devicePixelRatio || 1;
+      const sw = specCanvas.clientWidth * ratio;
+      const sh = specCanvas.clientHeight * ratio;
+      if (specCanvas.width !== sw) specCanvas.width = sw;
+      if (specCanvas.height !== sh) specCanvas.height = sh;
+      specCtx.clearRect(0, 0, sw, sh);
+      const axisHeight = 16 * ratio;
+      const plotHeight = sh - axisHeight;
+      const freq = new Uint8Array(analyser.frequencyBinCount);
+      analyser.getByteFrequencyData(freq);
+      const binHz = (micSourceRef.current?.context.sampleRate || 48000) / analyser.fftSize;
+      const maxHz = 8000;
+      const maxBin = Math.min(freq.length - 1, Math.floor(maxHz / binHz));
+      let specPeak = 0;
+      for (let bin = 1; bin <= maxBin; bin += 1) specPeak = Math.max(specPeak, freq[bin] / 255);
+      smoothedSpectrumPeak = Math.max(specPeak, smoothedSpectrumPeak * 0.985);
+      const specGain = micGainRef.current === 'auto' ? Math.min(30, Math.max(1, 0.85 / Math.max(smoothedSpectrumPeak, 0.05))) : micGainRef.current;
+      specCtx.fillStyle = recStateRef.current === 'recording' ? '#f87171' : recStateRef.current === 'paused' ? '#a3a3a3' : '#7ee787';
+      const barWidth = Math.max(1, sw / 160);
+      for (let x = 0; x < sw; x += barWidth) {
+        const bin = Math.max(1, Math.round((x / sw) * maxBin));
+        const magnitude = Math.min(1, (freq[bin] / 255) * (micGainRef.current === 'auto' ? specGain : Math.sqrt(specGain)));
+        specCtx.fillRect(x, plotHeight - magnitude * plotHeight, Math.max(1, barWidth - 1), magnitude * plotHeight);
+      }
+      // frequency axis
+      specCtx.fillStyle = 'rgba(160,175,160,0.9)';
+      specCtx.strokeStyle = 'rgba(120,140,120,0.35)';
+      specCtx.font = `${10 * ratio}px sans-serif`;
+      specCtx.textBaseline = 'top';
+      for (let hz = 0; hz <= maxHz; hz += 1000) {
+        const x = (hz / maxHz) * (sw - 1);
+        specCtx.beginPath();
+        specCtx.moveTo(x, plotHeight);
+        specCtx.lineTo(x, plotHeight + 3 * ratio);
+        specCtx.stroke();
+        specCtx.textAlign = hz === 0 ? 'left' : hz === maxHz ? 'right' : 'center';
+        specCtx.fillText(hz === 0 ? '0' : `${hz / 1000}k`, x, plotHeight + 4 * ratio);
+      }
+      specCtx.textAlign = 'right';
+      specCtx.fillText('Hz', sw, 0);
     };
     draw();
     return () => cancelAnimationFrame(frame);
@@ -2630,7 +2677,8 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
             <span className="pp-seek-time" style={{ minWidth: 48, textAlign: 'right', color: recState === 'recording' ? '#f87171' : undefined }}>{formatSeekTime(recSeconds)}</span>
             <Button variant="outline" size="sm" aria-label="마이크 닫기" title="마이크 닫기" onClick={closeMicPanel} disabled={running}><X size={13}/></Button>
           </div>
-          <canvas ref={micCanvasRef} aria-label="마이크 실시간 파형" style={{ width: '100%', height: 90, marginTop: 8, borderRadius: 8, background: '#161d12', border: '1px solid #2b352b' }}/>
+          <canvas ref={micCanvasRef} aria-label="마이크 실시간 파형(시간)" style={{ width: '100%', height: 90, marginTop: 8, borderRadius: 8, background: '#161d12', border: '1px solid #2b352b' }}/>
+          <canvas ref={micSpectrumRef} aria-label="마이크 주파수 스펙트럼" style={{ width: '100%', height: 110, marginTop: 8, borderRadius: 8, background: '#161d12', border: '1px solid #2b352b' }}/>
           <span className="field-hint">{recState === 'recording' ? '녹음 중… 말한 뒤 정지를 누르면 아래 원본 파형으로 들어갑니다.' : recState === 'paused' ? '일시정지됨. 재생 아이콘으로 이어서 녹음합니다.' : '말하면 위 파형이 움직입니다(입력 레벨 확인). 준비되면 녹음 버튼(●)을 누르세요. 정지하면 원본 오디오가 됩니다.'}</span>
         </div>}
         {!sourceBuffer && !resultBuffer && transcript === null && !(isVc && micPanelOpen) ? <div className="audio-tools-result-empty"><CircleHelp size={18}/><p>왼쪽에서 조건을 입력하고 "실행"을 누르면<br/>결과가 이곳에 표시됩니다.</p></div> : <>
