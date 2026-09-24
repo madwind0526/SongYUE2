@@ -138,3 +138,9 @@ button.adapter-card, label.adapter-card { cursor: pointer; }
 .adapter-detail-dialog { max-width: 620px; max-height: 88vh; overflow: auto; }
 
 .adapter-done.partial { color: #8fc4f0; font-weight: 500; }
+
+/* sort icons at the right end of the language row */
+.adapter-chiprow .adapter-sortbar { margin-left: auto; display: inline-flex; gap: 4px; padding: 3px; border-radius: 9px; border: 1px solid #364434; background: #1a211a; }
+.adapter-chiprow .adapter-sortbar button { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 28px; padding: 0; border-radius: 7px; border: 0; background: transparent; color: #8fa280; }
+.adapter-chiprow .adapter-sortbar button:hover { color: #eaf3e2; background: #26332a; }
+.adapter-chiprow .adapter-sortbar button.active { background: #33462f; color: #eaf3e2; }

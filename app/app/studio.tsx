@@ -6,7 +6,7 @@ import './timbre-transform.css';
 import './audio-tools.css';
 import './adapters.css';
 import * as ABCJS from 'abcjs';
-import { AudioLines, ArrowDownToLine, ArrowRight, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Combine, Cpu, Dices, Disc3, Download, FastForward, FileText, Folder, FolderOpen, GitCompare, Guitar, Headphones, Heart, Home, Image as ImageIcon, Layers, LayoutGrid, ListMusic, ListPlus, LoaderCircle, Menu, Mic, MoreVertical, Music2, Pause, Pencil, Play, Plus, Power, RefreshCw, Rewind, RotateCcw, Save, Search, Settings2, ShieldCheck, SkipBack, SkipForward, SlidersHorizontal, Sparkles, Square, Trash2, Upload, Volume2, WandSparkles, X } from 'lucide-react';
+import { AudioLines, ArrowDownAZ, ArrowDownZA, ArrowDownToLine, Clock, ArrowRight, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Combine, Cpu, Dices, Disc3, Download, FastForward, FileText, Folder, FolderOpen, GitCompare, Guitar, Headphones, Heart, Home, Image as ImageIcon, Layers, LayoutGrid, ListMusic, ListPlus, LoaderCircle, Menu, Mic, MoreVertical, Music2, Pause, Pencil, Play, Plus, Power, RefreshCw, Rewind, RotateCcw, Save, Search, Settings2, ShieldCheck, SkipBack, SkipForward, SlidersHorizontal, Sparkles, Square, Trash2, Upload, Volume2, WandSparkles, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -3292,7 +3292,7 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('');
   const [language, setLanguage] = useState('');
-  const [sort, setSort] = useState<'likes' | 'updated' | 'samples'>('likes');
+  const [sort, setSort] = useState<'az' | 'za' | 'likes' | 'updated' | 'samples'>('likes');
   const [detail, setDetail] = useState<HubDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState('');
   const [unitsPicked, setUnitsPicked] = useState<string[]>([]);
@@ -3390,7 +3390,7 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
   const pastedRepo = REPO_LINK.exec(query)?.[1] || (/^[\w.-]+\/[\w.-]+$/.test(query.trim()) ? query.trim() : '');
   const shown = (hub || []).filter(item => (!category || item.categories.includes(category)) && (!language || item.languages.includes(language))
     && (!needle || [item.id, item.title, ...item.tags, ...item.categories, ...item.languages].join(' ').toLowerCase().includes(needle)))
-    .sort((a, b) => sort === 'likes' ? b.likes - a.likes : sort === 'samples' ? b.sampleCount - a.sampleCount : b.updatedAt.localeCompare(a.updatedAt));
+    .sort((a, b) => sort === 'az' ? a.title.localeCompare(b.title) : sort === 'za' ? b.title.localeCompare(a.title) : sort === 'likes' ? b.likes - a.likes : sort === 'samples' ? b.sampleCount - a.sampleCount : b.updatedAt.localeCompare(a.updatedAt));
   const catalogKinds = [...new Set((catalog || []).map(entry => entry.kind))];
   const catalogShown = (catalog || []).filter(entry => !kind || entry.kind === kind);
   const unitsBytes = (detail?.units || []).filter(unit => unitsPicked.includes(unit.path)).reduce((sum, unit) => sum + unit.size, 0);
@@ -3445,12 +3445,11 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
       <p className="field-hint">허깅페이스에서 YuE2용 LoRA를 찾습니다. 카드의 다운로드 아이콘으로 바로 받고, 카드를 누르면 샘플을 듣고 받을 파일을 고를 수 있습니다. 주소를 붙여 넣어도 됩니다.</p>
       <div className="adapter-filters">
         <Input value={query} placeholder="이름, 장르, 언어로 찾기 또는 허깅페이스 주소 붙여넣기" aria-label="LoRA 검색" onChange={event => setQuery(event.target.value)}/>
-        <select value={sort} aria-label="정렬" onChange={event => setSort(event.target.value as 'likes' | 'updated' | 'samples')}><option value="likes">좋아요 순</option><option value="updated">최근 갱신 순</option><option value="samples">샘플 많은 순</option></select>
         <Button variant="outline" size="sm" disabled={hubLoading} onClick={() => void loadHub()}><RefreshCw size={14}/>새로고침</Button>
       </div>
       {pastedRepo && <div className="adapter-paste"><span>{pastedRepo}</span><Button size="sm" onClick={() => void openDetail(pastedRepo)}>이 저장소 열기</Button></div>}
       {categories.length > 0 && <div className="adapter-chiprow"><span>분류</span><button className={!category ? 'active' : ''} onClick={() => setCategory('')}>전체</button>{categories.map(label => <button key={label} className={category === label ? 'active' : ''} onClick={() => setCategory(category === label ? '' : label)}>{label}</button>)}</div>}
-      {languages.length > 0 && <div className="adapter-chiprow"><span>언어</span><button className={!language ? 'active' : ''} onClick={() => setLanguage('')}>전체</button>{languages.map(label => <button key={label} className={language === label ? 'active' : ''} onClick={() => setLanguage(language === label ? '' : label)}>{label}</button>)}</div>}
+      <div className="adapter-chiprow">{languages.length > 0 && <><span>언어</span><button className={!language ? 'active' : ''} onClick={() => setLanguage('')}>전체</button>{languages.map(label => <button key={label} className={language === label ? 'active' : ''} onClick={() => setLanguage(language === label ? '' : label)}>{label}</button>)}</>}<span className="adapter-sortbar" role="group" aria-label="정렬"><button type="button" className={sort === 'az' ? 'active' : ''} aria-label="이름 A→Z" aria-pressed={sort === 'az'} title="이름 A→Z" onClick={() => setSort('az')}><ArrowDownAZ size={15}/></button><button type="button" className={sort === 'za' ? 'active' : ''} aria-label="이름 Z→A" aria-pressed={sort === 'za'} title="이름 Z→A" onClick={() => setSort('za')}><ArrowDownZA size={15}/></button><button type="button" className={sort === 'likes' ? 'active' : ''} aria-label="좋아요 순" aria-pressed={sort === 'likes'} title="좋아요 순" onClick={() => setSort('likes')}><Heart size={15}/></button><button type="button" className={sort === 'updated' ? 'active' : ''} aria-label="최신 순" aria-pressed={sort === 'updated'} title="최신 순" onClick={() => setSort('updated')}><Clock size={15}/></button><button type="button" className={sort === 'samples' ? 'active' : ''} aria-label="샘플 많은 순" aria-pressed={sort === 'samples'} title="샘플 많은 순" onClick={() => setSort('samples')}><Headphones size={15}/></button></span></div>
       {hubLoading && <p className="field-hint"><LoaderCircle className="spin" size={14}/> 허깅페이스에서 목록을 읽는 중…</p>}
       {hubError && <p className="field-hint warning">{hubError}</p>}
       <div className="adapter-grid catalog">{shown.map(item => {
