@@ -265,6 +265,7 @@ function makeFakeSpawn() {
       const names = args.includes('mel_band_roformer') ? ['vocals', 'instrumental'] : modelArg.includes('htdemucs-6s') ? ['vocals', 'drums', 'bass', 'guitar', 'piano', 'other'] : ['vocals', 'drums', 'bass', 'other'];
       (async () => {
         await new Promise(resolve => setTimeout(resolve, behavior.delayMs || 0));
+        if (behavior.log) emitter.stderr.emit('data', Buffer.from(behavior.log));
         if (behavior.writeOutput && behavior.exitCode === 0) {
           for (const name of names) await writeFile(path.join(outDir, `${name}.wav`), Buffer.from(`fake-${name}-bytes`));
         }
@@ -628,6 +629,15 @@ test('STEM separation (HTDemucs/Mel-Band RoFormer/plain L-R channel split) split
   const failed = await callJson(`/api/projects/${songId}/stems`, 'POST', {});
   assert.equal(failed.status, 502);
   assert.equal((await call(`/api/projects/${songId}/stems/vocals`)).status, 404);
+
+  // every htdemucs / roformer run is forced onto CUDA (the engine's CPU backend is wrong for htdemucs), and a machine without CUDA gets a clear message
+  for (const sepCall of fakeSpawn.calls.filter(c => c.args.includes('sep'))) assert.equal(sepCall.args[sepCall.args.indexOf('--backend') + 1], 'cuda');
+  fakeSpawn.setSep({ exitCode: 1, writeOutput: false, log: "audiocpp_cli failed: CUDA backend requested but registry 'CUDA' has no device 0" });
+  const noCuda = await callJson(`/api/projects/${songId}/stems`, 'POST', {});
+  assert.equal(noCuda.status, 502);
+  assert.match(noCuda.data.error, /NVIDIA GPU\(CUDA\)/);
+  fakeSpawn.setSep({ exitCode: 1, writeOutput: false, log: 'audiocpp_cli failed: something else broke' });
+  assert.match((await callJson(`/api/projects/${songId}/stems`, 'POST', {})).data.error, /something else broke/);
 
   // missing HTDemucs model is a clear 400, not a crash
   await rm(path.join(root, 'models', 'audio-cpp', 'audio.cpp-gguf'), { recursive: true, force: true });

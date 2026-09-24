@@ -531,6 +531,8 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       child.once('error', reject);
       child.once('close', (code) => code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`)));
     }).catch(() => { throw fail(502, 'STEM 분리를 위한 오디오 변환에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
+    // GPU only, on purpose: the engine's CPU backend gives wrong htdemucs results (it never falls back silently: with --backend cuda and no
+    // CUDA device it exits with an error, which is reported below).
     const args = ['--task', 'sep', '--family', mode.family, '--model', modelPath, '--backend', 'cuda', '--audio', sourceWav, '--out-dir', dir];
     const log = await new Promise((resolve, reject) => {
       const child = spawnImpl(engine, args, { windowsHide: true, cwd: audioCppCwd(engine) });
@@ -546,7 +548,11 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     if (log.signal) throw fail(502, 'STEM 분리가 제한 시간을 넘어 중단되었습니다.');
     const missing = [];
     for (const name of mode.stems) { if (!(await exists(path.join(dir, `${name}.wav`)))) missing.push(name); }
-    if (log.code !== 0 || missing.length) throw fail(502, `STEM 분리에 실패했습니다 (종료 코드 ${log.code}). ${log.text.trim().slice(0, 500) || '알 수 없는 오류'}`);
+    if (log.code !== 0 || missing.length) {
+      if (/CUDA backend requested|no CUDA-capable device|failed to initialize CUDA/i.test(log.text)) throw fail(502, 'STEM 분리에는 NVIDIA GPU(CUDA)가 필요합니다. GPU 드라이버와, audio.cpp가 CUDA로 빌드되었는지 확인해 주세요. (CPU로는 결과가 부정확해서 실행하지 않습니다.)');
+      const reason = /audiocpp_cli failed: (.*)/.exec(log.text)?.[1] || log.text.trim().slice(-500) || '알 수 없는 오류';
+      throw fail(502, `STEM 분리에 실패했습니다 (종료 코드 ${log.code}). ${reason}`);
+    }
     return { stems: mode.stems };
   }
   // "음색 변조" 팝업이 라이브러리에서 자유롭게 고른 "원본 audio"를 위한 스크래치 디렉터리 --
