@@ -239,3 +239,5 @@ yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc,vevo2,qwen3_tts,chatterbox,
 ### 대사 편집 (DotTTS Edit)
 
 Audio Tools의 "대사 편집" 탭은 `dots_tts` 패밀리의 DotTTS Edit(Q8 약 2.8GB, BF16 약 4.6GB, 폴더 `DotTTS-Edit-GGUF`)를 쓴다. `-Models`에 `dots_tts`가 있어야 한다. 원본 말소리 + 태그가 든 텍스트(`<sub targ="새 말">옛 말</sub>`, `<del>`, `<ins>`)로 편집하며, 태그 없이 원문/목표 문장만 주면 편집이 적용되지 않는다(실측). 화면은 원문(STT 자동 받아쓰기 가능)과 편집 항목(바꾸기/지우기/앞에 넣기/뒤에 넣기, "모두"=같은 말 전부)을 받아 서버(`buildEditText`)가 태그로 바꾼다. 한국어 실측: 지우기·넣기는 정확, 바꾸기는 한 글자 짧은 단어와 문장 전체 교체에서 발음이 어긋남. 노래는 지원하지 않는다. `--language`(ko/en/ja/zh) 지정 여부에 따라 결과가 달라질 수 있어 화면에서 고르게 했다.
+
+한국어 실측(2026-09-24): 한 문장에 같은 짧은 단어를 여러 번 바꾸거나 긴 문장을 편집하면, 손대지 않은 이웃 단어("합성"→"한성")도 깨질 수 있다(모델이 문장 전체를 다시 합성하기 때문). 문장 단위로 잘라 한 곳씩 편집하는 것이 안전하다. Q8과 BF16의 품질 차이는 거의 없었다. 다른 편집 모델: Vevo2 편집은 en/zh만 지원, FireRedTTS3 Instruct(`semantic_edit`, 지시문 `Replace 'A' with 'B'.`)는 영어는 정확하지만 한국어 음성을 이해하지 못해 편집이 적용되지 않아 제외했다.
