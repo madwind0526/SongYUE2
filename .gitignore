@@ -18,3 +18,4 @@ logs/
 __pycache__/
 *.partial
 .playwright-mcp/
+scratch/

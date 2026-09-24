@@ -167,3 +167,23 @@ test('polish chain: settings are clamped, the order is fixed and mastering needs
   assert.throws(() => runPolishChain(audio, {}), /단계/);
   assert.throws(() => runPolishChain(audio, { master: { enabled: true } }), /기준곡/);
 });
+
+test('measureChange reports how much a run changed the sound and where', async () => {
+  const { measureChange } = await import('./measure.mjs');
+  const rate = 44100;
+  const length = rate * 2;
+  const make = (fn) => { const left = new Float32Array(length); const right = new Float32Array(length); for (let index = 0; index < length; index += 1) { left[index] = fn(index); right[index] = fn(index); } return { left, right, rate }; };
+  const tone = (index) => 0.3 * Math.sin((2 * Math.PI * 440 * index) / rate) + 0.1 * Math.sin((2 * Math.PI * 9000 * index) / rate);
+  const original = make(tone);
+  const same = measureChange(original, make(tone));
+  assert.ok(same.changeDb < -80, 'identical audio: nothing changed');
+  assert.match(same.verdict, /변화 없음/);
+  assert.ok(same.bands.every((band) => Math.abs(band.deltaDb) < 0.1));
+  // remove the 9 kHz part: the 8-12 kHz band must drop clearly, the low bands stay
+  const dulled = measureChange(original, make((index) => 0.3 * Math.sin((2 * Math.PI * 440 * index) / rate)));
+  const band = (label) => dulled.bands.find((item) => item.label.includes(label)).deltaDb;
+  assert.ok(band('8~12k') < -20, `high band dropped: ${band('8~12k')}`);
+  assert.ok(Math.abs(band('200~1k')) < 1);
+  assert.ok(dulled.changeDb > -20 && dulled.changeDb < -8, `moderate change: ${dulled.changeDb}`);
+  assert.ok(dulled.peakDb.after < dulled.peakDb.before);
+});

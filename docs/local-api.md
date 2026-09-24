@@ -125,6 +125,24 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 
 곡 목록은 `.notes.json`과 `.lyrics.json`을 곡으로 읽지 않는다. 곡 이름을 바꾸면 두 부속 파일도 같이 이동하고, 곡을 지우면 함께 지워진다. `GET /api/projects/:id/audio`는 HTTP Range(`bytes=a-b`, `bytes=a-`)에 206으로 답한다(플레이어가 재생 위치를 옮기는 데 필요, 범위 밖은 416). 실측(2분대 곡 3곡): 영어 글자 일치율 92%·26줄 중 23줄이 보컬 위, 한국어 100%·25/25, 일본어 96%·24/25, 처리 약 20~25초(보컬 분리 약 11초 + 인식 약 7초).
 
+## LoRA (yue-server 엔진)
+
+| 엔드포인트 | 설명 |
+|---|---|
+| GET `/api/adapters` | 받은 LoRA 목록 `{adapters:[{name, displayName, kind, stage(ar/nar/both/unknown), trigger, tip, scales:{ar,nar}, description, categories, languages, license, commercialUse, source, samples, note, verified, bytes, ...}], engineReady, missing}` |
+| PATCH `/api/adapters/:name` | `{displayName?, note?}` 이름·메모 수정 |
+| DELETE `/api/adapters/:name` | 삭제(폴더째) |
+| POST `/api/adapters/:name/verify` | yue-server를 잠깐 띄워 이 LoRA를 읽을 수 있는지, 어느 쪽(작곡/사운드)을 바꾸는지 확인해 메타에 기록. 다른 작업 중이면 409 |
+| GET `/api/adapters/catalog` | 카탈로그 `{entries:[{id, kind, kindLabel, stage, name, description, tip, trigger, scales, bytes, files, license, page, installed}]}` |
+| POST `/api/adapters/catalog/install` | `{ids:[...]}` → 202 `{jobId}` (백그라운드 다운로드, 커밋 고정) |
+| GET `/api/adapters/hub/search?q=` | 허깅페이스의 YuE2 어댑터 저장소를 분류해서 반환(10분 캐시) |
+| GET `/api/adapters/hub/detail?repo=owner/name` | README 요약, 샘플 음원, 받을 수 있는 파일(`units`) |
+| POST `/api/adapters/hub/install` | `{repo, paths:[파일...]}` → 202 `{jobId}`. AR 1개+NAR 1개면 하나의 LoRA로, 아니면 파일마다 하나씩 |
+| GET `/api/adapters/hub/install/:jobId` | `{status(downloading/done/failed), downloaded, total, names, error}` |
+| POST `/api/adapters/import` | `{name, paths:[전체 경로 .safetensors 1~2개]}` 내 PC의 파일 가져오기 |
+
+곡 만들기: `POST /api/projects`의 `adapters: [{name, arScale, narScale}]`(0~2, 설치되지 않은 이름은 저장 시 버려짐)를 저장하고, `POST /api/generate`는 `adapters`가 있는 곡을 yue-server로 만듭니다(없으면 기존 엔진). 완성된 곡의 JSON에는 `engine: "yue-server"`와 사용한 `adapters`가 남습니다. `instrumental: true`인 곡은 400.
+
 ## AI 곡 다듬기 (노이즈 제거 · Spectral Lifter · 보컬 자연화 · 기준곡 마스터링)
 
 완성곡의 메뉴 "AI 곡 다듬기"가 쓰는 후처리 체인이다. 알고리듬은 YuE2 Studio(MIT)의 `audio-post` 크레이트를 Node로 옮긴 것이며(`backend/postfx/`), 순수 DSP라 같은 입력·설정이면 결과가 같다. 무거운 계산은 워커 스레드(`postfx/worker.mjs`)에서 돌려 API 서버가 멈추지 않는다. 처리 순서는 고정: 노이즈 제거 → Spectral Lifter → 보컬 자연화 → 기준곡 마스터링. 사용자가 단계를 켜고 시작해야 하며(자동 적용 아님), 결과는 미리듣기로만 만들어지고 사용자가 저장해야 라이브러리에 추가된다.
@@ -132,6 +150,7 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 | 엔드포인트 | 설명 |
 |---|---|
 | POST `/api/projects/:id/polish` | `{settings:{denoise:{enabled,strength},lifter:{enabled,gate,shimmerDb,hfMix,punch},naturalize:{enabled,amount},master:{enabled}}, referencePath?}` → 임시 미리듣기를 만들어 `{previewId, stages, durationMs}`. `referencePath`는 `library/` 기준 상대경로(마스터링일 때 필수, 경로 이탈은 400). 진행률은 `GET /api/generate/status`(`progress`, `detail`). 켠 단계가 없으면 400, 다른 작업 중이면 409 |
+| (위 POST의 응답 `report`) | 원본과 다듬은 곡을 소리 데이터로 비교한 측정값 `{changeDb, verdict, loudnessDb:{before,after}, peakDb, quietDb(조용한 구간=노이즈 바닥), bands:[{label, deltaDb}]}`. `changeDb`는 (다듬은 곡 - 원본)의 RMS를 원본 RMS와 비교한 값으로 0에 가까울수록 많이 바뀐 것이고 -40 dB보다 작으면 사실상 같은 소리다. 화면의 "실제로 바뀐 정도" 패널이 이 값을 보여 준다 |
 | GET `/api/polish/:previewId/audio` | 다듬은 미리듣기(24비트 FLAC) |
 | POST `/api/polish/:previewId/save` | `{title?}` → 새 곡(기본 제목 `<원제> (다듬기)`, 원곡의 가사·스타일·커버 유지, `polishedStages` 기록)을 라이브러리에 저장하고 201 |
 | DELETE `/api/polish/:previewId` | 미리듣기 삭제. 서버가 종료되거나 다시 시작할 때도 `runs/polish-*`를 지운다 |

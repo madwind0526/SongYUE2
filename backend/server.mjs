@@ -12,6 +12,8 @@ import { searchRvcVoices, downloadRvcVoice, listInstalledRvcVoices, resolveUserR
 import { TYPECAST_LANGUAGES, typecastSubscription, listTypecastVoices, typecastSpeak, recommendTypecastVoice, cloneTypecastVoice, deleteTypecastVoice, TypecastError } from './typecast.mjs';
 import { Worker } from 'node:worker_threads';
 import { lyricLines, detectLanguage, alignLyrics, toLrc } from './lyricsync.mjs';
+import { YUE_SERVER_PORT, yueServerPaths, listAdapters, normalizeAdapterSelection, toEngineAdapters, synthesize as yueServerSynthesize, probeAdapters, fileExists as yueFileExists } from './yueserver.mjs';
+import { searchHub, hubDetail, installHubUnits, installCatalogEntry, loadCatalog, catalogSummary, importLocalFiles, updateMeta } from './adapters.mjs';
 import { runPolishChain, normalizePolishSettings, enabledStages } from './postfx/chain.mjs';
 import { startRealtimeVcProcess, REALTIME_CHUNK_SAMPLES, REALTIME_INPUT_RATE } from './realtimevc.mjs';
 import { readWavPcm16, wavFromPcm16, findSpeechSegments, spliceSegments, locateWords, planWindows, snapToQuietPoint } from './speechedit.mjs';
@@ -194,7 +196,7 @@ function providerFromEnv(id) {
   return { endpoint: '', model: '', apiKey: '' };
 }
 
-export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl = fetch, spawnImpl = spawn, polishRunner = null } = {}) {
+export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl = fetch, spawnImpl = spawn, polishRunner = null, yueServerPort = YUE_SERVER_PORT } = {}) {
   try { process.loadEnvFile(path.join(root, '.env')); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
   const data = path.join(root, 'data');
@@ -324,6 +326,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     return next;
   };
   let generating = false;
+  const adapterInstalls = new Map();
   let generationStatus = null;
   // "음색 변조" DDSP-SVC 탭: 독립된 락/맵 -- 학습이 수십 분~수 시간 걸리므로 일반 생성(generating)을
   // 막으면 안 되고, 다이얼로그가 닫혀도 계속 진행되며 GET /api/ddsp-jobs로 폴링 가능해야 한다.
@@ -451,6 +454,33 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       durationMs: durationMatch ? Math.round(Number(durationMatch[1])) : null,
       rtf: rtfMatch ? Number(rtfMatch[1]) : null,
     });
+  }
+  // Songs with LoRA/LoKr adapters are made by yue-server (audio.cpp cannot load adapters); everything else is untouched.
+  async function runYueServer(project, file) {
+    const paths = yueServerPaths(root);
+    for (const [label, target] of [['yue-server 실행 파일', paths.exe], ['YuE2 모델', paths.model], ['YuE2 VAE', paths.vae]]) {
+      if (!(await yueFileExists(target))) throw fail(400, `LoRA 곡 생성에 필요한 ${label}이(가) 없습니다: ${path.relative(root, target)}. docs/models.md의 "LoRA 엔진" 설명을 확인해 주세요.`);
+    }
+    if (!project.lyrics.trim() || !project.style.trim()) throw fail(400, '가사와 음악 스타일이 필요합니다.');
+    if (project.instrumental) throw fail(400, '"악기만" 생성은 LoRA와 함께 사용할 수 없습니다. LoRA를 해제하거나 "보컬+악기"로 바꿔 주세요.');
+    if (project.abc && project.abc.trim() && project.cot === 'off') throw fail(400, '악보를 사용하려면 작곡 계획을 "멜로디 계획" 또는 "멜로디와 코드 계획"으로 설정해 주세요.');
+    const adapters = normalizeAdapterSelection(project.adapters, await listAdapters(paths.adapters));
+    if (!adapters.length) throw fail(400, '선택한 LoRA가 설치되어 있지 않습니다. models/yue-adapters 폴더를 확인해 주세요.');
+    const request = {
+      style: `${project.style}${styleHint(project)}`, lyrics: project.lyrics, cot: project.cot, steps: project.steps,
+      lm_seed: project.seed, seed: project.seed, output_format: 'wav16', adapters: toEngineAdapters(adapters),
+      ...(project.abc && project.abc.trim() ? { abc: project.abc } : {}),
+    };
+    const projectRuns = path.join(outputDirectory, project.id);
+    await mkdir(projectRuns, { recursive: true });
+    let result;
+    try {
+      result = await yueServerSynthesize({ paths, base: `http://127.0.0.1:${yueServerPort}`, request, spawnImpl, fetchImpl: (url, init) => fetch(url, init), onProgress: (status) => { if (generationStatus) generationStatus.detail = status; } });
+    } catch (error) { throw fail(502, error.message); }
+    const audioFile = path.join(projectRuns, 'audio.wav');
+    await writeFile(audioFile, result.audio);
+    const bytesPerSecond = 48000 * 2 * 2;
+    return finalizeToMusic(project, file, audioFile, { durationMs: Math.round(((result.audio.length - 44) / bytesPerSecond) * 1000), rtf: null, engine: 'yue-server' });
   }
   function stemsDir(projectId) {
     return path.join(outputDirectory, projectId, 'stems');
@@ -1277,11 +1307,13 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const outputRaw = path.join(workDir, 'output.f32');
     await runFfmpegCli(['-y', '-i', inputFile, '-f', 'f32le', '-ac', '2', '-ar', String(rate), inputRaw], '곡 디코딩');
     if (referenceFile) await runFfmpegCli(['-y', '-i', referenceFile, '-f', 'f32le', '-ac', '2', '-ar', String(rate), referenceRaw], '기준곡 디코딩');
+    let report = null;
     await new Promise((resolve, reject) => {
       const worker = new Worker(new URL('./postfx/worker.mjs', import.meta.url), { workerData: { inputRaw, referenceRaw: referenceFile ? referenceRaw : null, outputRaw, rate, settings } });
       let failure = null;
       worker.on('message', (message) => {
         if (message.type === 'progress') onProgress(message.percent, message.label);
+        else if (message.type === 'report') report = message.report;
         else if (message.type === 'error') failure = message.message;
       });
       worker.once('error', (error) => reject(error));
@@ -1291,6 +1323,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     await rm(inputRaw, { force: true }).catch(() => {});
     await rm(referenceRaw, { force: true }).catch(() => {});
     await rm(outputRaw, { force: true }).catch(() => {});
+    return { report };
   }
   const uuidPattern = /^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i;
   async function discardPolishPreview(previewId) {
@@ -1882,7 +1915,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       if (req.method === 'POST' && pathname === '/api/projects') {
         const input = await body(req);
         const createdAt = new Date().toISOString();
-        const project = { id: randomUUID(), title: text(input.title, 200).trim() || '제목 없는 곡', lyrics: text(input.lyrics), style: text(input.style, 4000), modelId: text(input.modelId, 200), seed: Number.isSafeInteger(Number(input.seed)) ? Number(input.seed) : -1, steps: Math.max(1, Math.min(1000, Number(input.steps) || 32)), cot: ['full', 'melody', 'off'].includes(input.cot) ? input.cot : 'full', vocalGender: VOCAL_GENDERS.has(input.vocalGender) ? input.vocalGender : '', instrumental: input.instrumental === true, abc: text(input.abc, 200000), mode: input.mode === 'simple' ? 'simple' : 'custom', status: 'draft', favorite: false, notes: '', createdAt, updatedAt: createdAt };
+        const project = { id: randomUUID(), title: text(input.title, 200).trim() || '제목 없는 곡', lyrics: text(input.lyrics), style: text(input.style, 4000), modelId: text(input.modelId, 200), seed: Number.isSafeInteger(Number(input.seed)) ? Number(input.seed) : -1, steps: Math.max(1, Math.min(1000, Number(input.steps) || 32)), cot: ['full', 'melody', 'off'].includes(input.cot) ? input.cot : 'full', vocalGender: VOCAL_GENDERS.has(input.vocalGender) ? input.vocalGender : '', instrumental: input.instrumental === true, abc: text(input.abc, 200000), adapters: normalizeAdapterSelection(input.adapters, await listAdapters(yueServerPaths(root).adapters)), mode: input.mode === 'simple' ? 'simple' : 'custom', status: 'draft', favorite: false, notes: '', createdAt, updatedAt: createdAt };
         const dir = settingDir();
         await mkdir(dir, { recursive: true });
         const file = await uniqueJsonPath(dir, project.title);
@@ -1958,6 +1991,120 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         if (!abc) throw fail(502, 'AI가 악보를 반환하지 않았습니다. 다른 지시사항으로 다시 시도해 주세요.');
         return send(200, { abc, provider: result.provider, model: result.model });
       }
+      if (req.method === 'GET' && pathname === '/api/adapters') {
+        const paths = yueServerPaths(root);
+        const missing = [];
+        for (const [label, target] of [['yue-server', paths.exe], ['YuE2 모델', paths.model], ['YuE2 VAE', paths.vae]]) if (!(await yueFileExists(target))) missing.push(label);
+        return send(200, { adapters: await listAdapters(paths.adapters), engineReady: missing.length === 0, missing });
+      }
+      if (req.method === 'GET' && pathname === '/api/adapters/hub/search') {
+        try { return send(200, { results: await searchHub({ fetchImpl, query: requestUrl.searchParams.get('q') || '' }) }); }
+        catch (error) { throw fail(502, error.message); }
+      }
+      if (req.method === 'GET' && pathname === '/api/adapters/hub/detail') {
+        try { return send(200, await hubDetail({ fetchImpl, repo: requestUrl.searchParams.get('repo') || '' })); }
+        catch (error) { throw fail(502, error.message); }
+      }
+      if (req.method === 'GET' && pathname === '/api/adapters/catalog') {
+        const installed = await listAdapters(yueServerPaths(root).adapters);
+        const done = new Set(installed.map((item) => item.source?.catalogId).filter(Boolean));
+        return send(200, { entries: (await loadCatalog()).map((entry) => ({ ...catalogSummary(entry), installed: done.has(entry.id) })) });
+      }
+      // Downloads run in the background; the page polls /api/adapters/hub/install/:jobId for progress.
+      const startInstallJob = (work) => {
+        const jobId = randomUUID();
+        const job = { status: 'downloading', downloaded: 0, total: 0, names: [], error: '' };
+        adapterInstalls.set(jobId, job);
+        setTimeout(() => adapterInstalls.delete(jobId), 60 * 60 * 1000).unref?.();
+        void (async () => {
+          try { await work(job); job.status = 'done'; }
+          catch (error) { job.status = 'failed'; job.error = error.message; }
+        })();
+        return jobId;
+      };
+      if (req.method === 'POST' && pathname === '/api/adapters/catalog/install') {
+        const input = await body(req, 8 * 1024);
+        const ids = Array.isArray(input.ids) ? input.ids.filter((id) => typeof id === 'string') : [];
+        const entries = (await loadCatalog()).filter((entry) => ids.includes(entry.id));
+        if (!entries.length) throw fail(400, '받을 LoRA를 선택해 주세요.');
+        const paths = yueServerPaths(root);
+        const jobId = startInstallJob(async (job) => {
+          const totalBytes = entries.reduce((sum, entry) => sum + entry.files.reduce((inner, file) => inner + file.bytes, 0), 0);
+          let finished = 0;
+          for (const entry of entries) {
+            const existingNames = (await listAdapters(paths.adapters)).map((item) => item.name);
+            const installed = await installCatalogEntry({ fetchImpl, adapterDir: paths.adapters, existingNames, entry, onProgress: (done) => { job.downloaded = finished + done; job.total = totalBytes; } });
+            finished += entry.files.reduce((sum, file) => sum + file.bytes, 0);
+            job.names.push(installed.name);
+          }
+        });
+        return send(202, { jobId });
+      }
+      if (req.method === 'POST' && pathname === '/api/adapters/hub/install') {
+        const input = await body(req, 8 * 1024);
+        const paths = yueServerPaths(root);
+        const unitPaths = (Array.isArray(input.paths) ? input.paths : [input.path]).filter((item) => typeof item === 'string').slice(0, 40);
+        const repo = text(input.repo, 200);
+        const jobId = startInstallJob(async (job) => {
+          const existingNames = (await listAdapters(paths.adapters)).map((item) => item.name);
+          const installed = await installHubUnits({ fetchImpl, adapterDir: paths.adapters, existingNames, repo, unitPaths, onProgress: (done, total) => { job.downloaded = done; job.total = total; } });
+          job.names.push(...installed.names);
+        });
+        return send(202, { jobId });
+      }
+      if (req.method === 'POST' && pathname === '/api/adapters/import') {
+        const input = await body(req, 16 * 1024);
+        const paths = yueServerPaths(root);
+        const files = (Array.isArray(input.paths) ? input.paths : []).map((item) => text(item, 1000).trim().replace(/^"|"$/g, '')).filter(Boolean);
+        for (const file of files) if (!path.isAbsolute(file)) throw fail(400, '파일은 전체 경로(예: C:/폴더/파일.safetensors)로 입력해 주세요.');
+        const existingNames = (await listAdapters(paths.adapters)).map((item) => item.name);
+        try { return send(201, await importLocalFiles({ adapterDir: paths.adapters, existingNames, name: text(input.name, 120).trim(), paths: files })); }
+        catch (error) { throw fail(400, error.message); }
+      }
+      const installStatusMatch = pathname.match(/^\/api\/adapters\/hub\/install\/([^/]+)$/);
+      if (installStatusMatch && req.method === 'GET') {
+        const job = adapterInstalls.get(installStatusMatch[1]);
+        if (!job) throw fail(404, '설치 작업을 찾을 수 없습니다.');
+        return send(200, job);
+      }
+      const adapterVerifyMatch = pathname.match(/^\/api\/adapters\/([^/]+)\/verify$/);
+      if (adapterVerifyMatch && req.method === 'POST') {
+        const name = decodeURIComponent(adapterVerifyMatch[1]);
+        const paths = yueServerPaths(root);
+        if (!(await listAdapters(paths.adapters)).some((item) => item.name === name)) throw fail(404, 'LoRA를 찾을 수 없습니다.');
+        for (const target of [paths.exe, paths.model, paths.vae]) if (!(await yueFileExists(target))) throw fail(400, 'LoRA 엔진(yue-server)과 모델이 준비되지 않아 검사할 수 없습니다.');
+        if (generating) throw fail(409, '이미 다른 작업을 실행 중입니다. 완료 후 다시 시도해 주세요.');
+        generating = true;
+        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 30000 };
+        try {
+          let probed;
+          try { probed = await probeAdapters({ paths, base: `http://127.0.0.1:${yueServerPort}`, spawnImpl, fetchImpl: (target, init) => fetch(target, init) }); }
+          catch (error) { throw fail(502, error.message); }
+          const found = probed.find((item) => item.name === name);
+          const verified = { ok: Boolean(found?.ok), ar: Boolean(found?.ar), nar: Boolean(found?.nar), at: new Date().toISOString() };
+          await updateMeta(path.join(paths.adapters, name), { verified });
+          return send(200, { verified });
+        } finally { generating = false; generationStatus = null; }
+      }
+      const adapterMatch = pathname.match(/^\/api\/adapters\/([^/]+)$/);
+      if (adapterMatch && req.method === 'PATCH') {
+        const name = decodeURIComponent(adapterMatch[1]);
+        const paths = yueServerPaths(root);
+        if (!(await listAdapters(paths.adapters)).some((item) => item.name === name)) throw fail(404, 'LoRA를 찾을 수 없습니다.');
+        const input = await body(req, 16 * 1024);
+        const patch = {};
+        if (typeof input.displayName === 'string') patch.displayName = text(input.displayName, 120).trim() || name;
+        if (typeof input.note === 'string') patch.note = text(input.note, 2000);
+        await updateMeta(path.join(paths.adapters, name), patch);
+        return send(200, (await listAdapters(paths.adapters)).find((item) => item.name === name));
+      }
+      if (adapterMatch && req.method === 'DELETE') {
+        const name = decodeURIComponent(adapterMatch[1]);
+        const paths = yueServerPaths(root);
+        if (!(await listAdapters(paths.adapters)).some((item) => item.name === name)) throw fail(404, 'LoRA를 찾을 수 없습니다.');
+        await rm(path.join(paths.adapters, name), { recursive: true, force: true });
+        return send(200, { ok: true });
+      }
       if (req.method === 'POST' && pathname === '/api/generate') {
         const input = await body(req);
         if (typeof input.projectId !== 'string') throw fail(400, '프로젝트 아이디가 필요합니다.');
@@ -1968,8 +2115,9 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         const isComfy = Boolean(COMFYUI_MODELS[entry.project.modelId]);
         if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
         generating = true;
-        const runner = isPython ? runPythonYue2 : isComfy ? runComfyUi : runAudioCpp;
-        const expectedMs = isPython ? 240000 : isComfy ? 60000 : Math.round(60000 * (Math.max(1, entry.project.steps) / 8));
+        const useYueServer = Array.isArray(entry.project.adapters) && entry.project.adapters.length > 0;
+        const runner = useYueServer ? runYueServer : isPython ? runPythonYue2 : isComfy ? runComfyUi : runAudioCpp;
+        const expectedMs = useYueServer ? 150000 : isPython ? 240000 : isComfy ? 60000 : Math.round(60000 * (Math.max(1, entry.project.steps) / 8));
         generationStatus = { projectId: entry.project.id, startedAt: Date.now(), expectedMs };
         try { return send(200, await runner(entry.project, entry.file)); }
         finally { generating = false; generationStatus = null; }
@@ -2717,11 +2865,12 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           await mkdir(dir, { recursive: true });
           const outputFile = path.join(dir, 'preview.flac');
           const onProgress = (percent, label) => { if (generationStatus) { generationStatus.progress = percent; generationStatus.detail = label; } };
-          try { await (polishRunner || defaultPolishRunner)({ inputFile, referenceFile, outputFile, settings, workDir: dir, onProgress }); }
+          let report = null;
+          try { report = (await (polishRunner || defaultPolishRunner)({ inputFile, referenceFile, outputFile, settings, workDir: dir, onProgress }))?.report || null; }
           catch (error) { throw error?.status ? error : fail(502, `곡 다듬기에 실패했습니다. ${error?.message || ''}`.trim()); }
           if (!(await exists(outputFile))) throw fail(502, '곡 다듬기 결과가 만들어지지 않았습니다.');
           polishPreviews.set(previewId, { dir, file: outputFile, project: entry.project, stages });
-          return send(200, { previewId, stages, durationMs: await measureDurationMs(outputFile) });
+          return send(200, { previewId, stages, report, durationMs: await measureDurationMs(outputFile) });
         } catch (error) {
           await rm(dir, { recursive: true, force: true }).catch(() => {});
           throw error;

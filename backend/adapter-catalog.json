@@ -1,0 +1,542 @@
+{
+ "generatedAt": "2026-09-24T17:35:57.474Z",
+ "entries": [
+  {
+   "id": "industrial-rock",
+   "stage": "both",
+   "kind": "style",
+   "repo": "monsterovich/yue2-industrial-rock-lora",
+   "scales": {
+    "ar": 1,
+    "nar": 0.5
+   },
+   "name": "인더스트리얼 록",
+   "description": "묵직한 기계 리듬과 왜곡된 기타. 곡의 구성과 소리를 모두 바꿉니다.",
+   "files": [
+    {
+     "path": "adapter-ar-179/lora.safetensors",
+     "bytes": 34907280
+    },
+    {
+     "path": "adapter-nar-179-v2/lora.safetensors",
+     "bytes": 140046120
+    }
+   ],
+   "author": "monsterovich",
+   "page": "https://huggingface.co/monsterovich/yue2-industrial-rock-lora",
+   "license": "",
+   "revision": "a71706d59e2874f1e6db9aa10e8da5cc19e6c924"
+  },
+  {
+   "id": "epic-trailer",
+   "stage": "both",
+   "kind": "style",
+   "repo": "monsterovich/yue2-steps-from-hell",
+   "scales": {
+    "ar": 0.5,
+    "nar": 0.375
+   },
+   "name": "에픽 트레일러",
+   "description": "영화 예고편 음악 같은 웅장한 오케스트라. 합창, 금관, 큰 북이 특징입니다.",
+   "files": [
+    {
+     "path": "adapter-ar-195/lora.safetensors",
+     "bytes": 34907280
+    },
+    {
+     "path": "adapter-nar-194/lora.safetensors",
+     "bytes": 140046120
+    }
+   ],
+   "author": "monsterovich",
+   "page": "https://huggingface.co/monsterovich/yue2-steps-from-hell",
+   "license": "",
+   "revision": "bc84ad1867158e1112ab9601c74b338847d9dff2"
+  },
+  {
+   "id": "dream-pop",
+   "stage": "both",
+   "kind": "style",
+   "repo": "atomtanstudio/lora-library",
+   "trigger": "sv_dreampop",
+   "scales": {
+    "ar": 1,
+    "nar": 1
+   },
+   "name": "드림 팝",
+   "description": "몽환적인 리버브 기타와 떠다니는 보컬. 작곡 계획을 끄고 쓰는 것을 권장합니다.",
+   "tip": "스타일 앞에 sv_dreampop 을 붙이고, 작곡 계획은 \"계획 없이 생성\", 추론 단계는 32로 시작하세요.",
+   "files": [
+    {
+     "path": "yue2/dreampop/dreampop_sv_dreampop.safetensors",
+     "bytes": 234969024
+    }
+   ],
+   "author": "atomtanstudio",
+   "page": "https://huggingface.co/atomtanstudio/lora-library",
+   "license": "cc-by-nc-4.0",
+   "revision": "b5727622224c267030be0054464d953188edba49"
+  },
+  {
+   "id": "old-school-hiphop",
+   "stage": "both",
+   "kind": "style",
+   "repo": "atomtanstudio/lora-library",
+   "trigger": "sv_oldschoolhiphop",
+   "scales": {
+    "ar": 1,
+    "nar": 1
+   },
+   "name": "올드스쿨 힙합",
+   "description": "붐뱁 드럼, 먼지 낀 샘플, 90년대 플로우. 작곡 계획을 끄고 쓰는 것을 권장합니다.",
+   "tip": "스타일 앞에 sv_oldschoolhiphop 을 붙이고, 작곡 계획은 \"계획 없이 생성\"으로 시작하세요.",
+   "files": [
+    {
+     "path": "yue2/oldschoolhiphop/sv_oldschoolhiphop.safetensors",
+     "bytes": 234969032
+    }
+   ],
+   "author": "atomtanstudio",
+   "page": "https://huggingface.co/atomtanstudio/lora-library",
+   "license": "cc-by-nc-4.0",
+   "revision": "b5727622224c267030be0054464d953188edba49"
+  },
+  {
+   "id": "sv-billie",
+   "stage": "both",
+   "kind": "artist",
+   "repo": "HaileyStorm/sv-billie-yue2-lora",
+   "trigger": "sv_billie",
+   "scales": {
+    "ar": 1,
+    "nar": 1
+   },
+   "name": "SV Billie",
+   "description": "아티스트 LoRA. 숨소리 섞인 낮고 친밀한 보컬, 묵직한 저음의 침실 팝.",
+   "tip": "스타일 앞에 \"sv_billie, in the style of sv_billie.\" 를 붙이면 잘 반응합니다. 길이는 넉넉하게 잡으세요.",
+   "files": [
+    {
+     "path": "sv_billie.safetensors",
+     "bytes": 117500888
+    }
+   ],
+   "author": "HaileyStorm",
+   "page": "https://huggingface.co/HaileyStorm/sv-billie-yue2-lora",
+   "license": "cc-by-nc-4.0",
+   "revision": "94fe9fbf5dfd3e97eefeb3ef54e2801eb3b69077"
+  },
+  {
+   "id": "instrumental",
+   "stage": "ar",
+   "kind": "composition",
+   "repo": "Mothersuperior/YuE2-instrumental-cot-full-loras",
+   "scales": {
+    "ar": 1,
+    "nar": 1
+   },
+   "name": "연주곡 (Instrumental)",
+   "description": "보컬 없는 연주곡을 구간 계획과 함께 만듭니다. 작곡 계획은 \"멜로디와 코드 계획\"으로 쓰세요.",
+   "tip": "가사에는 [instrumental] 또는 [intro] [verse] [chorus] 같은 구간 태그만 적으세요.",
+   "files": [
+    {
+     "path": "ar_lora_inst_v3abc.bf16.safetensors",
+     "bytes": 139502088
+    }
+   ],
+   "author": "Mothersuperior",
+   "page": "https://huggingface.co/Mothersuperior/YuE2-instrumental-cot-full-loras",
+   "license": "cc-by-nc-4.0",
+   "revision": "947f2f4b28978b2b6c3e316e6a87925c76bf3c4b"
+  },
+  {
+   "id": "real-audio",
+   "stage": "nar",
+   "kind": "sound",
+   "repo": "Mothersuperior/yue2-mothersuperior-realaudio-tokenizer-v4",
+   "scales": {
+    "ar": 1,
+    "nar": 1
+   },
+   "name": "리얼 오디오 (v9)",
+   "description": "실제 녹음으로 사운드 쪽을 다시 학습시킨 것. 더 꽉 찬 믹스와 자연스러운 음색, 작곡은 그대로입니다.",
+   "files": [
+    {
+     "path": "nar_lora_joint_v9.safetensors",
+     "bytes": 140560592
+    }
+   ],
+   "author": "Mothersuperior",
+   "page": "https://huggingface.co/Mothersuperior/yue2-mothersuperior-realaudio-tokenizer-v4",
+   "license": "cc-by-nc-4.0",
+   "revision": "e2e63d859f3af879baf1b4d4e9f22d1eeda6fde5"
+  },
+  {
+   "id": "slider-acoustic-folk",
+   "stage": "ar",
+   "kind": "slider",
+   "repo": "ntc-ai/yue2-particle-sliders",
+   "scales": {
+    "ar": 0.5,
+    "nar": 0
+   },
+   "name": "어쿠스틱 포크",
+   "description": "따뜻한 어쿠스틱 기타의 포크 색깔",
+   "tip": "슬라이더는 0~1 사이에서 살짝 섞어 쓰는 용도입니다. 다른 LoRA와 함께 써 보세요.",
+   "files": [
+    {
+     "path": "distilled-rank8-v1/native/acoustic-folk_distilled_refined_rank8.safetensors",
+     "bytes": 12891952
+    }
+   ],
+   "author": "ntc-ai",
+   "page": "https://huggingface.co/ntc-ai/yue2-particle-sliders",
+   "license": "cc-by-nc-4.0",
+   "revision": "33cf42fb0a54f60d8264d64cf6c20f038c4d172b"
+  },
+  {
+   "id": "slider-afrobeats",
+   "stage": "ar",
+   "kind": "slider",
+   "repo": "ntc-ai/yue2-particle-sliders",
+   "scales": {
+    "ar": 0.5,
+    "nar": 0
+   },
+   "name": "아프로비트",
+   "description": "아프리카 리듬의 경쾌한 그루브",
+   "tip": "슬라이더는 0~1 사이에서 살짝 섞어 쓰는 용도입니다. 다른 LoRA와 함께 써 보세요.",
+   "files": [
+    {
+     "path": "distilled-rank8-v1/native/afrobeats_distilled_refined_rank8.safetensors",
+     "bytes": 12891952
+    }
+   ],
+   "author": "ntc-ai",
+   "page": "https://huggingface.co/ntc-ai/yue2-particle-sliders",
+   "license": "cc-by-nc-4.0",
+   "revision": "33cf42fb0a54f60d8264d64cf6c20f038c4d172b"
+  },
+  {
+   "id": "slider-country",
+   "stage": "ar",
+   "kind": "slider",
+   "repo": "ntc-ai/yue2-particle-sliders",
+   "scales": {
+    "ar": 0.5,
+    "nar": 0
+   },
+   "name": "컨트리",
+   "description": "컨트리 특유의 기타와 보컬 표현",
+   "tip": "슬라이더는 0~1 사이에서 살짝 섞어 쓰는 용도입니다. 다른 LoRA와 함께 써 보세요.",
+   "files": [
+    {
+     "path": "distilled-rank8-v1/native/country_distilled_refined_rank8.safetensors",
+     "bytes": 12891944
+    }
+   ],
+   "author": "ntc-ai",
+   "page": "https://huggingface.co/ntc-ai/yue2-particle-sliders",
+   "license": "cc-by-nc-4.0",
+   "revision": "33cf42fb0a54f60d8264d64cf6c20f038c4d172b"
+  },
+  {
+   "id": "slider-disco-funk",
+   "stage": "ar",
+   "kind": "slider",
+   "repo": "ntc-ai/yue2-particle-sliders",
+   "scales": {
+    "ar": 0.5,
+    "nar": 0
+   },
+   "name": "디스코 펑크",
+   "description": "리듬감 있는 디스코·펑크 그루브",
+   "tip": "슬라이더는 0~1 사이에서 살짝 섞어 쓰는 용도입니다. 다른 LoRA와 함께 써 보세요.",
+   "files": [
+    {
+     "path": "distilled-rank8-v1/native/disco-funk_distilled_refined_rank8.safetensors",
+     "bytes": 12891944
+    }
+   ],
+   "author": "ntc-ai",
+   "page": "https://huggingface.co/ntc-ai/yue2-particle-sliders",
+   "license": "cc-by-nc-4.0",
+   "revision": "33cf42fb0a54f60d8264d64cf6c20f038c4d172b"
+  },
+  {
+   "id": "slider-female",
+   "stage": "ar",
+   "kind": "slider",
+   "repo": "ntc-ai/yue2-particle-sliders",
+   "scales": {
+    "ar": 0.5,
+    "nar": 0
+   },
+   "name": "여성 보컬",
+   "description": "성인 여성 리드 보컬, 곡의 프레이징은 유지",
+   "tip": "슬라이더는 0~1 사이에서 살짝 섞어 쓰는 용도입니다. 다른 LoRA와 함께 써 보세요.",
+   "files": [
+    {
+     "path": "distilled-rank8-v1/native/female_distilled_refined_rank8.safetensors",
+     "bytes": 12891944
+    }
+   ],
+   "author": "ntc-ai",
+   "page": "https://huggingface.co/ntc-ai/yue2-particle-sliders",
+   "license": "cc-by-nc-4.0",
+   "revision": "33cf42fb0a54f60d8264d64cf6c20f038c4d172b"
+  },
+  {
+   "id": "slider-male",
+   "stage": "ar",
+   "kind": "slider",
+   "repo": "ntc-ai/yue2-particle-sliders",
+   "scales": {
+    "ar": 0.5,
+    "nar": 0
+   },
+   "name": "남성 보컬",
+   "description": "성인 남성 리드 보컬, 곡의 프레이징은 유지",
+   "tip": "슬라이더는 0~1 사이에서 살짝 섞어 쓰는 용도입니다. 다른 LoRA와 함께 써 보세요.",
+   "files": [
+    {
+     "path": "distilled-rank8-v1/native/male_distilled_refined_rank8.safetensors",
+     "bytes": 12891944
+    }
+   ],
+   "author": "ntc-ai",
+   "page": "https://huggingface.co/ntc-ai/yue2-particle-sliders",
+   "license": "cc-by-nc-4.0",
+   "revision": "33cf42fb0a54f60d8264d64cf6c20f038c4d172b"
+  },
+  {
+   "id": "slider-hiphop",
+   "stage": "ar",
+   "kind": "slider",
+   "repo": "ntc-ai/yue2-particle-sliders",
+   "scales": {
+    "ar": 0.5,
+    "nar": 0
+   },
+   "name": "힙합",
+   "description": "힙합 비트와 랩 스타일",
+   "tip": "슬라이더는 0~1 사이에서 살짝 섞어 쓰는 용도입니다. 다른 LoRA와 함께 써 보세요.",
+   "files": [
+    {
+     "path": "distilled-rank8-v1/native/hiphop_distilled_refined_rank8.safetensors",
+     "bytes": 12891944
+    }
+   ],
+   "author": "ntc-ai",
+   "page": "https://huggingface.co/ntc-ai/yue2-particle-sliders",
+   "license": "cc-by-nc-4.0",
+   "revision": "33cf42fb0a54f60d8264d64cf6c20f038c4d172b"
+  },
+  {
+   "id": "slider-house",
+   "stage": "ar",
+   "kind": "slider",
+   "repo": "ntc-ai/yue2-particle-sliders",
+   "scales": {
+    "ar": 0.5,
+    "nar": 0
+   },
+   "name": "하우스",
+   "description": "4/4 킥의 하우스 댄스 리듬",
+   "tip": "슬라이더는 0~1 사이에서 살짝 섞어 쓰는 용도입니다. 다른 LoRA와 함께 써 보세요.",
+   "files": [
+    {
+     "path": "distilled-rank8-v1/native/house_distilled_refined_rank8.safetensors",
+     "bytes": 12891944
+    }
+   ],
+   "author": "ntc-ai",
+   "page": "https://huggingface.co/ntc-ai/yue2-particle-sliders",
+   "license": "cc-by-nc-4.0",
+   "revision": "33cf42fb0a54f60d8264d64cf6c20f038c4d172b"
+  },
+  {
+   "id": "slider-indie-rock",
+   "stage": "ar",
+   "kind": "slider",
+   "repo": "ntc-ai/yue2-particle-sliders",
+   "scales": {
+    "ar": 0.5,
+    "nar": 0
+   },
+   "name": "인디 록",
+   "description": "인디 록의 기타와 질감",
+   "tip": "슬라이더는 0~1 사이에서 살짝 섞어 쓰는 용도입니다. 다른 LoRA와 함께 써 보세요.",
+   "files": [
+    {
+     "path": "distilled-rank8-v1/native/indie-rock_distilled_refined_rank8.safetensors",
+     "bytes": 12891952
+    }
+   ],
+   "author": "ntc-ai",
+   "page": "https://huggingface.co/ntc-ai/yue2-particle-sliders",
+   "license": "cc-by-nc-4.0",
+   "revision": "33cf42fb0a54f60d8264d64cf6c20f038c4d172b"
+  },
+  {
+   "id": "slider-kpop",
+   "stage": "ar",
+   "kind": "slider",
+   "repo": "ntc-ai/yue2-particle-sliders",
+   "scales": {
+    "ar": 0.5,
+    "nar": 0
+   },
+   "name": "케이팝",
+   "description": "케이팝 스타일의 훅과 편곡",
+   "tip": "슬라이더는 0~1 사이에서 살짝 섞어 쓰는 용도입니다. 다른 LoRA와 함께 써 보세요.",
+   "files": [
+    {
+     "path": "distilled-rank8-v1/native/kpop_distilled_refined_rank8.safetensors",
+     "bytes": 12891944
+    }
+   ],
+   "author": "ntc-ai",
+   "page": "https://huggingface.co/ntc-ai/yue2-particle-sliders",
+   "license": "cc-by-nc-4.0",
+   "revision": "33cf42fb0a54f60d8264d64cf6c20f038c4d172b"
+  },
+  {
+   "id": "slider-lofi",
+   "stage": "ar",
+   "kind": "slider",
+   "repo": "ntc-ai/yue2-particle-sliders",
+   "scales": {
+    "ar": 0.5,
+    "nar": 0
+   },
+   "name": "로파이",
+   "description": "차분하고 먼지 낀 로파이 분위기",
+   "tip": "슬라이더는 0~1 사이에서 살짝 섞어 쓰는 용도입니다. 다른 LoRA와 함께 써 보세요.",
+   "files": [
+    {
+     "path": "distilled-rank8-v1/native/lofi_distilled_refined_rank8.safetensors",
+     "bytes": 12891944
+    }
+   ],
+   "author": "ntc-ai",
+   "page": "https://huggingface.co/ntc-ai/yue2-particle-sliders",
+   "license": "cc-by-nc-4.0",
+   "revision": "33cf42fb0a54f60d8264d64cf6c20f038c4d172b"
+  },
+  {
+   "id": "slider-metal",
+   "stage": "ar",
+   "kind": "slider",
+   "repo": "ntc-ai/yue2-particle-sliders",
+   "scales": {
+    "ar": 0.5,
+    "nar": 0
+   },
+   "name": "메탈",
+   "description": "강한 디스토션의 메탈",
+   "tip": "슬라이더는 0~1 사이에서 살짝 섞어 쓰는 용도입니다. 다른 LoRA와 함께 써 보세요.",
+   "files": [
+    {
+     "path": "distilled-rank8-v1/native/metal_distilled_refined_rank8.safetensors",
+     "bytes": 12891944
+    }
+   ],
+   "author": "ntc-ai",
+   "page": "https://huggingface.co/ntc-ai/yue2-particle-sliders",
+   "license": "cc-by-nc-4.0",
+   "revision": "33cf42fb0a54f60d8264d64cf6c20f038c4d172b"
+  },
+  {
+   "id": "slider-pop-punk",
+   "stage": "ar",
+   "kind": "slider",
+   "repo": "ntc-ai/yue2-particle-sliders",
+   "scales": {
+    "ar": 0.5,
+    "nar": 0
+   },
+   "name": "팝 펑크",
+   "description": "빠르고 신나는 팝 펑크",
+   "tip": "슬라이더는 0~1 사이에서 살짝 섞어 쓰는 용도입니다. 다른 LoRA와 함께 써 보세요.",
+   "files": [
+    {
+     "path": "distilled-rank8-v1/native/pop-punk_distilled_refined_rank8.safetensors",
+     "bytes": 12891944
+    }
+   ],
+   "author": "ntc-ai",
+   "page": "https://huggingface.co/ntc-ai/yue2-particle-sliders",
+   "license": "cc-by-nc-4.0",
+   "revision": "33cf42fb0a54f60d8264d64cf6c20f038c4d172b"
+  },
+  {
+   "id": "slider-pop",
+   "stage": "ar",
+   "kind": "slider",
+   "repo": "ntc-ai/yue2-particle-sliders",
+   "scales": {
+    "ar": 0.5,
+    "nar": 0
+   },
+   "name": "팝",
+   "description": "분명한 훅, 또렷한 드럼, 다듬어진 후렴",
+   "tip": "슬라이더는 0~1 사이에서 살짝 섞어 쓰는 용도입니다. 다른 LoRA와 함께 써 보세요.",
+   "files": [
+    {
+     "path": "distilled-rank8-v1/native/pop_distilled_refined_rank8.safetensors",
+     "bytes": 12891944
+    }
+   ],
+   "author": "ntc-ai",
+   "page": "https://huggingface.co/ntc-ai/yue2-particle-sliders",
+   "license": "cc-by-nc-4.0",
+   "revision": "33cf42fb0a54f60d8264d64cf6c20f038c4d172b"
+  },
+  {
+   "id": "slider-reggaeton",
+   "stage": "ar",
+   "kind": "slider",
+   "repo": "ntc-ai/yue2-particle-sliders",
+   "scales": {
+    "ar": 0.5,
+    "nar": 0
+   },
+   "name": "레게톤",
+   "description": "레게톤 리듬",
+   "tip": "슬라이더는 0~1 사이에서 살짝 섞어 쓰는 용도입니다. 다른 LoRA와 함께 써 보세요.",
+   "files": [
+    {
+     "path": "distilled-rank8-v1/native/reggaeton_distilled_refined_rank8.safetensors",
+     "bytes": 12891952
+    }
+   ],
+   "author": "ntc-ai",
+   "page": "https://huggingface.co/ntc-ai/yue2-particle-sliders",
+   "license": "cc-by-nc-4.0",
+   "revision": "33cf42fb0a54f60d8264d64cf6c20f038c4d172b"
+  },
+  {
+   "id": "slider-rnb",
+   "stage": "ar",
+   "kind": "slider",
+   "repo": "ntc-ai/yue2-particle-sliders",
+   "scales": {
+    "ar": 0.5,
+    "nar": 0
+   },
+   "name": "R&B",
+   "description": "부드러운 R&B 그루브",
+   "tip": "슬라이더는 0~1 사이에서 살짝 섞어 쓰는 용도입니다. 다른 LoRA와 함께 써 보세요.",
+   "files": [
+    {
+     "path": "distilled-rank8-v1/native/rnb_distilled_refined_rank8.safetensors",
+     "bytes": 12891944
+    }
+   ],
+   "author": "ntc-ai",
+   "page": "https://huggingface.co/ntc-ai/yue2-particle-sliders",
+   "license": "cc-by-nc-4.0",
+   "revision": "33cf42fb0a54f60d8264d64cf6c20f038c4d172b"
+  }
+ ]
+}

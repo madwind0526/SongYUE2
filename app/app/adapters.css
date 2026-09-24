@@ -1,0 +1,85 @@
+/* LoRA 관리 페이지와 곡 만들기의 LoRA 선택 */
+.adapter-page { display: flex; flex-direction: column; gap: 12px; padding-bottom: 60px; }
+.adapter-tabs { display: flex; gap: 4px; padding: 4px; border-radius: 10px; background: #1a211a; border: 1px solid #2f3a2f; max-width: 520px; }
+.adapter-tabs button { flex: 1; padding: 8px 12px; border-radius: 7px; font-size: 13px; color: #8fa280; background: transparent; border: 0; cursor: pointer; }
+.adapter-tabs button:hover { color: #c9d8bf; }
+.adapter-tabs button.active { background: #2b382a; color: #eaf3e2; font-weight: 600; }
+.adapter-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; align-items: start; }
+.adapter-grid.hub { grid-template-columns: 1fr; }
+.adapter-card { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border-radius: 12px; border: 1px solid #333f31; background: #1d251c; text-align: left; color: #cfdcc6; }
+button.adapter-card, label.adapter-card { cursor: pointer; }
+.adapter-card:hover { border-color: #4b5d48; }
+.adapter-card.selected { border-color: #8fbf7f; background: #222d21; }
+.adapter-card.installed { opacity: .65; }
+.adapter-card-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.adapter-card-head strong { font-size: 14px; color: #eaf3e2; }
+.adapter-check { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.adapter-badge { flex: none; font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #2b382a; color: #a9c39c; }
+.adapter-badge.kind { background: #3a2a3a; color: #e0b4d8; letter-spacing: .02em; }
+.adapter-meta { display: flex; flex-wrap: wrap; gap: 5px; }
+.adapter-chip { font-size: 11px; padding: 2px 8px; border-radius: 6px; background: #28322700; border: 1px solid #3a4838; color: #a9bd9f; }
+.adapter-chip.stage-ar, .adapter-chip.stage-nar, .adapter-chip.stage-both { border-color: #56704f; color: #c5dbb9; }
+.adapter-chip.trigger { border-color: #7a6a3a; color: #e6d08c; }
+.adapter-chip.lang { border-color: #3e5570; color: #9fbfe0; }
+.adapter-chip.ok { border-color: #4f8a52; color: #8fe08f; }
+.adapter-chip.bad, .adapter-chip.warn { border-color: #8a4f4f; color: #f0a3a3; }
+.adapter-desc { font-size: 13px; line-height: 1.55; color: #cfdcc6; margin: 0; }
+.adapter-tip { font-size: 12px; line-height: 1.5; color: #d9c98a; margin: 0; }
+.adapter-note { font-size: 12px; color: #9fb094; margin: 0; white-space: pre-wrap; }
+.adapter-sub { font-size: 11.5px; color: #7f917a; margin: 0; line-height: 1.5; }
+.adapter-sub a, .adapter-foot a { color: #8fb8e0; text-decoration: none; }
+.adapter-sub a:hover, .adapter-foot a:hover { text-decoration: underline; }
+.adapter-samples { display: flex; flex-direction: column; gap: 6px; }
+.adapter-samples audio { width: 100%; height: 32px; }
+.adapter-sample { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: #90a286; }
+.adapter-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.adapter-foot { display: flex; justify-content: space-between; align-items: center; font-size: 11.5px; color: #8fa280; margin-top: 2px; }
+.adapter-done { display: inline-flex; align-items: center; gap: 3px; color: #8fe08f; font-weight: 600; }
+.adapter-filters { display: flex; gap: 8px; align-items: center; }
+.adapter-filters [data-slot=input] { flex: 1; }
+.adapter-filters select { height: 34px; border-radius: 8px; border: 1px solid #384038; background: #222722; color: #cfdcc6; padding: 0 8px; }
+.adapter-chiprow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; color: #7f917a; }
+.adapter-chiprow > span { margin-right: 4px; }
+.adapter-chiprow button { padding: 3px 10px; border-radius: 999px; border: 1px solid #364434; background: transparent; color: #a3b598; font-size: 12px; cursor: pointer; }
+.adapter-chiprow button.active { background: #33462f; border-color: #6d9a5f; color: #eaf3e2; }
+.adapter-paste { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 8px; border: 1px dashed #56704f; color: #c5dbb9; font-size: 13px; }
+.adapter-hub-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-items: start; }
+.adapter-hub-layout:has(.adapter-detail) { grid-template-columns: minmax(0, 1fr) minmax(320px, 420px); }
+.adapter-detail { position: sticky; top: 8px; display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border-radius: 12px; border: 1px solid #4b5d48; background: #1d251c; max-height: calc(100vh - 140px); overflow: auto; }
+.adapter-close { background: transparent; border: 0; color: #8fa280; cursor: pointer; }
+.adapter-units { display: flex; flex-direction: column; gap: 6px; }
+.adapter-unit { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: 8px; border: 1px solid #333f31; cursor: pointer; }
+.adapter-unit:hover { border-color: #4b5d48; }
+.adapter-unit.done { opacity: .6; }
+.adapter-unit > div { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.adapter-unit strong { font-size: 12.5px; color: #dbe7d2; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.adapter-unit small { font-size: 11px; color: #7f917a; }
+.adapter-pickbar { display: flex; gap: 8px; position: sticky; bottom: 8px; padding: 10px; border-radius: 10px; background: #172016; border: 1px solid #4b5d48; }
+.adapter-install-bar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 8px; background: #1d251c; border: 1px solid #4b5d48; font-size: 12.5px; color: #c5dbb9; }
+.adapter-install-bar [role=progressbar], .adapter-install-bar > div:last-child { flex: 1; min-width: 80px; }
+.adapter-import { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; border-radius: 12px; border: 1px solid #333f31; background: #1a211a; }
+.adapter-import strong { display: flex; align-items: center; gap: 6px; font-size: 13.5px; color: #eaf3e2; }
+.adapter-import-row { display: flex; gap: 8px; }
+.adapter-import-row [data-slot=input] { flex: 1; }
+.adapter-import [data-slot=textarea] { min-height: 52px; font-size: 12px; }
+
+/* song form */
+.adapter-picker { display: flex; flex-direction: column; gap: 6px; }
+.adapter-pick { display: flex; flex-direction: column; gap: 4px; padding: 6px 8px; border-radius: 8px; border: 1px solid #2f3a2f; }
+.adapter-pick > label { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #cfdcc6; cursor: pointer; }
+.adapter-pick > label small { color: #7f917a; margin-left: auto; font-size: 11px; }
+.adapter-scales { display: flex; flex-direction: column; gap: 4px; padding: 2px 0 2px 24px; }
+.adapter-scale { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: #90a286; }
+.adapter-scale em { width: 40px; font-style: normal; }
+.adapter-scale input[type=range] { flex: 1; }
+.adapter-scale b { width: 34px; text-align: right; color: #cfdcc6; font-weight: 500; }
+.link-button { background: transparent; border: 0; color: #8fb8e0; font-size: 11.5px; cursor: pointer; padding: 0 4px; text-align: left; }
+.link-button:hover { text-decoration: underline; }
+
+/* the advanced-settings labels are column/centered by default; the LoRA rows are plain left-aligned rows */
+.adapter-picker .adapter-pick > label { display: flex; flex-direction: row !important; align-items: center; gap: 8px; text-align: left; }
+.adapter-picker .adapter-pick > label input { width: auto; flex: none; }
+.adapter-picker .adapter-pick > label span { flex: 1; min-width: 0; }
+.adapter-picker .adapter-scale { flex-direction: row; }
+.adapter-picker .adapter-scales { align-items: stretch; text-align: left; }
+.adapter-picker .adapter-scales .vocal-gender-hint, .adapter-picker .adapter-scales .link-button { text-align: left; }

@@ -51,3 +51,23 @@ GGUF 폴더에는 BF16, Q8_0, Q4_0 본체와 F16/F32 VAE 및 `sidecars/`가 있�
 상태 JSON은 전체 및 저장소별 총 바이트·완료 바이트와 파일별 경로·크기·해시·상태를 포함합니다. 프론트엔드는 실제 파일 상태와 존재 여부를 바탕으로 다운로드 완료를 표시해야 합니다.
 
 **2026-09-25 정리**: 이 PC(RTX 5070 12GB)에서 Q4 GGUF는 품질이 낮아 쓸 수 없고 BF16 GGUF는 너무 커서 실행할 수 없어, `yue2-3b-q4_0.gguf`, `yue2-3b-bf16.gguf`, 그 전용 `yue2-vae-f32.gguf`를 삭제했다(Q4로 만든 저장곡은 없었음). 기본 모델은 Q8 GGUF(+F16 VAE)이고, 다른 하나는 ComfyUI의 INT8 ConvRot이다. 삭제한 모델은 앱의 모델 목록에 "다운로드 필요"로 남으며 누르면 안내만 나온다(선택되지 않음). 원본 Python 모델(`m-a-p/YuE2-3B`)은 "악기만"·ABC 악보 기능의 계획 단계에 쓰이므로 남겨 두었다. 모델 목록(`GET /api/models`)은 다운로드 기록이 아니라 **디스크에 실제로 있는 파일**만 보여 준다.
+
+## LoRA 엔진 (yue-server) — 2026-09-25부터
+
+LoRA/LoKr 어댑터는 audio.cpp가 읽지 못해서, **어댑터를 고른 곡만** YuE2 Studio가 쓰는 `yue-server`(yue2.cpp 포크, MIT)로 만듭니다. 어댑터를 쓰지 않는 곡은 지금까지와 똑같이 audio.cpp로 만들어지며, 이 엔진이 없어도 앱의 다른 기능은 그대로 동작합니다. 새 YuE 모델이 나오면 audio.cpp 쪽 모델만 바꾸면 되도록, 두 엔진의 모델은 서로 독립입니다.
+
+| 필요한 것 | 위치 | 받는 곳 |
+|---|---|---|
+| `yue-server.exe` 와 dll (CUDA 빌드, 약 207 MB) | `engine/yue-server/` | YuE2 Studio 포터블의 `resources/yue2-cpp/` 폴더 전체를 복사하거나, `github.com/timoncool/yue2.cpp`를 CMake(CUDA)로 빌드 |
+| `YuE2-3B-Q8_0.gguf` (3.8 GB) | `models/yue-server/` | 허깅페이스 `Serveurperso/YuE2-GGUF` |
+| `YuE2-Vae-F32.gguf` (0.5 GB) | `models/yue-server/` | 같은 저장소 |
+| LoRA 어댑터 | `models/yue-adapters/<이름>/` | 앱의 "LoRA 관리" 화면에서 받기(카탈로그·허깅페이스)·가져오기 |
+
+- **이 앱의 `models/audio-cpp/Yue2-3B-GGUF/yue2-3b-q8_0.gguf`는 yue-server에서 쓸 수 없습니다.** yue-server는 토크나이저가 들어 있는 GGUF를 요구하는데(로드 시 `Tokenizer not found in …`), audio.cpp용 GGUF는 토크나이저를 별도 sidecar 파일로 둡니다. 그래서 위 두 파일이 따로 필요합니다(합계 약 4.3 GB 추가).
+- 포트는 `127.0.0.1:8189`(`C:\Claude\PORTS.md`). "노래 만들기" 때 필요하면 앱이 시작하고 곡이 끝나면 종료하므로 GPU 메모리를 계속 점유하지 않습니다. 이미 같은 포트에서 서버가 떠 있으면 그것을 재사용하고 끄지 않습니다.
+- 어댑터 폴더 하나 = LoRA 하나입니다. 폴더에 `.safetensors` 파일이 1~2개(작곡 쪽 AR과 사운드 쪽 NAR을 따로 받은 경우 2개)와 앱이 적는 `songyue2-adapter.json`(이름, 종류, 설명, 트리거 단어, 추천 강도, 출처와 커밋)이 들어갑니다. 직접 넣은 폴더도 인식하며, 그때는 `adapter_config.json`의 `"ar": true` 여부로 AR/NAR을 추정하고 "엔진 검사"를 누르면 엔진이 알려 주는 실제 범위(작곡/사운드)로 바뀝니다.
+- 확인한 형식: PEFT/일반 LoRA(`lora_A/lora_B`), ComfyUI용 파일, bf16 파일, LoKr 모두 로드됨. DoRA·LoHa·PiSSA 델타는 엔진이 거부합니다. AR(작곡) 쪽만 바꾸는 파일, NAR(사운드) 쪽만 바꾸는 파일, 둘 다 바꾸는 파일이 있고, 곡 만들기의 LoRA 선택은 **작곡 강도와 사운드 강도를 따로** 받습니다(yue-server의 `ar_scale`/`nar_scale`).
+- **카탈로그**(`backend/adapter-catalog.json`)는 `node scripts/build-adapter-catalog.mjs`로 만듭니다. 각 항목의 설명·추천 강도·트리거는 공개 모델 카드를 보고 손으로 적고, 파일 크기와 다운로드가 고정되는 커밋은 허깅페이스 API에서 읽습니다. 모든 파일을 실제로 yue-server에 로드해 AR/NAR 범위를 확인했습니다.
+- **허깅페이스 탭**은 `yue2` 검색 결과에서 YuE2 어댑터만 골라(다른 모델의 LoRA, 모델 변환본 제외) 태그·언어·라이선스·샘플 수·파일 이름에서 분류하고, 저장소를 열면 README 첫 문단과 샘플 음원, 받을 수 있는 파일을 보여 줍니다. 작곡(AR) 파일 1개와 사운드(NAR) 파일 1개를 함께 고르면 하나의 LoRA로 묶습니다.
+- 제한: LoRA를 쓰는 곡은 "악기만" 모드를 지원하지 않습니다(악기만은 audio.cpp 쪽에서 무보컬 악보를 만들어 쓰는 방식이라 이 엔진에 옮기지 않았습니다). 같은 시드여도 audio.cpp와 yue-server의 결과는 다릅니다. 비상업(cc-by-nc) 라이선스인 LoRA가 많아 화면에 "비상업용"으로 표시합니다.
+- 실측(RTX 5070 12 GB): 30초 곡 약 14초, 1분 39초 곡 34초(추론 단계 32).
