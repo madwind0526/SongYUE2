@@ -1862,7 +1862,6 @@ test('음색 변조 - RVC/MeanVC2: RVC는 참조 없이 내장 목소리로, Mea
   const missingRvc = await apply({ engine: 'rvc' });
   assert.equal(missingRvc.status, 400);
   assert.match(missingRvc.data.error, /RVC.*받기/);
-  assert.equal((await apply({ engine: 'meanvc2', dataUrl: refDataUrl })).status, 400);
 
   const gguf = async (dir, file) => { await mkdir(path.join(root, 'models', 'audio-cpp', 'audio.cpp-gguf', dir), { recursive: true }); await writeFile(path.join(root, 'models', 'audio-cpp', 'audio.cpp-gguf', dir, file), 'stub'); };
   await gguf('RVC-GGUF', 'rvc-f16.gguf');
@@ -1887,13 +1886,25 @@ test('음색 변조 - RVC/MeanVC2: RVC는 참조 없이 내장 목소리로, Mea
   assert.ok(fakeSpawn.calls.slice(previewBefore).some(c => c.args.includes('voice_id=fraise')));
   assert.equal((await callJson(`/api/timbre-transform/${previewId}/rvc-preview`, 'POST', { rvcVoice: 'fraise', rvcSemitone: 0, rvcRetrieval: 0 })).data.cached, true);
 
-  // MeanVC2 is zero-shot from the reference clip and requires it
-  assert.equal((await apply({ engine: 'meanvc2' })).status, 400);
-  const mean = await apply({ engine: 'meanvc2', dataUrl: refDataUrl });
-  assert.equal(mean.status, 200);
-  const meanCall = fakeSpawn.calls.find(c => c.args.includes('meanvc2'));
-  assert.ok(meanCall.args.includes('--voice-ref') && meanCall.args.includes('--audio'));
-  assert.ok(fakeSpawn.calls.some(c => c.engine === 'ffmpeg' && c.args.some(arg => typeof arg === 'string' && arg.includes('sidechaingate'))), 'expected the shared silence gate for the new engines too');
+  // MeanVC2 is a speech converter now: it is no longer a song timbre-transform engine (falls back to Seed-VC)
+  assert.equal((await apply({ engine: 'meanvc2', dataUrl: refDataUrl })).status, 400);
+
+  // Audio Tools speech voice conversion: needs both clips and the model; runs MeanVC2 once on the whole clip
+  const vc = (payload) => callJson('/api/audio-tools/vc', 'POST', payload);
+  assert.equal((await vc({})).status, 400);
+  assert.equal((await vc({ audioDataUrl: sourceDataUrl })).status, 400);
+  await rm(path.join(root, 'models', 'audio-cpp', 'audio.cpp-gguf', 'MeanVC2-GGUF', 'meanvc2-120ms-40ms-q4_k.gguf'));
+  const noModel = await vc({ audioDataUrl: sourceDataUrl, referenceDataUrl: refDataUrl });
+  assert.equal(noModel.status, 400);
+  assert.match(noModel.data.error, /MeanVC2.*받기/);
+  await gguf('MeanVC2-GGUF', 'meanvc2-120ms-40ms-q4_k.gguf');
+  const before = fakeSpawn.calls.length;
+  const speech = await vc({ audioDataUrl: sourceDataUrl, referenceDataUrl: refDataUrl });
+  assert.equal(speech.status, 200);
+  assert.match(speech.data.dataUrl, /^data:audio\/wav;base64,/);
+  const meanCalls = fakeSpawn.calls.slice(before).filter(c => c.args.includes('meanvc2'));
+  assert.equal(meanCalls.length, 1);
+  assert.ok(meanCalls[0].args.includes('--voice-ref') && meanCalls[0].args.includes('--audio'));
 });
 
 test('RVC 목소리 검색/다운로드: RVC 모델만 라이선스 표기와 함께 보여주고, 내려받은 목소리는 목록에 나타나 voice_model_path로 변환된다', async t => {

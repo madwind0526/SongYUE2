@@ -2081,6 +2081,7 @@ const AUDIO_TOOL_CATEGORIES = [
   { id: 'tts', label: 'TTS 생성' },
   { id: 'asr', label: '음성 인식' },
   { id: 'adjust', label: '음성 조절' },
+  { id: 'vc', label: '음색 변조' },
 ];
 const TTS_TOOLS = [
   { id: 'voice-description-tts', label: 'TTS (T2S)', description: 'Text를 음색 설명에 맞는 목소리(sound)로 변경합니다.' },
@@ -2138,6 +2139,22 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
   const [errorText, setErrorText] = useState('');
   const [warningText, setWarningText] = useState('');
   const [audioPickerOpen, setAudioPickerOpen] = useState(false);
+  // Speech voice conversion (MeanVC2): reference voice slot + microphone recorder
+  const [vcModels, setVcModels] = useState<TtsFamilyInfo[]>([]);
+  const [meanvcPrecision, setMeanvcPrecision] = useState<'q4_k' | 'fp32'>('q4_k');
+  const [refName, setRefName] = useState<string | null>(null);
+  const [refPickerOpen, setRefPickerOpen] = useState(false);
+  const refBlobRef = useRef<Blob | null>(null);
+  const refInputRef = useRef<HTMLInputElement>(null);
+  const [micPanelOpen, setMicPanelOpen] = useState(false);
+  const [micDevices, setMicDevices] = useState<{ id: string; label: string }[]>([]);
+  const [micId, setMicId] = useState('');
+  const [recState, setRecState] = useState<'idle' | 'recording' | 'paused'>('idle');
+  const [recSeconds, setRecSeconds] = useState(0);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const micStreamRef = useRef<MediaStream | null>(null);
+  const recChunksRef = useRef<Blob[]>([]);
+  const recStateRef = useRef<'idle' | 'recording' | 'paused'>('idle');
   const audioBlobRef = useRef<Blob | null>(null);
   const resultDataUrlRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -2153,8 +2170,10 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
   const typecastAvailable = ttsMode !== 'preset';
   const isTypecast = isTts && ttsFamily === 'typecast' && ttsMode !== 'preset' && typecastAvailable;
   const typecastFiltered = typecastVoices.filter(voice => (!typecastGender || voice.gender === typecastGender) && (!typecastAge || voice.age === typecastAge) && (!typecastUse || voice.useCases.includes(typecastUse)));
-  const needsAudio = isAsr || categoryId === 'adjust' || (isTts && ttsMode === 'ref');
-  const audioLabel = isTts ? '참조 목소리' : isAsr ? '인식할 오디오' : '조절할 오디오';
+  const isVc = categoryId === 'vc';
+  const needsAudio = isAsr || categoryId === 'adjust' || isVc || (isTts && ttsMode === 'ref');
+  const audioLabel = isTts ? '참조 목소리' : isAsr ? '인식할 오디오' : isVc ? '원본 오디오' : '조절할 오디오';
+  const meanvcInfo = vcModels.find(family => family.id === 'meanvc2')?.variants[0]?.precisions.find(item => item.precision === meanvcPrecision);
   const ttsVariant = ttsVariantsFor(ttsModels, ttsFamily, ttsMode).find(variant => variant.size === ttsSize);
   const ttsVariantMode = ttsVariant?.mode || 'ref';
   const ttsNativeDesign = ttsMode === 'design' && ttsVariantMode === 'design';
@@ -2165,9 +2184,10 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
   const anyDownloading = [...ttsModels, ...asrModels].some(family => family.variants.some(variant => variant.precisions.some(item => item.download?.state === 'running')));
   async function refreshModels() {
     try {
-      const result = await api<{ families: TtsFamilyInfo[]; asr: TtsFamilyInfo[] }>('/audio-tools/tts/models');
+      const result = await api<{ families: TtsFamilyInfo[]; asr: TtsFamilyInfo[]; vc?: TtsFamilyInfo[] }>('/audio-tools/tts/models');
       setTtsModels(result.families);
       setAsrModels(result.asr || []);
+      setVcModels(result.vc || []);
     } catch { /* backend may be restarting */ }
   }
   useEffect(() => { void refreshModels(); }, []);
@@ -2250,8 +2270,80 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
     t.setBuffer('output', await t.ensureAudioContext().decodeAudioData(await response.arrayBuffer()));
     resultDataUrlRef.current = dataUrl;
   }
+  function applyPickedReference(file: Blob, name: string) {
+    refBlobRef.current = file;
+    setRefName(name);
+    const ctx = t.ensureAudioContext();
+    file.arrayBuffer().then(bytes => ctx.decodeAudioData(bytes)).then(decoded => t.setBuffer('reference', decoded)).catch(() => {});
+  }
+  async function pickReferenceFromLibrary(relPath: string) {
+    try {
+      const response = await fetch(`/api/library/file?path=${encodeURIComponent(relPath)}`);
+      if (!response.ok) throw new Error('파일을 불러오지 못했습니다.');
+      applyPickedReference(await response.blob(), relPath.split('/').pop() || relPath);
+    } catch (error) { setErrorText((error as Error).message); }
+  }
+  function handlePickRefFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (file) applyPickedReference(file, file.name);
+  }
+  // ---- microphone recorder (source input for voice conversion) ----
+  async function refreshMics() {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const inputs = devices.filter(device => device.kind === 'audioinput').map((device, index) => ({ id: device.deviceId, label: device.label || `마이크 ${index + 1}` }));
+    setMicDevices(inputs);
+    setMicId(previous => (inputs.some(device => device.id === previous) ? previous : inputs[0]?.id || ''));
+  }
+  async function openMicPanel() {
+    setMicPanelOpen(true);
+    try {
+      // A short permission probe first: device labels are only exposed after the user allowed the microphone.
+      const probe = await navigator.mediaDevices.getUserMedia({ audio: true });
+      probe.getTracks().forEach(track => track.stop());
+      await refreshMics();
+    } catch { setErrorText('마이크를 사용할 수 없습니다. 브라우저의 마이크 권한을 허용했는지 확인해 주세요.'); }
+  }
+  function setRec(next: 'idle' | 'recording' | 'paused') { recStateRef.current = next; setRecState(next); }
+  async function startRecording() {
+    setErrorText('');
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: micId ? { exact: micId } : undefined, echoCancellation: false, noiseSuppression: false } });
+      micStreamRef.current = stream;
+      const recorder = new MediaRecorder(stream);
+      recChunksRef.current = [];
+      recorder.ondataavailable = event => { if (event.data.size) recChunksRef.current.push(event.data); };
+      recorder.onstop = () => {
+        stream.getTracks().forEach(track => track.stop());
+        micStreamRef.current = null;
+        const blob = new Blob(recChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        // Decode and re-encode as WAV so the backend gets a format it accepts.
+        blob.arrayBuffer().then(bytes => t.ensureAudioContext().decodeAudioData(bytes)).then(decoded => applyPickedAudio(audioBufferToWavBlob(decoded), '마이크 녹음.wav')).catch(() => setErrorText('녹음을 처리하지 못했습니다.'));
+      };
+      recorderRef.current = recorder;
+      recorder.start(250);
+      setRecSeconds(0);
+      setRec('recording');
+      t.stopPlayback();
+    } catch { setErrorText('녹음을 시작하지 못했습니다. 마이크 권한과 입력 장치를 확인해 주세요.'); }
+  }
+  function pauseRecording() {
+    if (recStateRef.current === 'recording') { recorderRef.current?.pause(); setRec('paused'); }
+    else if (recStateRef.current === 'paused') { recorderRef.current?.resume(); setRec('recording'); }
+  }
+  function stopRecording() {
+    if (recStateRef.current !== 'idle') { recorderRef.current?.stop(); setRec('idle'); }
+  }
+  useEffect(() => {
+    if (recState !== 'recording') return;
+    const timer = window.setInterval(() => setRecSeconds(previous => previous + 0.25), 250);
+    return () => window.clearInterval(timer);
+  }, [recState]);
+  useEffect(() => () => { try { recorderRef.current?.state !== 'inactive' && recorderRef.current?.stop(); } catch { /* ignore */ } micStreamRef.current?.getTracks().forEach(track => track.stop()); }, []);
   async function run() {
     if (needsAudio && !audioBlobRef.current) { setErrorText(`${audioLabel}를 먼저 선택해 주세요.`); return; }
+    if (isVc && !refBlobRef.current) { setErrorText('목표 목소리의 참조 오디오를 먼저 선택해 주세요.'); return; }
+    if (recStateRef.current !== 'idle') { setErrorText('녹음을 먼저 정지해 주세요.'); return; }
     if (isTts && !ttsText.trim()) { setErrorText("'말할 내용'을 입력해 주세요."); return; }
     if (isTts && !isTypecast && ttsMode === 'design' && !ttsDescription.trim()) { setErrorText("'음색 설명'을 입력해 주세요."); return; }
     setRunning(true);
@@ -2260,7 +2352,11 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
     t.stopPlayback();
     try {
       const audioDataUrl = audioBlobRef.current ? await readFileAsDataUrl(audioBlobRef.current) : undefined;
-      if (isTypecast) {
+      if (isVc) {
+        const referenceDataUrl = await readFileAsDataUrl(refBlobRef.current as Blob);
+        const result = await api<{ dataUrl: string }>('/audio-tools/vc', 'POST', { audioDataUrl, referenceDataUrl, precision: meanvcPrecision });
+        await showResult(result.dataUrl);
+      } else if (isTypecast) {
         const result = await api<{ dataUrl: string; segmentCount: number; voiceName?: string }>('/audio-tools/typecast', 'POST', { mode: ttsMode, voiceId: typecastVoice, description: ttsDescription, referenceDataUrl: ttsMode === 'ref' ? audioDataUrl : undefined, text: ttsText, language: 'auto', emotion: typecastEmotion === 'smart' ? 'smart' : 'preset', emotionPreset: typecastEmotion });
         setWarningText([result.voiceName ? `설명에 맞춰 Typecast 목소리 "${result.voiceName}"를 자동 선택했습니다.` : '', result.segmentCount > 1 ? `긴 텍스트를 ${result.segmentCount}개 조각으로 나눠 생성한 뒤 이어붙였습니다.` : ''].filter(Boolean).join(' '));
         await showResult(result.dataUrl);
@@ -2309,7 +2405,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
     setSaving(true);
     try {
       if (isAsr && transcript) await saveBlob(new Blob([transcript], { type: 'text/plain;charset=utf-8' }), `${(audioName || '음성인식').replace(/\.[^.]+$/, '')}.txt`);
-      else if (resultDataUrlRef.current) await saveBlob(await (await fetch(resultDataUrlRef.current)).blob(), `${isTts ? tool.label : '음성조절'}.wav`.replace(/[\\/:*?"<>|()\s]+/g, '_'));
+      else if (resultDataUrlRef.current) await saveBlob(await (await fetch(resultDataUrlRef.current)).blob(), `${isTts ? tool.label : isVc ? '음색변조' : '음성조절'}.wav`.replace(/[\\/:*?"<>|()\s]+/g, '_'));
     } catch (error) {
       if ((error as { name?: string }).name !== 'AbortError') setErrorText((error as Error).message);
     } finally { setSaving(false); }
@@ -2325,7 +2421,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
 
   return <section className="library-page page-scroll">
     <div className="page-heading library-heading">
-      <div><span className="eyebrow">audio.cpp 기반</span><h1>Audio Tools</h1><p>완성곡과 무관하게 텍스트→음성 생성, 음성 인식, 피치·속도·음량 조절을 바로 실행합니다.</p></div>
+      <div><span className="eyebrow">audio.cpp 기반</span><h1>Audio Tools</h1><p>완성곡과 무관하게 텍스트→음성 생성, 음성 인식, 피치·속도·음량 조절, 말소리 음색 변조(마이크 녹음 지원)를 바로 실행합니다.</p></div>
     </div>
     <div className="audio-tools-tabs" role="tablist" aria-label="도구 카테고리">
       {AUDIO_TOOL_CATEGORIES.map(category => <button key={category.id} type="button" className={categoryId === category.id ? 'active' : ''} aria-pressed={categoryId === category.id} onClick={() => selectCategory(category.id)}>{category.label}</button>)}
@@ -2391,6 +2487,12 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
           <label className="at-field">음량(dB)<Input type="number" step="1" min={-40} max={40} value={volumeDb} onChange={event => setVolumeDb(event.target.value)} disabled={running}/></label>
           <label className="at-function"><input type="checkbox" checked={denoise} onChange={event => setDenoise(event.target.checked)} disabled={running}/>배경 노이즈 줄이기 (FFT 방식)</label>
         </>}
+        {isVc && <>
+          <div className="at-section-head">모델 (MeanVC2)</div>
+          <div className="runtime-options" style={{ gridTemplateColumns: '1fr' }}><label>정밀도<select value={meanvcPrecision} onChange={event => setMeanvcPrecision(event.target.value as 'q4_k' | 'fp32')} disabled={running}><option value="q4_k">Q4 (342MB)</option><option value="fp32">FP32 (1.6GB)</option></select></label></div>
+          {renderModelStatus(meanvcInfo, 'meanvc2', 'vc', '120ms/40ms', meanvcPrecision)}
+          <span className="field-hint">참조 음성의 목소리로 말소리를 바꾸는 제로샷 변환입니다(언어 무관). 말소리용이라 노래는 깨질 수 있어, 노래는 음색 변조 메뉴(Seed-VC·Vevo·RVC 등)를 쓰세요.</span>
+        </>}
         {needsAudio && <div>
           <div className="at-section-head" style={{ marginTop: 18 }}>{audioLabel} 선택</div>
           <div className="voice-convert-topbar">
@@ -2400,6 +2502,17 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
             <Button variant="outline" onClick={() => setAudioPickerOpen(true)} disabled={running}><FolderOpen size={14}/>라이브러리</Button>
             <input ref={fileInputRef} type="file" accept="audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/mp4,audio/ogg" hidden onChange={handlePickFile}/>
           </div>
+          {isVc && <>
+            <Button variant="outline" size="sm" style={{ marginTop: 8 }} onClick={() => void openMicPanel()} disabled={running}><Mic size={13}/>마이크 입력 (녹음)</Button>
+            <div className="at-section-head" style={{ marginTop: 18 }}>참조 목소리 선택 (목표 음색)</div>
+            <div className="voice-convert-topbar">
+              <Button variant="outline" className="voice-convert-file-btn" onClick={() => refInputRef.current?.click()} disabled={running} title={refName || undefined}>
+                <Upload size={14}/><span className="voice-convert-file-name">{refName || '참조 목소리 선택'}</span>
+              </Button>
+              <Button variant="outline" onClick={() => setRefPickerOpen(true)} disabled={running}><FolderOpen size={14}/>라이브러리</Button>
+              <input ref={refInputRef} type="file" accept="audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/mp4,audio/ogg" hidden onChange={handlePickRefFile}/>
+            </div>
+          </>}
         </div>}
         {isTts && <>
           {!isTypecast && (ttsMode !== 'preset' || ttsFamily === 'qwen3') && <label className="at-field">스타일 지시 (선택)<Input type="text" value={ttsStyle} onChange={event => setTtsStyle(event.target.value)} placeholder={ttsFamily === 'voxcpm2' ? '예) gentle and slow, whispering softly' : '예) Very happy.'} disabled={running || !(ttsFamily === 'voxcpm2' || (ttsFamily === 'qwen3' && ttsMode === 'preset'))}/><span className="field-hint">{ttsFamily === 'voxcpm2' || (ttsFamily === 'qwen3' && ttsMode === 'preset') ? '말투·감정을 글로 지시합니다(예: 천천히, 속삭이듯, 기쁘게). 영어 지시가 가장 잘 먹히며, 한국어 문장에서 반영 정도는 직접 들어보고 확인해 주세요.' : '이 모델은 스타일 지시를 지원하지 않습니다. VoxCPM2 또는 Qwen3-TTS 프리셋 목소리를 선택하면 사용할 수 있습니다.'}</span></label>}
@@ -2421,7 +2534,18 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
         {errorText && <p className="field-hint warning">{errorText}</p>}
       </div>
       <div className="audio-tools-result">
-        {!sourceBuffer && !resultBuffer && transcript === null ? <div className="audio-tools-result-empty"><CircleHelp size={18}/><p>왼쪽에서 조건을 입력하고 "실행"을 누르면<br/>결과가 이곳에 표시됩니다.</p></div> : <>
+        {isVc && micPanelOpen && <div className="at-result-row" style={{ border: '1px solid #3b493d', borderRadius: 10, padding: 10, marginBottom: 10 }}>
+          <div className="audio-compare-toolbar" style={{ flexWrap: 'wrap', gap: 8 }}>
+            <Mic size={16} style={{ color: recState === 'recording' ? '#f87171' : undefined }}/>
+            <select value={micId} onChange={event => setMicId(event.target.value)} disabled={recState !== 'idle'} aria-label="입력 장치" style={{ flex: 1, minWidth: 140, background: '#232b23', color: '#e4ece0', border: '1px solid #3b493d', borderRadius: 6, padding: '5px 8px', fontSize: 12 }}>{micDevices.length === 0 && <option value="">입력 장치 없음</option>}{micDevices.map(device => <option key={device.id} value={device.id}>{device.label}</option>)}</select>
+            <Button variant="outline" size="sm" aria-label="녹음 시작" title="녹음 시작" onClick={() => void startRecording()} disabled={recState !== 'idle' || running}><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 5, background: '#f87171' }}/></Button>
+            <Button variant="outline" size="sm" aria-label={recState === 'paused' ? '녹음 계속' : '일시정지'} title={recState === 'paused' ? '녹음 계속' : '일시정지'} onClick={pauseRecording} disabled={recState === 'idle'}>{recState === 'paused' ? <Play size={13}/> : <Pause size={13}/>}</Button>
+            <Button variant="outline" size="sm" aria-label="정지" title="정지하고 원본으로 사용" onClick={stopRecording} disabled={recState === 'idle'}><Square size={13}/></Button>
+            <span className="pp-seek-time" style={{ minWidth: 48, textAlign: 'right', color: recState === 'recording' ? '#f87171' : undefined }}>{formatSeekTime(recSeconds)}</span>
+          </div>
+          <span className="field-hint">{recState === 'recording' ? '녹음 중… 말한 뒤 정지를 누르면 아래 원본 파형으로 들어갑니다.' : recState === 'paused' ? '일시정지됨. 재생 아이콘으로 이어서 녹음합니다.' : '입력 장치를 고르고 녹음 버튼(●)을 누르세요. 정지하면 원본 오디오가 됩니다.'}</span>
+        </div>}
+        {!sourceBuffer && !resultBuffer && transcript === null && !(isVc && micPanelOpen) ? <div className="audio-tools-result-empty"><CircleHelp size={18}/><p>왼쪽에서 조건을 입력하고 "실행"을 누르면<br/>결과가 이곳에 표시됩니다.</p></div> : <>
           {sourceBuffer && needsAudio && <div className={atRowClass('source', 'dry')}>
             <div className="audio-compare-toolbar">
               <button type="button" className="pp-waveform-label" aria-label="원본 재생/일시정지" onClick={() => t.handleKeyClick('source')}>{t.activeKey === 'source' && t.isPlaying ? <Pause size={15}/> : <Play size={15}/>}</button>
@@ -2433,13 +2557,23 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
               <CompareSpectrogram buffer={sourceBuffer} fraction={t.positionSeconds / (sourceBuffer.duration || 1)}/>
             </div>
           </div>}
+          {isVc && t.bufferForKey('reference') && <div className={atRowClass('reference', 'dry')}>
+            <div className="audio-compare-toolbar">
+              <button type="button" className="pp-waveform-label" aria-label="참조 재생/일시정지" onClick={() => t.handleKeyClick('reference')}>{t.activeKey === 'reference' && t.isPlaying ? <Pause size={15}/> : <Play size={15}/>}</button>
+              <span className="stem-label audio-compare-label"><strong>참조</strong>{refName && <small title={refName}>{refName}</small>}<span className="small-badge">목표 음색</span></span>
+              <span className="pp-seek-time audio-compare-duration">{formatSeekTime(t.bufferForKey('reference')!.duration)}</span>
+            </div>
+            <div className="audio-compare-charts">
+              <CompareWaveform peaks={t.peaksForKey('reference')} fraction={t.positionSeconds / (t.bufferForKey('reference')!.duration || 1)} processed={false}/>
+            </div>
+          </div>}
           {isAsr ? <div className="at-field">
             <span className="at-field-label">인식된 텍스트</span>
             <Textarea rows={12} className="at-textarea" value={transcript ?? ''} onChange={event => setTranscript(event.target.value)} placeholder="실행하면 인식된 텍스트가 이곳에 표시됩니다."/>
           </div> : <div className={atRowClass('output', 'wet')}>
             <div className="audio-compare-toolbar">
               <button type="button" className="pp-waveform-label" aria-label="처리본 재생/일시정지" onClick={() => t.handleKeyClick('output')} disabled={!resultBuffer}>{t.activeKey === 'output' && t.isPlaying ? <Pause size={15}/> : <Play size={15}/>}</button>
-              <span className="stem-label audio-compare-label"><strong>처리본</strong><small>{isTts ? tool.label : '음성 조절'}</small>{resultBuffer ? <span className="small-badge">완료</span> : <span className="small-badge">대기</span>}</span>
+              <span className="stem-label audio-compare-label"><strong>처리본</strong><small>{isTts ? tool.label : isVc ? '음색 변조' : '음성 조절'}</small>{resultBuffer ? <span className="small-badge">완료</span> : <span className="small-badge">대기</span>}</span>
               {resultBuffer && <span className="pp-seek-time audio-compare-duration">{formatSeekTime(resultBuffer.duration)}</span>}
             </div>
             <div className="audio-compare-charts">
@@ -2459,6 +2593,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
         </>}
       </div>
     </div>
+    <MultiFileLibraryPicker open={refPickerOpen} onClose={() => setRefPickerOpen(false)} onConfirm={paths => paths[0] && void pickReferenceFromLibrary(paths[0])} title="참조 목소리 선택" description="목표 음색이 되는 참조 오디오를 라이브러리에서 고릅니다."/>
     <MultiFileLibraryPicker open={audioPickerOpen} onClose={() => setAudioPickerOpen(false)} onConfirm={paths => paths[0] && void pickFromLibrary(paths[0])} title={`${audioLabel} 선택`} description="라이브러리에서 오디오 파일을 고릅니다."/>
   </section>;
 }
@@ -2537,11 +2672,10 @@ const DDSP_STATUS_LABEL: Record<string, string> = {
 };
 
 
-type TimbreEngine = 'seed_vc' | 'vevo2' | 'meanvc2' | 'rvc' | 'ddsp';
+type TimbreEngine = 'seed_vc' | 'vevo2' | 'rvc' | 'ddsp';
 const TIMBRE_ENGINES: { id: TimbreEngine; label: string }[] = [
   { id: 'seed_vc', label: 'Seed-VC' },
   { id: 'vevo2', label: 'Vevo' },
-  { id: 'meanvc2', label: 'MeanVC2' },
   { id: 'rvc', label: 'RVC' },
   { id: 'ddsp', label: 'DDSP-SVC' },
 ];
@@ -2574,7 +2708,6 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
   const [rvcVoice, setRvcVoice] = useState('default');
   const [rvcSemitone, setRvcSemitone] = useState('0');
   const [rvcRetrieval, setRvcRetrieval] = useState('0');
-  const [meanvcPrecision, setMeanvcPrecision] = useState<'q4_k' | 'fp32'>('q4_k');
   const [vevoRoute, setVevoRoute] = useState<'style_preserved_svc' | 'style_preserved_vc'>('style_preserved_svc');
   const [ddspReferencePaths, setDdspReferencePaths] = useState<string[]>([]);
   const [ddspTargetStep, setDdspTargetStep] = useState(40000);
@@ -2780,7 +2913,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
   async function downloadVcModel() {
     if (!vcFamilyId) return;
     try {
-      await api('/audio-tools/tts/download', 'POST', { family: vcFamilyId, mode: 'vc', size: vcFamilyId === 'rvc' ? '기본' : '120ms/40ms', precision: engine === 'rvc' ? 'f16' : meanvcPrecision });
+      await api('/audio-tools/tts/download', 'POST', { family: vcFamilyId, mode: 'vc', size: '기본', precision: 'f16' });
       await refreshVcModels();
     } catch (error) { setErrorText((error as Error).message); }
   }
@@ -2799,7 +2932,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
     try {
       await withEstimatedProgress(async () => {
         const dataUrl = referenceBlobRef.current ? await readFileAsDataUrl(referenceBlobRef.current) : undefined;
-        const result = await api<{ ok: boolean; warning: string | null }>(`/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl, engine, seedF0Condition, seedAutoF0Adjust, seedInferenceSteps, vevoRoute, rvcVoice, rvcSemitone: Number(rvcSemitone) || 0, rvcRetrieval: Number(rvcRetrieval) || 0, meanvcPrecision, chunkSeconds, overlapSeconds });
+        const result = await api<{ ok: boolean; warning: string | null }>(`/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl, engine, seedF0Condition, seedAutoF0Adjust, seedInferenceSteps, vevoRoute, rvcVoice, rvcSemitone: Number(rvcSemitone) || 0, rvcRetrieval: Number(rvcRetrieval) || 0, chunkSeconds, overlapSeconds });
         setWarningText(result.warning || '');
         const ctx = t.ensureAudioContext();
         const [vocalsResponse, instrumentalResponse] = await Promise.all([
@@ -2859,9 +2992,9 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
   }
 
   const isLegacy = engine !== 'ddsp';
-  const vcFamilyId = engine === 'rvc' || engine === 'meanvc2' ? engine : null;
+  const vcFamilyId = engine === 'rvc' ? engine : null;
   const vcFamily = vcModels.find(family => family.id === vcFamilyId);
-  const vcPrecisionInfo = vcFamily?.variants[0]?.precisions.find(item => item.precision === (engine === 'rvc' ? 'f16' : meanvcPrecision));
+  const vcPrecisionInfo = vcFamily?.variants[0]?.precisions.find(item => item.precision === 'f16');
   const vcModelReady = !vcFamilyId || !!vcPrecisionInfo?.installed;
   const isTraining = !!ddspJob && !['completed', 'failed', 'cancelled'].includes(ddspJob.status);
   const busy = preparing || applying || starting;
@@ -2895,7 +3028,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
             {TIMBRE_ENGINES.map(item => <button key={item.id} type="button" className={`timbre-model-btn${engine === item.id ? ' active' : ''}`} onClick={() => setEngine(item.id)} disabled={busy}>{item.label}</button>)}
           </div>
 
-          {engine !== 'ddsp' && engine !== 'rvc' && engine !== 'meanvc2' && <div className="timbre-engine-options">
+          {engine !== 'ddsp' && engine !== 'rvc' && <div className="timbre-engine-options">
             <div className="timbre-option-head" style={{ marginTop: 16 }}>긴 보컬 자동 분할 기준</div>
             <div className="runtime-options" style={{ gridTemplateColumns: '1fr 1fr' }}><label>청크(초)<Input type="number" min={1} max={120} value={chunkSeconds} onChange={event => setChunkSeconds(Math.max(1, Math.min(120, Number(event.target.value) || 10)))} disabled={busy}/></label><label>겹침(초)<Input type="number" min={0} value={overlapSeconds} onChange={event => setOverlapSeconds(Math.max(0, Math.min(Math.floor(chunkSeconds / 2), Number(event.target.value) || 0)))} disabled={busy}/></label></div>
             <p className="field-hint">긴 보컬은 청크(초) 단위로 나눠 순차 처리하고 겹침(초)만큼 겹친 뒤 연결합니다. 겹침은 청크의 절반 이하로 자동 조정되며, 겹친 양쪽을 겹침의 절반만큼 잘라 이어붙입니다.</p>
@@ -2910,7 +3043,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
           </div>}
 
           {vcFamilyId && <div className="timbre-engine-options">
-            <div className="timbre-option-head" style={{ marginTop: 18 }}>{engine === 'rvc' ? 'RVC 목소리' : 'MeanVC2 모델'}</div>
+            <div className="timbre-option-head" style={{ marginTop: 18 }}>RVC 목소리</div>
             {engine === 'rvc' && <>
               <div className="runtime-options" style={{ gridTemplateColumns: '1fr' }}><label>내장 목소리<div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6 }}><select style={{ flex: 1, minWidth: 0 }} value={rvcVoice} onChange={event => setRvcVoice(event.target.value)} disabled={busy}>{(vcFamily?.voices || [{ id: 'default', label: 'default' }]).map(voice => <option key={voice.id} value={voice.id} style={voice.id.startsWith('user:') ? { color: '#7ee787' } : undefined}>{voice.label}</option>)}</select><Button variant="outline" size="sm" aria-label="목소리 듣기" title="원본 보컬 앞 8초를 이 목소리로 바꿔 들어봅니다" disabled={busy || rvcPreviewing || !previewId || !vcModelReady} onClick={() => void previewRvcVoice(rvcVoice)}>{rvcPreviewing ? <LoaderCircle className="spin" size={13}/> : <Play size={13}/>}</Button></div></label>
                 </div>
@@ -2919,10 +3052,6 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
               <Button variant="outline" size="sm" onClick={() => { setRvcSearchOpen(true); if (!rvcResults) void searchRvcOnline(); }} disabled={busy} style={{ marginTop: 4 }}><Search size={13}/>온라인에서 RVC 목소리 찾기</Button>
               <p className="field-hint">받은 목소리는 위 "내장 목소리" 목록에 "이름 · 다운로드"로 추가됩니다. 인덱스 파일이 함께 있는 목소리만 검색 블렌딩을 쓸 수 있습니다. 개인 용도로 쓰되, 실존 인물의 목소리로 타인을 속이는 용도에는 쓰지 마세요.</p>
               <p className="field-hint">RVC는 참조 audio가 아니라 목소리 하나를 골라 바꿉니다(기본 제공 4개와 온라인에서 받은 목소리). 원곡과 음역이 다르면 음높이(반음)로 맞추세요. 검색 블렌딩은 인덱스가 있는 목소리에서만 쓸 수 있고, default와 인덱스가 없는 목소리에서는 자동으로 꺼집니다.</p>
-            </>}
-            {engine === 'meanvc2' && <>
-              <div className="runtime-options"><label>정밀도<select value={meanvcPrecision} onChange={event => setMeanvcPrecision(event.target.value as 'q4_k' | 'fp32')} disabled={busy}><option value="q4_k">Q4 (342MB)</option><option value="fp32">FP32 (1.6GB)</option></select></label></div>
-              <p className="field-hint">참조 audio의 목소리로 바꾸는 제로샷 변환입니다. 말소리용 모델이라 노래에서는 음정이 손상될 수 있습니다.</p>
             </>}
             {vcPrecisionInfo && (vcPrecisionInfo.installed
               ? <span className="field-hint">모델 설치됨 · 사용 준비 완료</span>

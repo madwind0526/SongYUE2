@@ -36,7 +36,7 @@ const AUDIOSR_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf', 'A
 const MUSCRIPTOR_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf', 'MuScriptor-Small-GGUF', 'muscriptor-small-f32.gguf');
 const SEED_VC_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf', 'SeedVC-MLX-GGUF', 'seed-vc-mlx-q8_0.gguf');
 const VEVO2_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf', 'Vevo2-GGUF', 'vevo2-q8_0.gguf');
-const VOCAL_TIMBRE_ENGINES = new Set(['seed_vc', 'vevo2', 'meanvc2', 'rvc']);
+const VOCAL_TIMBRE_ENGINES = new Set(['seed_vc', 'vevo2', 'rvc']);
 const STEM_MODES = {
   full: { family: 'htdemucs', modelPath: HTDEMUCS_MODEL_PATH, stems: ['vocals', 'drums', 'bass', 'other'], missingModel: 'STEM 분리 모델(HTDemucs)이 없습니다. scripts/download_models.py를 실행해 주세요.' },
   vocal: { family: 'mel_band_roformer', modelPath: MEL_BAND_ROFORMER_MODEL_PATH, stems: ['vocals', 'instrumental'], missingModel: 'STEM 분리 모델(Mel-Band RoFormer)이 없습니다. scripts/download_models.py를 실행해 주세요.' },
@@ -882,7 +882,6 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       // One conversion call per (chunk of the) vocal, whatever the engine.
       const convertOne = async (sourceWav, outputWav) => {
         if (svcEngine === 'vevo2') await runVevo2Svc(sourceWav, voiceRefWav, outputWav, options.vevoRoute);
-        else if (svcEngine === 'meanvc2') await runMeanVc2Svc(sourceWav, voiceRefWav, outputWav, options);
         else if (svcEngine === 'rvc') await runRvcSvc(sourceWav, outputWav, options);
         else await runSeedVcSvc(sourceWav, voiceRefWav, outputWav, options);
       };
@@ -895,10 +894,9 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       const durationMs = await measureDurationMs(originalVocalsWav);
       const durationSeconds = durationMs ? durationMs / 1000 : 0;
       const chunkParams = resolveChunkParams(options.chunkSeconds, options.overlapSeconds);
-      // RVC splits long audio at quiet points by itself (and reloads ~1 GB of weights per run), and MeanVC2 is a streaming
-      // model that handles long input fine (63 s whole: CER 0.07 in 4 s vs 0.18 with 10 s chunks), so both take the whole vocal.
+      // RVC splits long audio at quiet points by itself (and reloads ~1 GB of weights per run), so it takes the whole vocal.
       // Seed-VC/Vevo collapse on long input and still need the overlapping 10 s windows.
-      const useChunking = svcEngine !== 'rvc' && svcEngine !== 'meanvc2' && durationSeconds > chunkParams.chunkSeconds;
+      const useChunking = svcEngine !== 'rvc' && durationSeconds > chunkParams.chunkSeconds;
       const chunkPlan = useChunking ? buildChunkPlan(durationSeconds, chunkParams.chunkSeconds, chunkParams.overlapSeconds) : [];
       const warning = useChunking
         ? `긴 보컬을 ${chunkParams.chunkSeconds}초 단위(겹침 ${chunkParams.overlapSeconds}초)로 ${chunkPlan.length}개로 나눠 같은 참조 목소리로 변환한 뒤 연결했습니다. 조각 경계 부근에서 음색 전환이 어색할 수 있습니다.`
@@ -2430,6 +2428,32 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
             transcript = await transcribeWav(workDir, wav, text(input.language, 8), text(input.family, 20), text(input.size, 8), text(input.precision, 8));
           } finally { await rm(workDir, { recursive: true, force: true }).catch(() => {}); }
           return send(200, { transcript });
+        } finally { generating = false; generationStatus = null; }
+      }
+      if (req.method === 'POST' && pathname === '/api/audio-tools/vc') {
+        // Speech voice conversion (MeanVC2, zero-shot): source speech + reference voice -> converted speech.
+        const input = await body(req, 100 * 1024 * 1024);
+        if (!(typeof input.audioDataUrl === 'string' && input.audioDataUrl.length)) throw fail(400, '변환할 원본 오디오가 필요합니다.');
+        if (!(typeof input.referenceDataUrl === 'string' && input.referenceDataUrl.length)) throw fail(400, '목표 목소리의 참조 오디오를 선택해 주세요.');
+        if (generating) throw fail(409, '이미 다른 작업을 실행 중입니다. 완료 후 다시 시도해 주세요.');
+        generating = true;
+        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 15000 };
+        try {
+          const workDir = path.join(outputDirectory, `speech-vc-${randomUUID()}`);
+          await mkdir(workDir, { recursive: true });
+          let dataUrl;
+          try {
+            const sourceDir = path.join(workDir, 'src');
+            const refDir = path.join(workDir, 'ref');
+            await mkdir(sourceDir, { recursive: true });
+            await mkdir(refDir, { recursive: true });
+            const sourceWav = await normalizeInputAudio(sourceDir, input.audioDataUrl);
+            const referenceWav = await normalizeInputAudio(refDir, input.referenceDataUrl);
+            const outputWav = path.join(workDir, 'converted.wav');
+            await runMeanVc2Svc(sourceWav, referenceWav, outputWav, { meanvcPrecision: input.precision });
+            dataUrl = `data:audio/wav;base64,${(await readFile(outputWav)).toString('base64')}`;
+          } finally { await rm(workDir, { recursive: true, force: true }).catch(() => {}); }
+          return send(200, { dataUrl });
         } finally { generating = false; generationStatus = null; }
       }
       if (req.method === 'POST' && pathname === '/api/audio-tools/adjust') {
