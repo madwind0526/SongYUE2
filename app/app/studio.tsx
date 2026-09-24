@@ -2564,6 +2564,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
   const [vcModels, setVcModels] = useState<TtsFamilyInfo[]>([]);
   const [rvcPreviewing, setRvcPreviewing] = useState(false);
   const [rvcSearch, setRvcSearch] = useState('');
+  const [rvcSearchOpen, setRvcSearchOpen] = useState(false);
   const [rvcSearching, setRvcSearching] = useState(false);
   const [rvcResults, setRvcResults] = useState<{ repo: string; downloads: number; license: string }[] | null>(null);
   const [rvcDownloads, setRvcDownloads] = useState<Record<string, { state: string; receivedBytes: number; totalBytes: number; error: string | null; repo: string }>>({});
@@ -2922,26 +2923,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
                   </div>)}
                 </div>
               </>}
-              <div className="timbre-option-head" style={{ marginTop: 8 }}>온라인에서 RVC 목소리 찾기 (HuggingFace)</div>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <Input type="text" placeholder="예) anime, korean, singer (비우면 인기순)" value={rvcSearch} onChange={event => setRvcSearch(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void searchRvcOnline(); }} disabled={busy}/>
-                <Button variant="outline" size="sm" aria-label="검색" disabled={busy || rvcSearching} onClick={() => void searchRvcOnline()}>{rvcSearching ? <LoaderCircle className="spin" size={13}/> : <Search size={13}/>}</Button>
-              </div>
-              {rvcResults && <div className="timbre-rvc-results" style={{ maxHeight: 220, overflowY: 'auto', display: 'grid', gap: 4 }}>
-                {rvcResults.length === 0 && <span className="field-hint">검색 결과가 없습니다.</span>}
-                {rvcResults.map(item => {
-                  const slug = item.repo.toLowerCase().replace(/[^a-z0-9._-]+/g, '__').slice(0, 80);
-                  const installedItem = rvcInstalled.find(voice => voice.slug === slug);
-                  const download = rvcDownloads[slug];
-                  return <div key={item.repo} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`${item.repo} · 라이선스 ${item.license || '표기 없음'} · 다운로드 ${item.downloads}`}><span style={installedItem ? { color: '#7ee787', fontWeight: 600 } : undefined}>{item.repo}</span><small style={{ opacity: 0.6 }}> · {item.license || '라이선스 없음'}</small>{installedItem && <small style={{ color: '#7ee787' }}> · 받음</small>}</span>
-                    {installedItem ? <Button variant="outline" size="sm" aria-label="삭제" title="설치됨 · 눌러서 삭제" onClick={() => void deleteRvcOnline(installedItem.id)} disabled={busy}><Trash2 size={13}/></Button>
-                      : download?.state === 'running' ? <span className="field-hint">{download.totalBytes ? Math.round(download.receivedBytes / download.totalBytes * 100) : 0}%</span>
-                      : <Button variant="outline" size="sm" aria-label="받기" onClick={() => void downloadRvcOnline(item.repo, item.license)} disabled={busy}><Download size={13}/></Button>}
-                    {download?.state === 'failed' && <span className="field-hint warning" title={download.error || ''}>실패</span>}
-                  </div>;
-                })}
-              </div>}
+              <Button variant="outline" size="sm" onClick={() => { setRvcSearchOpen(true); if (!rvcResults) void searchRvcOnline(); }} disabled={busy} style={{ marginTop: 8 }}><Search size={13}/>온라인에서 RVC 목소리 찾기</Button>
               <p className="field-hint">받은 목소리는 위 "내장 목소리" 목록에 "이름 · 다운로드"로 추가됩니다. 인덱스 파일이 함께 있는 목소리만 검색 블렌딩을 쓸 수 있습니다. 개인 용도로 쓰되, 실존 인물의 목소리로 타인을 속이는 용도에는 쓰지 마세요.</p>
               <p className="field-hint">RVC는 참조 audio가 아니라 내장 목소리 4개 중 하나로 바꿉니다. 원곡과 음역이 다르면 음높이(반음)로 맞추세요. 검색 블렌딩은 default 목소리에서는 쓸 수 없고(엔진이 비정상 종료), manthos·chocola·fraise에서만 동작합니다.</p>
             </>}
@@ -3081,6 +3063,32 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
     </DialogContent>
     <MultiFileLibraryPicker open={sourcePickerOpen} onClose={() => setSourcePickerOpen(false)} onConfirm={paths => paths[0] && void pickSource(paths[0])} title="원본 audio 선택" description="음색을 바꿀 원본 오디오 파일을 골라 주세요."/>
     <MultiFileLibraryPicker open={referencePickerOpen} onClose={() => setReferencePickerOpen(false)} onConfirm={paths => paths[0] && void pickReference(paths[0])} title="참조 audio 선택" description="목표 음색의 참조 오디오 파일을 골라 주세요."/>
+    <Dialog open={rvcSearchOpen} onOpenChange={setRvcSearchOpen}>
+      <DialogContent className="studio-dialog voice-convert-browser-dialog" style={{ width: 560 }}>
+        <DialogTitle>온라인에서 RVC 목소리 찾기</DialogTitle>
+        <DialogDescription>HuggingFace에 공개된 RVC 목소리를 검색해 받습니다. 받은 목소리는 "내장 목소리" 목록에 초록색으로 추가됩니다.</DialogDescription>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <Input type="text" placeholder="예) anime, korean, singer (비우면 인기순)" value={rvcSearch} onChange={event => setRvcSearch(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void searchRvcOnline(); }} disabled={busy}/>
+                <Button variant="outline" size="sm" aria-label="검색" disabled={busy || rvcSearching} onClick={() => void searchRvcOnline()}>{rvcSearching ? <LoaderCircle className="spin" size={13}/> : <Search size={13}/>}</Button>
+              </div>
+              {rvcResults && <div className="timbre-rvc-results" style={{ maxHeight: 380, overflowY: 'auto', display: 'grid', gap: 4 }}>
+                {rvcResults.length === 0 && <span className="field-hint">검색 결과가 없습니다.</span>}
+                {rvcResults.map(item => {
+                  const slug = item.repo.toLowerCase().replace(/[^a-z0-9._-]+/g, '__').slice(0, 80);
+                  const installedItem = rvcInstalled.find(voice => voice.slug === slug);
+                  const download = rvcDownloads[slug];
+                  return <div key={item.repo} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`${item.repo} · 라이선스 ${item.license || '표기 없음'} · 다운로드 ${item.downloads}`}><span style={installedItem ? { color: '#7ee787', fontWeight: 600 } : undefined}>{item.repo}</span><small style={{ opacity: 0.6 }}> · {item.license || '라이선스 없음'}</small>{installedItem && <small style={{ color: '#7ee787' }}> · 받음</small>}</span>
+                    {installedItem ? <Button variant="outline" size="sm" aria-label="삭제" title="설치됨 · 눌러서 삭제" onClick={() => void deleteRvcOnline(installedItem.id)} disabled={busy}><Trash2 size={13}/></Button>
+                      : download?.state === 'running' ? <span className="field-hint">{download.totalBytes ? Math.round(download.receivedBytes / download.totalBytes * 100) : 0}%</span>
+                      : <Button variant="outline" size="sm" aria-label="받기" onClick={() => void downloadRvcOnline(item.repo, item.license)} disabled={busy}><Download size={13}/></Button>}
+                    {download?.state === 'failed' && <span className="field-hint warning" title={download.error || ''}>실패</span>}
+                  </div>;
+                })}
+              </div>}
+        <p className="field-hint">인덱스 파일이 함께 있는 목소리만 검색 블렌딩을 쓸 수 있습니다. 개인 용도로 쓰되, 실존 인물의 목소리로 타인을 속이는 용도에는 쓰지 마세요.</p>
+      </DialogContent>
+    </Dialog>
     <MultiFileLibraryPicker open={ddspPickerOpen} onClose={() => setDdspPickerOpen(false)} onConfirm={setDdspReferencePaths} multiple/>
   </Dialog>;
 }
