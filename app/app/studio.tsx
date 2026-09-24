@@ -2081,6 +2081,7 @@ const AUDIO_TOOL_CATEGORIES = [
   { id: 'tts', label: 'TTS 생성' },
   { id: 'asr', label: '음성 인식 (STT)' },
   { id: 'edit', label: '대사 편집' },
+  { id: 'sfx', label: '효과음 생성' },
   { id: 'adjust', label: '음성 조절' },
   { id: 'vc', label: '음색 변조' },
 ];
@@ -2134,6 +2135,14 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
   const [editModels, setEditModels] = useState<TtsFamilyInfo[]>([]);
   const [alignModels, setAlignModels] = useState<TtsFamilyInfo[]>([]);
   const [editPrecise, setEditPrecise] = useState(true);
+  // Sound-effect generation (Stable Audio 3 SFX)
+  const [sfxModels, setSfxModels] = useState<TtsFamilyInfo[]>([]);
+  const [sfxPrecision, setSfxPrecision] = useState('q8_0');
+  const [sfxPrompt, setSfxPrompt] = useState('');
+  const [sfxNegative, setSfxNegative] = useState('');
+  const [sfxDuration, setSfxDuration] = useState('5');
+  const [sfxSteps, setSfxSteps] = useState('8');
+  const [sfxSeed, setSfxSeed] = useState('');
   const [editPrecision, setEditPrecision] = useState('q8_0');
   const [editLanguage, setEditLanguage] = useState<'auto' | 'ko' | 'en' | 'ja' | 'zh'>('ko');
   const [editSourceText, setEditSourceText] = useState('');
@@ -2191,8 +2200,11 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
   const typecastFiltered = typecastVoices.filter(voice => (!typecastGender || voice.gender === typecastGender) && (!typecastAge || voice.age === typecastAge) && (!typecastUse || voice.useCases.includes(typecastUse)));
   const isVc = categoryId === 'vc';
   const isEdit = categoryId === 'edit';
+  const isSfx = categoryId === 'sfx';
   const needsAudio = isAsr || isEdit || categoryId === 'adjust' || isVc || (isTts && ttsMode === 'ref');
   const audioLabel = isTts ? '참조 목소리' : isAsr ? '인식할 오디오' : isEdit ? '편집할 오디오' : isVc ? '원본 오디오' : '조절할 오디오';
+  const sfxVariant = sfxModels.find(family => family.id === 'stablesfx')?.variants[0];
+  const sfxPrecisionInfo = sfxVariant?.precisions.find(item => item.precision === sfxPrecision);
   const editVariant = editModels.find(family => family.id === 'dotsedit')?.variants[0];
   const editPrecisionInfo = editVariant?.precisions.find(item => item.precision === editPrecision);
   const alignInfo = alignModels.find(family => family.id === 'qwen3align')?.variants[0]?.precisions[0];
@@ -2204,15 +2216,16 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
   const asrFamilyInfo = asrModels.find(family => family.id === asrFamily) || asrModels[0];
   const asrVariant = asrFamilyInfo?.variants.find(variant => variant.size === asrSize);
   const asrPrecisionInfo = asrVariant?.precisions.find(item => item.precision === asrPrecision);
-  const anyDownloading = [...ttsModels, ...asrModels, ...editModels, ...alignModels].some(family => family.variants.some(variant => variant.precisions.some(item => item.download?.state === 'running')));
+  const anyDownloading = [...ttsModels, ...asrModels, ...editModels, ...alignModels, ...sfxModels].some(family => family.variants.some(variant => variant.precisions.some(item => item.download?.state === 'running')));
   async function refreshModels() {
     try {
-      const result = await api<{ families: TtsFamilyInfo[]; asr: TtsFamilyInfo[]; vc?: TtsFamilyInfo[]; edit?: TtsFamilyInfo[]; align?: TtsFamilyInfo[] }>('/audio-tools/tts/models');
+      const result = await api<{ families: TtsFamilyInfo[]; asr: TtsFamilyInfo[]; vc?: TtsFamilyInfo[]; edit?: TtsFamilyInfo[]; align?: TtsFamilyInfo[]; sfx?: TtsFamilyInfo[] }>('/audio-tools/tts/models');
       setTtsModels(result.families);
       setAsrModels(result.asr || []);
       setVcModels(result.vc || []);
       setEditModels(result.edit || []);
       setAlignModels(result.align || []);
+      setSfxModels(result.sfx || []);
     } catch { /* backend may be restarting */ }
   }
   useEffect(() => { void refreshModels(); }, []);
@@ -2511,6 +2524,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
     if (isVc && !refBlobRef.current) { setErrorText('목표 목소리의 참조 오디오를 먼저 선택해 주세요.'); return; }
     if (recStateRef.current !== 'idle') { setErrorText('녹음을 먼저 정지해 주세요.'); return; }
     if (isTts && !ttsText.trim()) { setErrorText("'말할 내용'을 입력해 주세요."); return; }
+    if (isSfx && !sfxPrompt.trim()) { setErrorText('만들 효과음을 영어로 설명해 주세요.'); return; }
     if (isEdit && !editItems.some(item => item.find.trim())) { setErrorText('편집할 부분(찾을 말)을 하나 이상 입력해 주세요.'); return; }
     if (isTts && !isTypecast && ttsMode === 'design' && !ttsDescription.trim()) { setErrorText("'음색 설명'을 입력해 주세요."); return; }
     setRunning(true);
@@ -2519,7 +2533,10 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
     t.stopPlayback();
     try {
       const audioDataUrl = audioBlobRef.current ? await readFileAsDataUrl(audioBlobRef.current) : undefined;
-      if (isEdit) {
+      if (isSfx) {
+        const result = await api<{ dataUrl: string }>('/audio-tools/sfx', 'POST', { prompt: sfxPrompt, negativePrompt: sfxNegative, durationSeconds: Number(sfxDuration) || 5, steps: Number(sfxSteps) || 8, seed: sfxSeed.trim() === '' ? null : Number(sfxSeed), precision: sfxPrecision });
+        await showResult(result.dataUrl);
+      } else if (isEdit) {
         const result = await api<{ dataUrl: string; sourceText: string }>('/audio-tools/edit', 'POST', { audioDataUrl, sourceText: editSourceText, language: editLanguage === 'auto' ? '' : editLanguage, precision: editPrecision, precise: editPrecise && !!alignInfo?.installed, asrFamily, asrSize, asrPrecision, edits: editItems.filter(item => item.find.trim()) });
         setEditSourceText(result.sourceText);
         await showResult(result.dataUrl);
@@ -2584,7 +2601,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
     setSaving(true);
     try {
       if (isAsr && transcript) await saveBlob(new Blob([transcript], { type: 'text/plain;charset=utf-8' }), `${(audioName || '음성인식').replace(/\.[^.]+$/, '')}.txt`);
-      else if (resultDataUrlRef.current) await saveBlob(await (await fetch(resultDataUrlRef.current)).blob(), `${isTts ? tool.label : isVc ? '음색변조' : isEdit ? '대사편집' : '음성조절'}.wav`.replace(/[\\/:*?"<>|()\s]+/g, '_'));
+      else if (resultDataUrlRef.current) await saveBlob(await (await fetch(resultDataUrlRef.current)).blob(), `${isTts ? tool.label : isVc ? '음색변조' : isEdit ? '대사편집' : isSfx ? '효과음' : '음성조절'}.wav`.replace(/[\\/:*?"<>|()\s]+/g, '_'));
     } catch (error) {
       if ((error as { name?: string }).name !== 'AbortError') setErrorText((error as Error).message);
     } finally { setSaving(false); }
@@ -2600,7 +2617,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
 
   return <section className="library-page page-scroll">
     <div className="page-heading library-heading">
-      <div><span className="eyebrow">audio.cpp 기반</span><h1>Audio Tools</h1><p>완성곡과 무관하게 텍스트→음성 생성, 음성 인식(STT), 대사 편집, 피치·속도·음량 조절, 말소리 음색 변조(마이크 녹음 지원)를 바로 실행합니다.</p></div>
+      <div><span className="eyebrow">audio.cpp 기반</span><h1>Audio Tools</h1><p>완성곡과 무관하게 텍스트→음성 생성, 음성 인식(STT), 대사 편집, 효과음 생성, 피치·속도·음량 조절, 말소리 음색 변조(마이크 녹음 지원)를 바로 실행합니다.</p></div>
     </div>
     <div className="audio-tools-tabs" role="tablist" aria-label="도구 카테고리">
       {AUDIO_TOOL_CATEGORIES.map(category => <button key={category.id} type="button" className={categoryId === category.id ? 'active' : ''} aria-pressed={categoryId === category.id} onClick={() => selectCategory(category.id)}>{category.label}</button>)}
@@ -2658,6 +2675,21 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
           {renderModelStatus(asrPrecisionInfo, asrFamily, 'asr', asrSize, asrPrecision)}
           {(asrFamilyInfo?.languages?.length ?? 1) > 0 && <label className="at-field">인식 언어<select value={asrLanguage} onChange={event => setAsrLanguage(event.target.value as typeof asrLanguage)} disabled={running}>{[['ko', '한국어'], ['en', 'English'], ['ja', '日本語'], ['zh', '中文']].filter(([id]) => !asrFamilyInfo?.languages || asrFamilyInfo.languages.includes(id)).map(([id, label]) => <option key={id} value={id}>{label}</option>)}<option value="auto">자동 감지</option></select><span className="field-hint">언어를 직접 지정하면 정확도가 더 높습니다. 모델마다 지원 언어 목록이 다릅니다.</span></label>}
           <span className="field-hint">모델 크기가 클수록 정확하지만 느리고 VRAM을 더 씁니다. VibeVoice-ASR는 약 10GB라 다른 GPU 작업과 함께 쓰면 메모리가 부족할 수 있습니다.</span>
+        </>}
+        {isSfx && <>
+          <div className="at-section-head">모델 선택 (Stable Audio 3 SFX)</div>
+          <div className="runtime-options" style={{ gridTemplateColumns: '1fr' }}>
+            <label>정밀도<select value={sfxPrecision} onChange={event => setSfxPrecision(event.target.value)} disabled={running} aria-label="효과음 모델 정밀도">{(sfxVariant?.precisions || []).map(item => <option key={item.precision} value={item.precision}>{TTS_PRECISION_LABELS[item.precision] || item.precision}{item.installed ? '' : ' · 받기 필요'}</option>)}</select></label>
+          </div>
+          {renderModelStatus(sfxPrecisionInfo, 'stablesfx', 'sfx', 'Small', sfxPrecision)}
+          <span className="field-hint">글로 설명한 소리(발소리, 문 닫는 소리, 비, 폭발 등)를 짧은 효과음으로 만듭니다. 이 모델은 영어 설명만 이해합니다. 음악은 만들지 못하고 최대 30초까지 지원합니다.</span>
+          <label className="at-field">효과음 설명 (영어)<Textarea rows={3} className="at-textarea" value={sfxPrompt} onChange={event => setSfxPrompt(event.target.value)} placeholder="예) footsteps on gravel, close perspective, crisp natural stone texture" disabled={running}/></label>
+          <label className="at-field">빼고 싶은 소리 (선택, 영어)<Input type="text" value={sfxNegative} onChange={event => setSfxNegative(event.target.value)} placeholder="예) music, voices, noise" disabled={running}/></label>
+          <div className="runtime-options">
+            <label>길이(초)<Input type="number" min={1} max={30} step={1} value={sfxDuration} onChange={event => setSfxDuration(event.target.value)} disabled={running}/></label>
+            <label>생성 단계<Input type="number" min={1} max={50} step={1} value={sfxSteps} onChange={event => setSfxSteps(event.target.value)} disabled={running}/></label>
+          </div>
+          <label className="at-field">시드 (선택)<Input type="text" inputMode="numeric" value={sfxSeed} onChange={event => setSfxSeed(event.target.value.replace(/[^0-9]/g, ''))} placeholder="비우면 매번 다르게 생성" disabled={running}/><span className="field-hint">같은 설명과 시드는 같은 소리를 만듭니다. 생성 단계가 많을수록 다듬어지지만 느립니다(기본 8).</span></label>
         </>}
         {isEdit && <>
           <div className="at-section-head">모델 선택 (DotTTS Edit)</div>
@@ -2781,7 +2813,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
           </div> : <div className={atRowClass('output', 'wet')}>
             <div className="audio-compare-toolbar">
               <button type="button" className="pp-waveform-label" aria-label="처리본 재생/일시정지" onClick={() => t.handleKeyClick('output')} disabled={!resultBuffer}>{t.activeKey === 'output' && t.isPlaying ? <Pause size={15}/> : <Play size={15}/>}</button>
-              <span className="stem-label audio-compare-label"><strong>처리본</strong><small>{isTts ? tool.label : isVc ? '음색 변조' : isEdit ? '대사 편집' : '음성 조절'}</small>{resultBuffer ? <span className="small-badge">완료</span> : <span className="small-badge">대기</span>}</span>
+              <span className="stem-label audio-compare-label"><strong>처리본</strong><small>{isTts ? tool.label : isVc ? '음색 변조' : isEdit ? '대사 편집' : isSfx ? '효과음 생성' : '음성 조절'}</small>{resultBuffer ? <span className="small-badge">완료</span> : <span className="small-badge">대기</span>}</span>
               {resultBuffer && <span className="pp-seek-time audio-compare-duration">{formatSeekTime(resultBuffer.duration)}</span>}
             </div>
             <div className="audio-compare-charts">

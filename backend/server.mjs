@@ -11,7 +11,7 @@ import { startDdspJob, killDdspJob } from './ddsp-svc.mjs';
 import { searchRvcVoices, downloadRvcVoice, listInstalledRvcVoices, resolveUserRvcVoice, deleteRvcVoice } from './rvcvoices.mjs';
 import { TYPECAST_LANGUAGES, typecastSubscription, listTypecastVoices, typecastSpeak, recommendTypecastVoice, cloneTypecastVoice, deleteTypecastVoice, TypecastError } from './typecast.mjs';
 import { readWavPcm16, wavFromPcm16, findSpeechSegments, spliceSegments, locateWords, planWindows, snapToQuietPoint } from './speechedit.mjs';
-import { ASR_FAMILIES, VC_FAMILIES, EDIT_FAMILIES, ALIGN_FAMILIES, buildEditText, applyEditText, TTS_FAMILIES, STYLE_FAMILIES, presetVoice, findTtsModel, isTtsModelInstalled, listTtsModels, splitTtsText, splitTtsByScript, buildTtsArgs, downloadTtsModel } from './tts.mjs';
+import { ASR_FAMILIES, VC_FAMILIES, EDIT_FAMILIES, ALIGN_FAMILIES, SFX_FAMILIES, buildEditText, applyEditText, TTS_FAMILIES, STYLE_FAMILIES, presetVoice, findTtsModel, isTtsModelInstalled, listTtsModels, splitTtsText, splitTtsByScript, buildTtsArgs, downloadTtsModel } from './tts.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const providers = new Set(['none', 'ollama', 'claude', 'chatgpt', 'gemini']);
@@ -986,8 +986,8 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const design = input.mode === 'design';
     const preset = input.mode === 'preset';
     const familyId = text(input.family, 40);
-    if ([...ASR_FAMILIES, ...VC_FAMILIES, ...EDIT_FAMILIES, ...ALIGN_FAMILIES].some((item) => item.id === familyId)) {
-      const asrModel = findTtsModel(familyId, ASR_FAMILIES.some((item) => item.id === familyId) ? 'asr' : EDIT_FAMILIES.some((item) => item.id === familyId) ? 'edit' : ALIGN_FAMILIES.some((item) => item.id === familyId) ? 'align' : 'vc', text(input.size, 20), text(input.precision, 20));
+    if ([...ASR_FAMILIES, ...VC_FAMILIES, ...EDIT_FAMILIES, ...ALIGN_FAMILIES, ...SFX_FAMILIES].some((item) => item.id === familyId)) {
+      const asrModel = findTtsModel(familyId, ASR_FAMILIES.some((item) => item.id === familyId) ? 'asr' : EDIT_FAMILIES.some((item) => item.id === familyId) ? 'edit' : ALIGN_FAMILIES.some((item) => item.id === familyId) ? 'align' : SFX_FAMILIES.some((item) => item.id === familyId) ? 'sfx' : 'vc', text(input.size, 20), text(input.precision, 20));
       if (!asrModel) throw fail(400, '지원하지 않는 모델 조합입니다.');
       return { model: asrModel, mode: asrModel.variant.mode, design: false };
     }
@@ -1026,6 +1026,27 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const args = ['--task', 'asr', '--family', model.family.cliFamily, '--model', path.join(root, model.relativePath), '--audio', wav16, ...(languageValue ? ['--language', languageValue] : []), '--text', '', '--text-out', textOut];
     await runTtsCli(args, textOut);
     return (await readFile(textOut, 'utf8')).trim();
+  }
+  // Sound-effect generation (Stable Audio 3 Small SFX): English prompt -> short effect clip.
+  async function generateSfx(input) {
+    const model = findTtsModel('stablesfx', 'sfx', 'Small', text(input.precision, 12) || 'q8_0');
+    if (!model) throw fail(400, '지원하지 않는 효과음 모델 조합입니다.');
+    if (!(await isTtsModelInstalled(root, model))) throw fail(409, `${model.family.label} 모델이 설치되어 있지 않습니다. 모델 선택에서 '받기'를 눌러 내려받아 주세요.`);
+    const prompt = text(input.prompt, 500).trim();
+    if (!prompt) throw fail(400, '만들 효과음을 영어로 설명해 주세요.');
+    const duration = Math.max(1, Math.min(30, Number(input.durationSeconds) || 5));
+    const steps = Math.max(1, Math.min(50, Math.round(Number(input.steps)) || 8));
+    const seed = Number.isFinite(Number(input.seed)) && input.seed !== '' && input.seed !== null && input.seed !== undefined ? Math.max(0, Math.round(Number(input.seed))) : null;
+    const negative = text(input.negativePrompt, 300).trim();
+    const workDir = path.join(outputDirectory, `sfx-${randomUUID()}`);
+    await mkdir(workDir, { recursive: true });
+    try {
+      const outputWav = path.join(workDir, 'sfx.wav');
+      await runTtsCli(['--task', 'gen', '--family', model.family.cliFamily, '--model', path.join(root, model.relativePath), '--text', prompt, '--duration-seconds', String(duration), '--num-inference-steps', String(steps), ...(seed === null ? [] : ['--seed', String(seed)]), ...(negative ? ['--request-option', `negative_prompt=${negative}`] : []), '--out', outputWav]);
+      return { dataUrl: `data:audio/wav;base64,${(await readFile(outputWav)).toString('base64')}` };
+    } finally {
+      await rm(workDir, { recursive: true, force: true }).catch(() => {});
+    }
   }
   // Word timestamps of a transcript on a (short) recording; times are 16 kHz sample indexes.
   async function alignWords(workDir, wavPath, transcript, languageKey, alignModel) {
@@ -2513,7 +2534,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         return send(200, { ok: true });
       }
       if (req.method === 'GET' && pathname === '/api/audio-tools/tts/models') {
-        return send(200, { families: await listTtsModels(root, ttsDownloads), asr: await listTtsModels(root, ttsDownloads, ASR_FAMILIES), vc: await withInstalledRvcVoices(await listTtsModels(root, ttsDownloads, VC_FAMILIES)), edit: await listTtsModels(root, ttsDownloads, EDIT_FAMILIES), align: await listTtsModels(root, ttsDownloads, ALIGN_FAMILIES) });
+        return send(200, { families: await listTtsModels(root, ttsDownloads), asr: await listTtsModels(root, ttsDownloads, ASR_FAMILIES), vc: await withInstalledRvcVoices(await listTtsModels(root, ttsDownloads, VC_FAMILIES)), edit: await listTtsModels(root, ttsDownloads, EDIT_FAMILIES), align: await listTtsModels(root, ttsDownloads, ALIGN_FAMILIES), sfx: await listTtsModels(root, ttsDownloads, SFX_FAMILIES) });
       }
       if (req.method === 'POST' && pathname === '/api/audio-tools/tts/download') {
         const input = await body(req, 64 * 1024);
@@ -2589,6 +2610,14 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           } finally { await rm(workDir, { recursive: true, force: true }).catch(() => {}); }
           return send(200, { dataUrl });
         } finally { generating = false; generationStatus = null; }
+      }
+      if (req.method === 'POST' && pathname === '/api/audio-tools/sfx') {
+        const input = await body(req, 64 * 1024);
+        if (generating) throw fail(409, '이미 다른 작업을 실행 중입니다. 완료 후 다시 시도해 주세요.');
+        generating = true;
+        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 15000 };
+        try { return send(200, await generateSfx(input)); }
+        finally { generating = false; generationStatus = null; }
       }
       if (req.method === 'POST' && pathname === '/api/audio-tools/edit') {
         const input = await body(req, 50 * 1024 * 1024);

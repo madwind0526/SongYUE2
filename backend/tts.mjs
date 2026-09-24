@@ -188,8 +188,18 @@ export const ALIGN_FAMILIES = [
   },
 ];
 
+// Sound-effect generation (text -> short effect); prompts are English-only in the model.
+export const SFX_FAMILIES = [
+  {
+    id: 'stablesfx', label: 'Stable Audio 3 SFX', cliFamily: 'stable_audio',
+    variants: [{ mode: 'sfx', size: 'Small', files: {
+      q8_0: ['Stable-Audio-3-Small-SFX-GGUF', 'stable-audio-3-small-sfx-q8_0.gguf', 1684],
+      f16: ['Stable-Audio-3-Small-SFX-GGUF', 'stable-audio-3-small-sfx-f16.gguf', 2358] } }],
+  },
+];
+
 export function findTtsModel(familyId, mode, size, precision) {
-  const family = [...TTS_FAMILIES, ...ASR_FAMILIES, ...VC_FAMILIES, ...EDIT_FAMILIES, ...ALIGN_FAMILIES].find((item) => item.id === familyId);
+  const family = [...TTS_FAMILIES, ...ASR_FAMILIES, ...VC_FAMILIES, ...EDIT_FAMILIES, ...ALIGN_FAMILIES, ...SFX_FAMILIES].find((item) => item.id === familyId);
   const variant = family?.variants.find((item) => item.mode === mode && item.size === size);
   const file = variant?.files[precision];
   if (!family || !variant || !file) return null;

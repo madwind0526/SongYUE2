@@ -231,7 +231,7 @@ GGUF 모델로 최종 오디오를 생성하는 데는 이 문서만으로 충�
 엔진에 패밀리가 컴파일돼 있어야 한다(없으면 "unsupported model family hint"). 재빌드는 `engine\audio.cpp\run-build.ps1`을 실행한다(로그 `build-asr.log`, 끝에 `EXIT=0` 확인). 현재 `-Models` 목록:
 
 ```
-yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc,vevo2,qwen3_tts,chatterbox,qwen3_asr,qwen3_forced_aligner,nemotron_asr,vibevoice_asr,voxcpm2,omnivoice,supertonic,fish_audio,magpie_tts,rvc,meanvc2,dots_tts
+yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc,vevo2,qwen3_tts,chatterbox,qwen3_asr,qwen3_forced_aligner,nemotron_asr,vibevoice_asr,voxcpm2,omnivoice,supertonic,fish_audio,magpie_tts,rvc,meanvc2,dots_tts,stable_audio
 ```
 
 새 모델을 추가하는 절차: ① `-Models`에 패밀리 추가 후 재빌드 ② `backend/tts.mjs`의 `TTS_FAMILIES`/`ASR_FAMILIES`에 파일·크기·정밀도 등록 ③ `buildTtsArgs`에 CLI 인자 분기 추가 ④ 한국어 문장으로 실측(`test/tts-model-comparison/`). 한국어를 지원하지 않는 모델은 넣지 않는다.
@@ -243,3 +243,7 @@ Audio Tools의 "대사 편집" 탭은 `dots_tts` 패밀리의 DotTTS Edit(Q8 약
 한국어 실측(2026-09-24): 한 문장에 같은 짧은 단어를 여러 번 바꾸거나 긴 문장을 편집하면, 손대지 않은 이웃 단어("합성"→"한성")도 깨질 수 있다(모델이 문장 전체를 다시 합성하기 때문). 문장 단위로 잘라 한 곳씩 편집하는 것이 안전하다. Q8과 BF16의 품질 차이는 거의 없었다. 다른 편집 모델: Vevo2 편집은 en/zh만 지원, FireRedTTS3 Instruct(`semantic_edit`, 지시문 `Replace 'A' with 'B'.`)는 영어는 정확하지만 한국어 음성을 이해하지 못해 편집이 적용되지 않아 제외했다.
 
 **정밀 편집(단어 단위, 2026-09-24)**: `Qwen3-ForcedAligner-0.6B-GGUF`(Q8 약 1.1GB, `-Models`의 `qwen3_forced_aligner`는 이미 빌드됨)로 문장을 단어별로 정렬해(`--task align --words-out`, 16 kHz 샘플 단위, 80 ms 격자) 바꿀 단어 + 앞뒤 2단어만 잘라 DotTTS Edit로 다시 만들고, 결과를 한 번 더 정렬해 **편집한 단어 구간만** 원본 위치에 붙인다(앞뒤 단어는 문맥용으로만 쓰고 버림). 경계는 ±80 ms 안에서 가장 조용한 지점으로 맞춘다. 실측(문장 3개, 같은 단어 4회 교체): 문장 단위 편집은 이웃 단어("합성"→"한성")가 깨졌으나 정밀 편집은 모두 정확했다. 문맥 단어 0개는 편집한 단어 자체가 "양상"으로 깨지고, 3개는 오히려 나빠져 기본값 2로 정했다(문장 시작/끝처럼 한쪽이 모자라면 반대쪽이 그만큼 더 가져간다). DotTTS Edit 결과 앞에는 약 0.7초 무음이 붙어 나오므로 문맥 단어가 없는 쪽은 첫/마지막 단어 위치로 잘라낸다. 정밀 편집에는 편집 창당 DotTTS 1회 + 정렬 1회가 든다(문장 3개·편집 5곳에 약 45초).
+
+### 효과음 생성 (Stable Audio 3 Small SFX)
+
+Audio Tools의 "효과음 생성" 탭은 `stable_audio` 패밀리(`-Models`에 `stable_audio` 필요)의 Stable Audio 3 Small SFX(Q8 약 1.7GB, F16 약 2.4GB, 폴더 `Stable-Audio-3-Small-SFX-GGUF`)를 쓴다. `--task gen --family stable_audio --text <영어 설명> --duration-seconds <1~30> --num-inference-steps 8 [--seed n] [--request-option negative_prompt=...]`. 프롬프트는 영어만 지원하고(한국어 미지원이라 화면에 영어 입력을 안내) 출력은 44.1 kHz 스테레오다. RTX 5070에서 5초 효과음이 약 4초. 같은 패밀리에 Stable Audio 3 Small Music(init-audio/inpaint)과 Medium이 있으나 음악 생성은 YuE2/ACE-Step을 쓰므로 넣지 않았다.

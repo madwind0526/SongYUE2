@@ -2042,3 +2042,28 @@ test('speech edit word windows: context words are kept out of the replaced span 
   const snapped = snapToQuietPoint(wave, 8000, rate);
   assert.ok(snapped >= 8200 && snapped <= 8400);
 });
+
+test('Audio Tools 효과음 생성: 모델이 없으면 받기 안내 409, 설명이 없으면 400, 설치되면 Stable Audio 인자로 생성한다', async t => {
+  resetEnv();
+  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-sfx-'));
+  const { enginePath } = await setUpEngine(root);
+  const fakeSpawn = makeFakeSpawn();
+  const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}), spawnImpl: fakeSpawn.spawnImpl });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const callJson = async (route, method = 'GET', payload) => { const response = await fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) }); return { status: response.status, data: await response.json() }; };
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+  await callJson('/api/settings', 'PUT', { enginePath });
+  assert.deepEqual((await callJson('/api/audio-tools/tts/models')).data.sfx.map(f => f.id), ['stablesfx']);
+  const missing = await callJson('/api/audio-tools/sfx', 'POST', { prompt: 'rain' });
+  assert.equal(missing.status, 409);
+  assert.match(missing.data.error, /받기/);
+  await mkdir(path.join(root, 'models', 'audio-cpp', 'audio.cpp-gguf', 'Stable-Audio-3-Small-SFX-GGUF'), { recursive: true });
+  await writeFile(path.join(root, 'models', 'audio-cpp', 'audio.cpp-gguf', 'Stable-Audio-3-Small-SFX-GGUF', 'stable-audio-3-small-sfx-q8_0.gguf'), 'fake');
+  assert.equal((await callJson('/api/audio-tools/sfx', 'POST', { prompt: '  ' })).status, 400);
+  const ok = await callJson('/api/audio-tools/sfx', 'POST', { prompt: 'door slam', negativePrompt: 'music', durationSeconds: 99, steps: 12, seed: 5 });
+  assert.equal(ok.status, 200);
+  assert.match(ok.data.dataUrl, /^data:audio\/wav;base64,/);
+  const call = fakeSpawn.calls.find(c => c.args.includes('stable_audio'));
+  assert.ok(call.args.includes('door slam') && call.args.includes('30') && call.args.includes('12') && call.args.includes('5') && call.args.includes('negative_prompt=music'));
+});
