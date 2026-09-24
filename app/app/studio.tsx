@@ -3614,12 +3614,13 @@ function AiPolishDialog({ project, onClose, notify, onCreated }: { project: Proj
           {errorText && <p className="field-hint warning">{errorText}</p>}
           <p className="field-hint">단계 값은 결과를 들어 보며 조절하세요. 처리는 곡 길이에 따라 수 초~수십 초 걸립니다. 원본 곡은 바뀌지 않고, "새 곡으로 저장"을 눌러야 라이브러리에 추가됩니다.</p>
         </div>
-        <div className="timbre-main-panel">
+        <div className="timbre-main-panel polish-main">
           <div className="stem-list">
             {row('source', '원본', sourceBuffer, false, project.title)}
             {row('output', '다듬은 곡', outputBuffer, true, outputBuffer ? appliedStages.map(stage => stageLabels[stage]).join(' → ') : '아직 만들지 않았습니다')}
-            {report && <PolishReportPanel report={report}/>}
           </div>
+          <div className="polish-footer">
+          {report && <PolishReportPanel report={report}/>}
           <span className="field-hint">두 줄의 재생 버튼을 번갈아 누르면 같은 재생 위치에서 이어서 들려서 차이만 비교할 수 있습니다.</span>
           <SeekRow t={t}/>
           <div className="dialog-actions pp-dialog-actions">
@@ -3629,6 +3630,7 @@ function AiPolishDialog({ project, onClose, notify, onCreated }: { project: Proj
               <Button variant="outline" onClick={onClose} disabled={saving}>닫기</Button>
               <Button onClick={() => void save()} disabled={!previewId || running || saving}>{saving ? <LoaderCircle className="spin"/> : <Save size={15}/>}새 곡으로 저장</Button>
             </div>
+          </div>
           </div>
         </div>
       </div>

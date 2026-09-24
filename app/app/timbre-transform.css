@@ -295,3 +295,16 @@
 .polish-band-bar i { position: absolute; top: 0; bottom: 0; border-radius: 4px; }
 .polish-band-bar i.down { background: #d98a6a; }
 .polish-band-bar i.up { background: #7fc47f; }
+
+/* AI 곡 다듬기: the graphs scroll, the measured result / seek bar / transport / save row stay pinned at the bottom of the main window */
+.timbre-transform-dialog .timbre-main-panel.polish-main { max-height: none; height: auto; align-self: stretch; min-height: min(70vh, 760px); overflow: hidden; }
+.timbre-transform-dialog .timbre-main-panel.polish-main .stem-list { flex: 1; min-height: 120px; overflow-y: auto; }
+.polish-footer { flex: none; display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px solid #333f31; }
+.polish-footer .polish-report { margin-top: 0; padding: 10px 14px; }
+.polish-bands { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 22px; }
+.polish-band { grid-template-columns: 92px 1fr 60px; font-size: 12px; color: #b3c4a8; }
+.polish-band b { color: #eaf3e2; }
+.polish-band-bar { height: 12px; background: #2a3529; border-radius: 6px; }
+.polish-band-bar::after { background: #8fa280; }
+.polish-band-bar i.down { background: #f0906a; }
+.polish-band-bar i.up { background: #7fe07f; }
