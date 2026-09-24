@@ -10,6 +10,8 @@ import { parseNoteEvents, encodeMidiFile } from './midi.mjs';
 import { startDdspJob, killDdspJob } from './ddsp-svc.mjs';
 import { searchRvcVoices, downloadRvcVoice, listInstalledRvcVoices, resolveUserRvcVoice, deleteRvcVoice } from './rvcvoices.mjs';
 import { TYPECAST_LANGUAGES, typecastSubscription, listTypecastVoices, typecastSpeak, recommendTypecastVoice, cloneTypecastVoice, deleteTypecastVoice, TypecastError } from './typecast.mjs';
+import { Worker } from 'node:worker_threads';
+import { runPolishChain, normalizePolishSettings, enabledStages } from './postfx/chain.mjs';
 import { startRealtimeVcProcess, REALTIME_CHUNK_SAMPLES, REALTIME_INPUT_RATE } from './realtimevc.mjs';
 import { readWavPcm16, wavFromPcm16, findSpeechSegments, spliceSegments, locateWords, planWindows, snapToQuietPoint } from './speechedit.mjs';
 import { ASR_FAMILIES, VC_FAMILIES, EDIT_FAMILIES, ALIGN_FAMILIES, SFX_FAMILIES, buildEditText, applyEditText, TTS_FAMILIES, STYLE_FAMILIES, presetVoice, findTtsModel, isTtsModelInstalled, listTtsModels, splitTtsText, splitTtsByScript, buildTtsArgs, downloadTtsModel } from './tts.mjs';
@@ -191,7 +193,7 @@ function providerFromEnv(id) {
   return { endpoint: '', model: '', apiKey: '' };
 }
 
-export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl = fetch, spawnImpl = spawn } = {}) {
+export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl = fetch, spawnImpl = spawn, polishRunner = null } = {}) {
   try { process.loadEnvFile(path.join(root, '.env')); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
   const data = path.join(root, 'data');
@@ -1193,6 +1195,53 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   }
   // "음원 비교" 다이얼로그처럼 프로젝트와 무관하게 브라우저에서 이미 완성된(원본 그대로거나
   // 클라이언트 측 후처리를 거친) WAV 버퍼를 그대로 라이브러리에 추가할 때 쓰는 범용 저장 경로.
+  // ---- AI song polish (noise reduction, Spectral Lifter, vocal naturalizer, mastering to a reference) ----
+  // The DSP runs in a worker thread on raw float32 stereo files; ffmpeg decodes the song (and the reference, at the
+  // song's sample rate) and encodes the preview as 24-bit FLAC. Previews are temporary until the user saves one.
+  const polishPreviews = new Map();
+  async function probeSampleRate(file) {
+    const text = await new Promise((resolve) => {
+      const chunks = [];
+      const child = spawnImpl('ffprobe', ['-v', 'error', '-select_streams', 'a:0', '-show_entries', 'stream=sample_rate', '-of', 'csv=p=0', file], { windowsHide: true });
+      child.stdout?.on('data', (chunk) => chunks.push(chunk));
+      child.once('error', () => resolve(''));
+      child.once('close', () => resolve(Buffer.concat(chunks).toString('utf8').trim()));
+    });
+    const rate = Number.parseInt(text, 10);
+    return Number.isFinite(rate) && rate >= 8000 && rate <= 192000 ? rate : 48000;
+  }
+  async function defaultPolishRunner({ inputFile, referenceFile, outputFile, settings, workDir, onProgress }) {
+    const rate = await probeSampleRate(inputFile);
+    const inputRaw = path.join(workDir, 'input.f32');
+    const referenceRaw = path.join(workDir, 'reference.f32');
+    const outputRaw = path.join(workDir, 'output.f32');
+    await runFfmpegCli(['-y', '-i', inputFile, '-f', 'f32le', '-ac', '2', '-ar', String(rate), inputRaw], '곡 디코딩');
+    if (referenceFile) await runFfmpegCli(['-y', '-i', referenceFile, '-f', 'f32le', '-ac', '2', '-ar', String(rate), referenceRaw], '기준곡 디코딩');
+    await new Promise((resolve, reject) => {
+      const worker = new Worker(new URL('./postfx/worker.mjs', import.meta.url), { workerData: { inputRaw, referenceRaw: referenceFile ? referenceRaw : null, outputRaw, rate, settings } });
+      let failure = null;
+      worker.on('message', (message) => {
+        if (message.type === 'progress') onProgress(message.percent, message.label);
+        else if (message.type === 'error') failure = message.message;
+      });
+      worker.once('error', (error) => reject(error));
+      worker.once('exit', (code) => (failure ? reject(new Error(failure)) : code === 0 ? resolve() : reject(new Error(`처리 스레드가 종료 코드 ${code}로 끝났습니다.`))));
+    });
+    await runFfmpegCli(['-y', '-f', 'f32le', '-ar', String(rate), '-ac', '2', '-i', outputRaw, '-c:a', 'flac', '-sample_fmt', 's32', outputFile], '결과 인코딩');
+    await rm(inputRaw, { force: true }).catch(() => {});
+    await rm(referenceRaw, { force: true }).catch(() => {});
+    await rm(outputRaw, { force: true }).catch(() => {});
+  }
+  const uuidPattern = /^[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/i;
+  async function discardPolishPreview(previewId) {
+    const preview = polishPreviews.get(previewId);
+    polishPreviews.delete(previewId);
+    if (preview) await rm(preview.dir, { recursive: true, force: true }).catch(() => {});
+  }
+  // Previews of an earlier run of the server are ephemeral: remove them.
+  for (const name of await readdir(outputDirectory).catch(() => [])) {
+    if (/^polish-[\da-f-]{36}$/i.test(name)) await rm(path.join(outputDirectory, name), { recursive: true, force: true }).catch(() => {});
+  }
   async function saveArbitraryAudio(dataUrl, title) {
     const match = typeof dataUrl === 'string' && dataUrl.match(/^data:audio\/wav;base64,(.+)$/);
     if (!match) throw fail(400, '저장할 오디오(WAV) 데이터가 필요합니다.');
@@ -2540,6 +2589,67 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           return send(200, { ok: true });
         }
       }
+      const polishStartMatch = pathname.match(/^\/api\/projects\/([^/]+)\/polish$/);
+      if (polishStartMatch && req.method === 'POST') {
+        const input = await body(req, 64 * 1024);
+        const entry = await findEntry(polishStartMatch[1]);
+        if (!entry || entry.project.status !== 'completed' || !entry.project.audioPath) throw fail(404, '다듬을 완성된 곡을 찾을 수 없습니다.');
+        const inputFile = path.join(path.dirname(entry.file), entry.project.audioPath);
+        if (!(await exists(inputFile))) throw fail(404, '음원 파일을 찾을 수 없습니다.');
+        const settings = normalizePolishSettings(input.settings);
+        const stages = enabledStages(settings);
+        if (!stages.length) throw fail(400, '적용할 단계를 하나 이상 켜 주세요.');
+        let referenceFile = null;
+        if (settings.master.enabled) {
+          const libraryRoot = path.join(root, 'library');
+          const relative = text(input.referencePath, 2048).trim();
+          const target = path.resolve(libraryRoot, relative);
+          const rel = path.relative(libraryRoot, target);
+          if (!relative || rel.startsWith('..') || path.isAbsolute(rel)) throw fail(400, '기준곡을 라이브러리에서 골라 주세요.');
+          if (!LIBRARY_BROWSE_AUDIO_EXTENSIONS.has(path.extname(target).toLowerCase())) throw fail(400, '지원하지 않는 기준곡 형식입니다.');
+          if (!(await exists(target))) throw fail(404, '기준곡 파일을 찾을 수 없습니다.');
+          referenceFile = target;
+        }
+        if (generating) throw fail(409, '이미 다른 작업을 실행 중입니다. 완료 후 다시 시도해 주세요.');
+        generating = true;
+        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 15000, progress: 0, detail: '준비 중' };
+        const previewId = randomUUID();
+        const dir = path.join(outputDirectory, `polish-${previewId}`);
+        try {
+          await mkdir(dir, { recursive: true });
+          const outputFile = path.join(dir, 'preview.flac');
+          const onProgress = (percent, label) => { if (generationStatus) { generationStatus.progress = percent; generationStatus.detail = label; } };
+          try { await (polishRunner || defaultPolishRunner)({ inputFile, referenceFile, outputFile, settings, workDir: dir, onProgress }); }
+          catch (error) { throw error?.status ? error : fail(502, `곡 다듬기에 실패했습니다. ${error?.message || ''}`.trim()); }
+          if (!(await exists(outputFile))) throw fail(502, '곡 다듬기 결과가 만들어지지 않았습니다.');
+          polishPreviews.set(previewId, { dir, file: outputFile, project: entry.project, stages });
+          return send(200, { previewId, stages, durationMs: await measureDurationMs(outputFile) });
+        } catch (error) {
+          await rm(dir, { recursive: true, force: true }).catch(() => {});
+          throw error;
+        } finally { generating = false; generationStatus = null; }
+      }
+      const polishItemMatch = pathname.match(/^\/api\/polish\/([^/]+)(?:\/(audio|save))?$/);
+      if (polishItemMatch) {
+        const preview = uuidPattern.test(polishItemMatch[1]) ? polishPreviews.get(polishItemMatch[1]) : null;
+        if (!preview) throw fail(404, '다듬기 미리듣기를 찾을 수 없습니다. 다시 만들어 주세요.');
+        if (req.method === 'GET' && polishItemMatch[2] === 'audio') {
+          const data = await readFile(preview.file);
+          res.writeHead(200, { 'Content-Type': 'audio/flac', 'Content-Length': String(data.length), 'Cache-Control': 'no-store' });
+          return res.end(data);
+        }
+        if (req.method === 'POST' && polishItemMatch[2] === 'save') {
+          const input = await body(req, 16 * 1024);
+          const title = text(input.title, 200).trim() || `${preview.project.title} (다듬기)`;
+          const copy = path.join(preview.dir, `save-${randomUUID()}.flac`);
+          await copyFile(preview.file, copy);
+          return send(201, await finalizeToMusic({ ...preview.project, title }, null, copy, { durationMs: await measureDurationMs(preview.file), polishedStages: preview.stages }));
+        }
+        if (req.method === 'DELETE' && !polishItemMatch[2]) {
+          await discardPolishPreview(polishItemMatch[1]);
+          return send(200, { ok: true });
+        }
+      }
       if (req.method === 'POST' && pathname === '/api/audio-tools/sfx') {
         const input = await body(req, 64 * 1024);
         if (generating) throw fail(409, '이미 다른 작업을 실행 중입니다. 완료 후 다시 시도해 주세요.');
@@ -2698,7 +2808,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       send(error.status || 500, { error: error.status ? error.message : '로컬 파일 또는 서비스 처리에 실패했습니다. 앱을 다시 실행해 주세요.' });
     }
   });
-  server.on('close', () => { void stopRealtime(); });
+  server.on('close', () => { void stopRealtime(); for (const id of [...polishPreviews.keys()]) void discardPolishPreview(id); });
   return server;
 }
 

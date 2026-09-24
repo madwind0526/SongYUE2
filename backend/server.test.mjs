@@ -2048,3 +2048,70 @@ test('모델 목록: 다운로드 기록에 있어도 디스크에서 지워진 
   assert.equal(inventory.totalBytes, 40);
   assert.equal(inventory.completedBytes, 40);
 });
+
+test('AI 곡 다듬기: 완성곡을 처리기에 넘겨 미리듣기를 만들고, 저장하면 새 곡으로 라이브러리에 추가하며, 버리면 지운다', async t => {
+  resetEnv();
+  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-polish-'));
+  const { enginePath } = await setUpEngine(root);
+  const fakeSpawn = makeFakeSpawn();
+  const runs = [];
+  // stub of the worker-based pipeline: records its input and writes a "preview" file
+  const polishRunner = async ({ inputFile, referenceFile, outputFile, settings, workDir, onProgress }) => {
+    runs.push({ inputFile, referenceFile, settings, workDir });
+    onProgress(50, '노이즈 제거');
+    await writeFile(outputFile, 'fake-flac-preview');
+  };
+  const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}), spawnImpl: fakeSpawn.spawnImpl, polishRunner });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const callJson = async (route, method = 'GET', payload) => { const response = await fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) }); return { status: response.status, data: await response.json() }; };
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+  await callJson('/api/settings', 'PUT', { enginePath });
+
+  // a finished song in the library (saved through the generic audio-save route)
+  const saved = await callJson('/api/audio-save', 'POST', { dataUrl: `data:audio/wav;base64,${Buffer.from('fake-song').toString('base64')}`, title: '테스트 곡' });
+  assert.equal(saved.status, 200);
+  const songId = saved.data.id;
+
+  assert.equal((await callJson('/api/projects/not-an-id/polish', 'POST', { settings: { denoise: { enabled: true } } })).status, 404);
+  const none = await callJson(`/api/projects/${songId}/polish`, 'POST', { settings: {} });
+  assert.equal(none.status, 400);
+  assert.match(none.data.error, /단계/);
+  const noReference = await callJson(`/api/projects/${songId}/polish`, 'POST', { settings: { master: { enabled: true } } });
+  assert.equal(noReference.status, 400);
+  assert.match(noReference.data.error, /기준곡/);
+  assert.equal((await callJson(`/api/projects/${songId}/polish`, 'POST', { settings: { master: { enabled: true } }, referencePath: '../../etc/passwd.wav' })).status, 400);
+
+  // reference from the library
+  await mkdir(path.join(root, 'library', 'Audio-Ref'), { recursive: true });
+  await writeFile(path.join(root, 'library', 'Audio-Ref', 'ref.wav'), 'fake-ref');
+  const started = await callJson(`/api/projects/${songId}/polish`, 'POST', { settings: { denoise: { enabled: true, strength: 5 }, lifter: { enabled: true }, master: { enabled: true } }, referencePath: 'Audio-Ref/ref.wav' });
+  assert.equal(started.status, 200);
+  assert.deepEqual(started.data.stages, ['denoise', 'lifter', 'master']);
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0].settings.denoise.strength, 1, 'strength is clamped');
+  assert.ok(runs[0].referenceFile.endsWith('ref.wav'));
+  assert.ok(runs[0].inputFile.includes('테스트 곡') || runs[0].inputFile.endsWith('.flac') || runs[0].inputFile.endsWith('.wav') || runs[0].inputFile.endsWith('.mp3'));
+  const previewId = started.data.previewId;
+
+  const audio = await fetch(`${base}/api/polish/${previewId}/audio`);
+  assert.equal(audio.status, 200);
+  assert.equal(audio.headers.get('content-type'), 'audio/flac');
+  assert.equal(await audio.text(), 'fake-flac-preview');
+
+  // saving creates a new, independent song that keeps the source's metadata
+  const before = (await callJson('/api/projects')).data.length;
+  const kept = await callJson(`/api/polish/${previewId}/save`, 'POST', { title: '테스트 곡 (다듬기)' });
+  assert.equal(kept.status, 201);
+  assert.equal(kept.data.title, '테스트 곡 (다듬기)');
+  assert.equal(kept.data.status, 'completed');
+  assert.notEqual(kept.data.id, songId);
+  assert.deepEqual(kept.data.polishedStages, ['denoise', 'lifter', 'master']);
+  assert.equal((await callJson('/api/projects')).data.length, before + 1);
+
+  // discarding removes the preview
+  assert.equal((await callJson(`/api/polish/${previewId}`, 'DELETE')).status, 200);
+  assert.equal((await fetch(`${base}/api/polish/${previewId}/audio`)).status, 404);
+  assert.equal((await callJson('/api/polish/not-a-preview/save', 'POST', {})).status, 404);
+  assert.deepEqual((await readdir(path.join(root, 'runs'))).filter(name => name.startsWith('polish-')), []);
+});
