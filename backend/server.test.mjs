@@ -2067,3 +2067,76 @@ test('Audio Tools 효과음 생성: 모델이 없으면 받기 안내 409, 설�
   const call = fakeSpawn.calls.find(c => c.args.includes('stable_audio'));
   assert.ok(call.args.includes('door slam') && call.args.includes('30') && call.args.includes('12') && call.args.includes('5') && call.args.includes('negative_prompt=music'));
 });
+
+test('실시간 음색 변조: 세션 시작 -> 오디오 전달 -> 변환 조각 수신 -> 종료 시 잠금 해제, 세션 중 다른 작업은 409', async t => {
+  resetEnv();
+  const { PassThrough } = await import('node:stream');
+  const { wavFromPcm16 } = await import('./speechedit.mjs');
+  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-rt-'));
+  const { enginePath } = await setUpEngine(root);
+  const fakeSpawn = makeFakeSpawn();
+  const streamCalls = [];
+  const spawnImpl = (engine, args, options) => {
+    if (!args.includes('streaming')) return fakeSpawn.spawnImpl(engine, args, options);
+    streamCalls.push({ args, env: options.env });
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = new PassThrough();
+    child.kill = () => child.emit('close', null, 'SIGTERM');
+    const chunkDir = args[args.indexOf('--out-dir') + 1];
+    let count = 0;
+    setTimeout(() => child.stdout.emit('data', Buffer.from('audio_input=stdin format=s16le rate=16000 channels=1\n')), 0);
+    child.stdin.on('data', async data => {
+      count += 1;
+      await mkdir(chunkDir, { recursive: true });
+      const file = path.join(chunkDir, `chunk-${String(count).padStart(6, '0')}.wav`);
+      await writeFile(file, wavFromPcm16(new Int16Array(data.buffer, data.byteOffset, data.length / 2), 16000));
+      child.stdout.emit('data', Buffer.from(`audio_out=${file}\n`));
+    });
+    child.stdin.on('end', () => setTimeout(() => child.emit('close', 0, null), 0));
+    return child;
+  };
+  const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}), spawnImpl });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const callJson = async (route, method = 'GET', payload) => { const response = await fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) }); return { status: response.status, data: await response.json() }; };
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+  await callJson('/api/settings', 'PUT', { enginePath });
+  const refDataUrl = `data:audio/wav;base64,${Buffer.from('fake-target-voice').toString('base64')}`;
+  assert.equal((await callJson('/api/realtime-vc/start', 'POST', {})).status, 400);
+  const noModel = await callJson('/api/realtime-vc/start', 'POST', { referenceDataUrl: refDataUrl });
+  assert.equal(noModel.status, 400);
+  assert.match(noModel.data.error, /MeanVC2.*받기/);
+  await mkdir(path.join(root, 'models', 'audio-cpp', 'audio.cpp-gguf', 'MeanVC2-GGUF'), { recursive: true });
+  await writeFile(path.join(root, 'models', 'audio-cpp', 'audio.cpp-gguf', 'MeanVC2-GGUF', 'meanvc2-120ms-40ms-q4_k.gguf'), 'stub');
+
+  const started = await callJson('/api/realtime-vc/start', 'POST', { referenceDataUrl: refDataUrl });
+  assert.equal(started.status, 200);
+  assert.equal(started.data.sampleRate, 16000);
+  assert.equal(started.data.chunkSamples, 2560);
+  assert.equal(streamCalls[0].env.AUDIOCPP_STREAM_AUDIO_CHUNKS, '1');
+  assert.ok(streamCalls[0].args.includes('meanvc2') && streamCalls[0].args.includes('--voice-ref') && streamCalls[0].args.includes('-'));
+  // the GPU is reserved for the session
+  assert.equal((await callJson('/api/audio-tools/adjust', 'POST', { audioDataUrl: refDataUrl, speed: 2 })).status, 409);
+  assert.equal((await callJson('/api/realtime-vc/start', 'POST', { referenceDataUrl: refDataUrl })).status, 409);
+
+  const feed = await fetch(`${base}/api/realtime-vc/${started.data.id}/audio`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: Buffer.alloc(2560 * 2, 1) });
+  assert.equal(feed.status, 204);
+  // the converted chunk arrives on the event stream
+  const events = await fetch(`${base}/api/realtime-vc/${started.data.id}/events`);
+  const reader = events.body.getReader();
+  let received = '';
+  const deadline = Date.now() + 3000;
+  while (!received.includes('"type":"audio"') && Date.now() < deadline) { const { value, done } = await reader.read(); if (done) break; received += Buffer.from(value).toString('utf8'); }
+  await reader.cancel();
+  assert.match(received, /"type":"ready"/);
+  const audioEvent = JSON.parse(received.split('\n\n').find(part => part.includes('"type":"audio"')).replace(/^data: /, ''));
+  assert.equal(audioEvent.rate, 16000);
+  assert.equal(Buffer.from(audioEvent.pcm, 'base64').length, 2560 * 2);
+
+  assert.equal((await callJson(`/api/realtime-vc/${started.data.id}/stop`, 'POST', {})).status, 200);
+  assert.equal((await callJson(`/api/realtime-vc/${started.data.id}/stop`, 'POST', {})).status, 404);
+  // lock released: another job passes the guard again (400 = no adjustment values, not 409)
+  assert.equal((await callJson('/api/audio-tools/adjust', 'POST', { audioDataUrl: refDataUrl })).status, 400);
+});

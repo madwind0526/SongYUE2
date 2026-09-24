@@ -10,6 +10,7 @@ import { parseNoteEvents, encodeMidiFile } from './midi.mjs';
 import { startDdspJob, killDdspJob } from './ddsp-svc.mjs';
 import { searchRvcVoices, downloadRvcVoice, listInstalledRvcVoices, resolveUserRvcVoice, deleteRvcVoice } from './rvcvoices.mjs';
 import { TYPECAST_LANGUAGES, typecastSubscription, listTypecastVoices, typecastSpeak, recommendTypecastVoice, cloneTypecastVoice, deleteTypecastVoice, TypecastError } from './typecast.mjs';
+import { startRealtimeVcProcess, REALTIME_CHUNK_SAMPLES, REALTIME_INPUT_RATE } from './realtimevc.mjs';
 import { readWavPcm16, wavFromPcm16, findSpeechSegments, spliceSegments, locateWords, planWindows, snapToQuietPoint } from './speechedit.mjs';
 import { ASR_FAMILIES, VC_FAMILIES, EDIT_FAMILIES, ALIGN_FAMILIES, SFX_FAMILIES, buildEditText, applyEditText, TTS_FAMILIES, STYLE_FAMILIES, presetVoice, findTtsModel, isTtsModelInstalled, listTtsModels, splitTtsText, splitTtsByScript, buildTtsArgs, downloadTtsModel } from './tts.mjs';
 
@@ -1026,6 +1027,52 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const args = ['--task', 'asr', '--family', model.family.cliFamily, '--model', path.join(root, model.relativePath), '--audio', wav16, ...(languageValue ? ['--language', languageValue] : []), '--text', '', '--text-out', textOut];
     await runTtsCli(args, textOut);
     return (await readFile(textOut, 'utf8')).trim();
+  }
+  // Live voice conversion (MeanVC2 streaming): one session at a time; it owns the GPU lock until it is stopped.
+  let realtime = null;
+  async function stopRealtime() {
+    const current = realtime;
+    if (!current) return;
+    realtime = null;
+    clearInterval(current.timer);
+    current.session.endInput();
+    if (!(await current.session.waitClosed(8000))) { try { current.session.child.kill(); } catch { /* already gone */ } await current.session.waitClosed(2000); }
+    await rm(current.dir, { recursive: true, force: true }).catch(() => {});
+    generating = false;
+    generationStatus = null;
+  }
+  async function startRealtime(input) {
+    if (realtime || generating) throw fail(409, '이미 다른 작업을 실행 중입니다. 완료 후 다시 시도해 주세요.');
+    if (!(typeof input.referenceDataUrl === 'string' && input.referenceDataUrl.length)) throw fail(400, '목표 목소리의 참조 오디오를 선택해 주세요.');
+    const precision = input.precision === 'fp32' ? 'fp32' : 'q4_k';
+    const modelPath = await vcModelPath('meanvc2', '120ms/40ms', precision);
+    const dir = path.join(outputDirectory, `realtime-vc-${randomUUID()}`);
+    await mkdir(dir, { recursive: true });
+    generating = true;
+    try {
+      const refDir = path.join(dir, 'ref');
+      await mkdir(refDir, { recursive: true });
+      const referenceWav = await normalizeInputAudio(refDir, input.referenceDataUrl);
+      // Same 20 s cap as the offline conversion (the speaker encoder's memory grows with the reference length).
+      const trimmedRef = path.join(dir, 'reference.wav');
+      await runFfmpegCli(['-y', '-i', referenceWav, '-t', '20', '-ar', '16000', '-ac', '1', trimmedRef], '참조 오디오 자르기');
+      const engine = resolveConfigPath(settings.enginePath, DEFAULT_ENGINE_PATH);
+      const chunkDir = path.join(dir, 'chunks');
+      const session = startRealtimeVcProcess({
+        spawnImpl, engine, cwd: audioCppCwd(engine),
+        args: ['--task', 'vc', '--mode', 'streaming', '--family', 'meanvc2', '--model', modelPath, '--backend', 'cuda', '--audio', '-', '--input-rate', String(REALTIME_INPUT_RATE), '--voice-ref', trimmedRef, '--out-dir', chunkDir, '--out', path.join(dir, 'final.wav')],
+      });
+      const id = randomUUID();
+      // Sessions nobody feeds any more (closed tab, crashed page) stop by themselves and free the GPU.
+      const timer = setInterval(() => { if (Date.now() - session.lastActivity > 30000) void stopRealtime(); }, 5000);
+      session.listeners.add((event) => { if (event.type === 'end') void stopRealtime(); });
+      realtime = { id, dir, session, timer };
+      return { id, sampleRate: REALTIME_INPUT_RATE, chunkSamples: REALTIME_CHUNK_SAMPLES };
+    } catch (error) {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+      generating = false;
+      throw error;
+    }
   }
   // Sound-effect generation (Stable Audio 3 Small SFX): English prompt -> short effect clip.
   async function generateSfx(input) {
@@ -2611,6 +2658,39 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           return send(200, { dataUrl });
         } finally { generating = false; generationStatus = null; }
       }
+      if (req.method === 'POST' && pathname === '/api/realtime-vc/start') {
+        const input = await body(req, 60 * 1024 * 1024);
+        return send(200, await startRealtime(input));
+      }
+      const realtimeMatch = pathname.match(/^\/api\/realtime-vc\/([^/]+)\/(audio|events|stop)$/);
+      if (realtimeMatch) {
+        if (!realtime || realtime.id !== realtimeMatch[1]) throw fail(404, '실시간 변환 세션을 찾을 수 없습니다. 다시 시작해 주세요.');
+        const current = realtime;
+        if (req.method === 'POST' && realtimeMatch[2] === 'audio') {
+          // Raw 16 kHz mono s16le PCM (a few hundred milliseconds per request).
+          const chunks = [];
+          let size = 0;
+          for await (const chunk of req) { size += chunk.length; if (size > 512 * 1024) throw fail(413, '오디오 조각이 너무 큽니다.'); chunks.push(chunk); }
+          current.session.write(Buffer.concat(chunks));
+          res.writeHead(204, { 'Cache-Control': 'no-store' });
+          return res.end();
+        }
+        if (req.method === 'GET' && realtimeMatch[2] === 'events') {
+          res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
+          const write = (event) => res.write(`data: ${JSON.stringify(event)}\n\n`);
+          const after = Number(requestUrl.searchParams.get('after')) || 0;
+          if (current.session.ready) write({ type: 'ready' });
+          for (const event of current.session.events) if (event.type === 'audio' && event.seq > after) write(event);
+          if (current.session.closed) { write({ type: 'end', code: current.session.exitCode }); return res.end(); }
+          current.session.listeners.add(write);
+          req.on('close', () => current.session.listeners.delete(write));
+          return;
+        }
+        if (req.method === 'POST' && realtimeMatch[2] === 'stop') {
+          await stopRealtime();
+          return send(200, { ok: true });
+        }
+      }
       if (req.method === 'POST' && pathname === '/api/audio-tools/sfx') {
         const input = await body(req, 64 * 1024);
         if (generating) throw fail(409, '이미 다른 작업을 실행 중입니다. 완료 후 다시 시도해 주세요.');
@@ -2769,6 +2849,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       send(error.status || 500, { error: error.status ? error.message : '로컬 파일 또는 서비스 처리에 실패했습니다. 앱을 다시 실행해 주세요.' });
     }
   });
+  server.on('close', () => { void stopRealtime(); });
   return server;
 }
 

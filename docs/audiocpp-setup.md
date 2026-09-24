@@ -247,3 +247,9 @@ Audio Tools의 "대사 편집" 탭은 `dots_tts` 패밀리의 DotTTS Edit(Q8 약
 ### 효과음 생성 (Stable Audio 3 Small SFX)
 
 Audio Tools의 "효과음 생성" 탭은 `stable_audio` 패밀리(`-Models`에 `stable_audio` 필요)의 Stable Audio 3 Small SFX(Q8 약 1.7GB, F16 약 2.4GB, 폴더 `Stable-Audio-3-Small-SFX-GGUF`)를 쓴다. `--task gen --family stable_audio --text <영어 설명> --duration-seconds <1~30> --num-inference-steps 8 [--seed n] [--request-option negative_prompt=...]`. 프롬프트는 영어만 지원하고(한국어 미지원이라 화면에 영어 입력을 안내) 출력은 44.1 kHz 스테레오다. RTX 5070에서 5초 효과음이 약 4초. 같은 패밀리에 Stable Audio 3 Small Music(init-audio/inpaint)과 Medium이 있으나 음악 생성은 YuE2/ACE-Step을 쓰므로 넣지 않았다.
+
+### 실시간 음색 변조 (MeanVC2 스트리밍, 2026-09-24)
+
+Audio Tools "음색 변조" 탭의 "실시간 변환"은 `audiocpp_cli --task vc --mode streaming --family meanvc2 --audio - --input-rate 16000 --voice-ref <참조>`를 세션 동안 계속 띄워 두고, 브라우저 마이크 → 서버(`/api/realtime-vc/*`) → CLI stdin으로 16 kHz mono s16le PCM을 160 ms(2560샘플) 단위로 흘려 보낸다. 변환된 조각은 서버가 SSE(`/api/realtime-vc/:id/events`)로 돌려주고 브라우저가 도착하는 대로 재생한다(`backend/realtimevc.mjs`). 측정: 모델 로드 약 0.5 s, 12 s 음성이 입력 속도(실시간)로 처리되고 조각 처리 자체는 입력 속도보다 훨씬 빠름, 마이크→재생 지연 약 0.3~0.4 s. 세션이 GPU 잠금(`generating`)을 잡아 다른 작업은 409, 30초 동안 입력이 없으면 자동 종료.
+
+**엔진 패치 필요**: 순정 CLI는 스트리밍 중 일반 `audio_output` 조각을 파일로 쓰지 않아(이름 있는 출력만 씀) 끝에 합쳐진 결과만 나온다. `docs/patches/audiocpp-cli-stream-audio-chunks.patch`(`app/cli/main.cpp`, 환경변수 `AUDIOCPP_STREAM_AUDIO_CHUNKS`가 있을 때만 조각을 `<out-dir>/chunk-XXXXXX.wav`로 쓰고 stdout에 `audio_out=<경로>`를 즉시 출력)를 `engine/audio.cpp`에 적용하고(`git apply` 또는 `patch -p1`) 재빌드해야 한다. `engine/`은 git에서 제외되어 있으므로 엔진을 새로 받으면 이 패치를 다시 적용해야 한다. 패치가 없으면 실시간 변환은 시작 후 결과가 오지 않는다.

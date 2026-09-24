@@ -2097,6 +2097,17 @@ const TYPECAST_USE_CASES: [string, string][] = [['Conversational', '대화'], ['
 const TYPECAST_AGE_LABEL = Object.fromEntries(TYPECAST_AGES);
 const TYPECAST_USE_LABEL = Object.fromEntries(TYPECAST_USE_CASES);
 
+// AudioWorklet that forwards every microphone block to the main thread (live voice conversion input).
+const PCM_TAP_WORKLET = "class PcmTap extends AudioWorkletProcessor { process(inputs) { const channel = inputs[0] && inputs[0][0]; if (channel) this.port.postMessage(channel.slice(0)); return true; } } registerProcessor('pcm-tap', PcmTap);";
+function int16ToAudioBuffer(ctx: BaseAudioContext, chunks: Int16Array[], rate: number): AudioBuffer | null {
+  const total = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  if (!total) return null;
+  const buffer = ctx.createBuffer(1, total, rate);
+  const channel = buffer.getChannelData(0);
+  let offset = 0;
+  for (const chunk of chunks) { for (let index = 0; index < chunk.length; index += 1) channel[offset + index] = chunk[index] / 32768; offset += chunk.length; }
+  return buffer;
+}
 // 사이드바 "오디오 도구" 페이지 -- 완성곡과 무관하게 audio.cpp 기반의 TTS/음성 인식(Qwen3-ASR)과
 // ffmpeg 기반 음성 조절을 독립적으로 실행한다. 조건 입력은 좌측 30%, 결과는 우측 70%에 "음원 비교"
 // 스타일(파형+스펙트로그램+seek bar+재생 컨트롤+취소/저장)로 표시한다.
@@ -2159,6 +2170,16 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
   const [errorText, setErrorText] = useState('');
   const [warningText, setWarningText] = useState('');
   const [audioPickerOpen, setAudioPickerOpen] = useState(false);
+  // Live (streaming) voice conversion
+  const [liveState, setLiveState] = useState<'idle' | 'starting' | 'running' | 'stopping'>('idle');
+  const [liveNote, setLiveNote] = useState('');
+  const [liveLatency, setLiveLatency] = useState<number | null>(null);
+  const [liveInLevel, setLiveInLevel] = useState(0);
+  const [liveOutLevel, setLiveOutLevel] = useState(0);
+  const [liveListen, setLiveListen] = useState(true);
+  const liveListenRef = useRef(true);
+  liveListenRef.current = liveListen;
+  const liveRef = useRef<{ id: string; ctx: AudioContext; stream: MediaStream; source: MediaStreamAudioSourceNode; node: AudioWorkletNode; events: EventSource; input: Int16Array[]; output: Int16Array[]; captureTimes: number[]; nextTime: number; queue: Promise<unknown>; inLevel: number; outLevel: number; timer: number } | null>(null);
   // Speech voice conversion (MeanVC2): reference voice slot + microphone recorder
   const [vcModels, setVcModels] = useState<TtsFamilyInfo[]>([]);
   const [meanvcPrecision, setMeanvcPrecision] = useState<'q4_k' | 'fp32'>('q4_k');
@@ -2505,6 +2526,142 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
     return () => window.clearInterval(timer);
   }, [recState]);
   useEffect(() => () => { try { recorderRef.current?.state !== 'inactive' && recorderRef.current?.stop(); } catch { /* ignore */ } closeMicStream(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // ---- live voice conversion: microphone -> server (MeanVC2 streaming) -> converted audio played as it arrives ----
+  async function startLive() {
+    if (!refBlobRef.current) { setErrorText('목표 목소리의 참조 오디오를 먼저 선택해 주세요.'); return; }
+    if (micPanelOpen) closeMicPanel();
+    setErrorText('');
+    setLiveNote('준비 중… (모델을 불러오는 중)');
+    setLiveLatency(null);
+    setLiveState('starting');
+    t.stopPlayback();
+    let sessionId = '';
+    let stream: MediaStream | null = null;
+    let ctx: AudioContext | null = null;
+    try {
+      const started = await api<{ id: string; sampleRate: number; chunkSamples: number }>('/realtime-vc/start', 'POST', { referenceDataUrl: await readFileAsDataUrl(refBlobRef.current), precision: meanvcPrecision });
+      sessionId = started.id;
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: micId ? { exact: micId } : undefined, echoCancellation: true, noiseSuppression: true, channelCount: 1 } });
+      ctx = new AudioContext({ sampleRate: started.sampleRate });
+      await ctx.resume();
+      const moduleUrl = URL.createObjectURL(new Blob([PCM_TAP_WORKLET], { type: 'application/javascript' }));
+      await ctx.audioWorklet.addModule(moduleUrl);
+      URL.revokeObjectURL(moduleUrl);
+      const source = ctx.createMediaStreamSource(stream);
+      const node = new AudioWorkletNode(ctx, 'pcm-tap');
+      const silent = ctx.createGain();
+      silent.gain.value = 0;
+      source.connect(node);
+      node.connect(silent).connect(ctx.destination);
+      const events = new EventSource(`/api/realtime-vc/${sessionId}/events`);
+      const live = { id: sessionId, ctx, stream, source, node, events, input: [] as Int16Array[], output: [] as Int16Array[], captureTimes: [] as number[], nextTime: 0, queue: Promise.resolve() as Promise<unknown>, inLevel: 0, outLevel: 0, timer: 0 };
+      liveRef.current = live;
+      const pendingBlocks: Float32Array[] = [];
+      let pendingCount = 0;
+      // Nothing is sent before the server is ready: audio spoken while the model loads would be converted in one burst
+      // afterwards and stay as a permanent delay.
+      let serverReady = false;
+      node.port.onmessage = (event: MessageEvent<Float32Array>) => {
+        const block = event.data;
+        let sum = 0;
+        for (let index = 0; index < block.length; index += 1) sum += block[index] * block[index];
+        live.inLevel = Math.max(live.inLevel * 0.9, Math.sqrt(sum / block.length));
+        if (!serverReady) return;
+        pendingBlocks.push(block);
+        pendingCount += block.length;
+        while (pendingCount >= started.chunkSamples) {
+          const chunk = new Int16Array(started.chunkSamples);
+          let filled = 0;
+          while (filled < started.chunkSamples) {
+            const head = pendingBlocks[0];
+            const take = Math.min(head.length, started.chunkSamples - filled);
+            for (let index = 0; index < take; index += 1) chunk[filled + index] = Math.max(-32768, Math.min(32767, Math.round(head[index] * 32767)));
+            filled += take;
+            if (take === head.length) pendingBlocks.shift(); else pendingBlocks[0] = head.subarray(take);
+          }
+          pendingCount -= started.chunkSamples;
+          live.input.push(chunk);
+          live.captureTimes.push(ctx!.currentTime);
+          live.queue = live.queue.then(() => fetch(`/api/realtime-vc/${sessionId}/audio`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: chunk })).catch(() => setLiveNote('서버와 연결이 끊겼습니다. 정지 후 다시 시작해 주세요.'));
+        }
+      };
+      events.onmessage = (message: MessageEvent<string>) => {
+        const data = JSON.parse(message.data) as { type: string; seq?: number; rate?: number; pcm?: string };
+        if (data.type === 'ready') { serverReady = true; setLiveState('running'); setLiveNote('변환 중… 말해 보세요. 변환된 소리는 헤드폰으로 듣는 것을 권장합니다.'); return; }
+        if (data.type === 'end') { setLiveNote('서버가 변환을 마쳤습니다.'); return; }
+        if (data.type !== 'audio' || !data.pcm || !live.ctx) return;
+        const bytes = Uint8Array.from(atob(data.pcm), character => character.charCodeAt(0));
+        const pcm = new Int16Array(bytes.buffer);
+        live.output.push(pcm);
+        let sum = 0;
+        for (let index = 0; index < pcm.length; index += 1) sum += (pcm[index] / 32768) ** 2;
+        live.outLevel = Math.max(live.outLevel * 0.9, Math.sqrt(sum / pcm.length));
+        const audioBuffer = int16ToAudioBuffer(live.ctx, [pcm], data.rate || 16000);
+        if (!audioBuffer || !liveListenRef.current) return;
+        const player = live.ctx.createBufferSource();
+        player.buffer = audioBuffer;
+        player.connect(live.ctx.destination);
+        // A small lead absorbs network/processing jitter; after an underrun playback re-syncs to "now + lead".
+        const startAt = Math.max(live.ctx.currentTime + 0.12, live.nextTime);
+        // More than 0.6 s behind: drop this chunk instead of letting the delay grow (live speech beats completeness).
+        if (startAt - live.ctx.currentTime > 0.6) return;
+        player.start(startAt);
+        live.nextTime = startAt + audioBuffer.duration;
+        const capturedAt = live.captureTimes[(data.seq || 1) - 1];
+        if (capturedAt !== undefined) setLiveLatency(Math.round((startAt - (capturedAt - started.chunkSamples / started.sampleRate)) * 1000));
+      };
+      events.onerror = () => setLiveNote('서버 연결이 끊겼습니다. 정지 후 다시 시작해 주세요.');
+      live.timer = window.setInterval(() => { setLiveInLevel(live.inLevel); setLiveOutLevel(live.outLevel); }, 100);
+    } catch (error) {
+      stream?.getTracks().forEach(track => track.stop());
+      void ctx?.close();
+      liveRef.current = null;
+      if (sessionId) void fetch(`/api/realtime-vc/${sessionId}/stop`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      setErrorText((error as Error).message || '실시간 변환을 시작하지 못했습니다.');
+      setLiveState('idle');
+      setLiveNote('');
+    }
+  }
+  async function stopLive() {
+    const live = liveRef.current;
+    if (!live) return;
+    liveRef.current = null;
+    setLiveState('stopping');
+    setLiveNote('마무리하는 중…');
+    window.clearInterval(live.timer);
+    live.node.port.onmessage = null;
+    live.source.disconnect();
+    live.stream.getTracks().forEach(track => track.stop());
+    try {
+      await live.queue;
+      await fetch(`/api/realtime-vc/${live.id}/stop`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+      await new Promise(resolve => window.setTimeout(resolve, 400));
+    } catch { /* the session also stops on its own when nothing is fed */ }
+    live.events.close();
+    // Keep the whole take: the converted audio becomes the result (save button), the microphone input the source.
+    try {
+      const output = int16ToAudioBuffer(t.ensureAudioContext(), live.output, 16000);
+      const input = int16ToAudioBuffer(t.ensureAudioContext(), live.input, 16000);
+      if (input) applyPickedAudio(audioBufferToWavBlob(input), '마이크 녹음(실시간).wav', true);
+      if (output) {
+        t.setBuffer('output', output);
+        resultDataUrlRef.current = await readFileAsDataUrl(audioBufferToWavBlob(output));
+      }
+    } catch { setErrorText('녹음된 결과를 정리하지 못했습니다.'); }
+    void live.ctx.close();
+    setLiveInLevel(0);
+    setLiveOutLevel(0);
+    setLiveState('idle');
+    setLiveNote('');
+  }
+  useEffect(() => () => {
+    const live = liveRef.current;
+    if (!live) return;
+    live.stream.getTracks().forEach(track => track.stop());
+    window.clearInterval(live.timer);
+    live.events.close();
+    void fetch(`/api/realtime-vc/${live.id}/stop`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  }, []);
   // Fills the transcript box using the speech-recognition model chosen in the STT tab.
   async function transcribeSource() {
     if (!audioBlobRef.current) { setErrorText(`${audioLabel}를 먼저 선택해 주세요.`); return; }
@@ -2765,7 +2922,22 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
           {!isTypecast && <label className="at-field">발화 언어<select value={speechLanguage} onChange={event => setSpeechLanguage(event.target.value as 'auto' | 'en' | 'ko')} disabled={running}><option value="auto">자동 (내용 문자에 맞춤)</option><option value="ko">한국어</option><option value="en">English</option></select><span className="field-hint">긴 텍스트는 문장 단위로 나눠 생성한 뒤 이어붙입니다. Qwen3-TTS는 한국어를 고르면 섞인 영어 문장을 생략할 수 있으니 혼합 문장은 자동을 권장합니다.</span></label>}
           <p className="field-hint at-run-summary">실행: {tool.description}</p>
         </>}
-        <Button onClick={() => void run()} disabled={running}>{running ? <LoaderCircle className="spin"/> : <Sparkles size={14}/>}{running ? '작업 중...' : '실행'}</Button>
+        {isVc && <div>
+          <div className="at-section-head" style={{ marginTop: 18 }}>실시간 변환 (마이크 → 참조 목소리)</div>
+          <div className="voice-convert-topbar" style={{ justifyContent: 'flex-start', gap: 10 }}>
+            {liveState === 'idle' || liveState === 'starting'
+              ? <Button variant="outline" onClick={() => void startLive()} disabled={running || liveState === 'starting' || !meanvcInfo?.installed}>{liveState === 'starting' ? <LoaderCircle className="spin" size={14}/> : <Mic size={14}/>}실시간 변환 시작</Button>
+              : <Button variant="outline" onClick={() => void stopLive()} disabled={liveState === 'stopping'}><Square size={13}/>정지</Button>}
+            <label className="at-function" style={{ padding: '6px 9px' }}><input type="checkbox" checked={liveListen} onChange={event => setLiveListen(event.target.checked)}/>변환된 소리 듣기</label>
+          </div>
+          {liveState !== 'idle' && <div style={{ marginTop: 8, display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 8px', alignItems: 'center', fontSize: 12, color: '#a9b8a4' }}>
+            <span>입력</span><div style={{ height: 8, borderRadius: 4, background: '#232b23' }}><div style={{ height: 8, borderRadius: 4, background: '#7ee787', width: `${Math.min(100, liveInLevel * 400)}%`, transition: 'width 80ms' }}/></div>
+            <span>출력</span><div style={{ height: 8, borderRadius: 4, background: '#232b23' }}><div style={{ height: 8, borderRadius: 4, background: '#7fb069', width: `${Math.min(100, liveOutLevel * 400)}%`, transition: 'width 80ms' }}/></div>
+          </div>}
+          {liveNote && <span className="field-hint">{liveNote}{liveLatency !== null && liveState === 'running' ? ` · 지연 약 ${liveLatency}ms` : ''}</span>}
+          <span className="field-hint">참조 목소리를 고른 뒤 시작하면 마이크 소리가 0.2~0.5초 늦게 그 목소리로 바뀌어 들립니다. 스피커로 들으면 소리가 다시 마이크로 들어가므로 헤드폰을 쓰세요. 정지하면 변환된 소리가 오른쪽 처리본에 남아 저장할 수 있습니다. 실시간 변환 중에는 다른 작업을 할 수 없습니다.</span>
+        </div>}
+        <Button onClick={() => void run()} disabled={running || liveState !== 'idle'}>{running ? <LoaderCircle className="spin"/> : <Sparkles size={14}/>}{running ? '작업 중...' : '실행'}</Button>
         {warningText && <p className="field-hint warning">{warningText}</p>}
         {errorText && <p className="field-hint warning">{errorText}</p>}
       </div>
