@@ -213,3 +213,27 @@ test('API: adapters are listed, edited and deleted; songs with adapters are made
   assert.equal((await call('/api/adapters/rock', 'DELETE')).status, 200);
   assert.deepEqual((await call('/api/adapters')).data.adapters, []);
 });
+
+test('API: files chosen in the browser are uploaded and become one adapter', async (t) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-lora-upload-'));
+  const server = await createStudioServer({ root });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  t.after(async () => { await new Promise((resolve) => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+  const uploadId = '3f1b6c1e-2d0e-4c7a-9b1a-0d6f5a1c2e3b';
+  const upload = (name, data, id = uploadId) => fetch(`${base}/api/adapters/upload?uploadId=${id}&filename=${encodeURIComponent(name)}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: data });
+  assert.equal((await upload('my-style.safetensors', Buffer.from('weights-bytes'))).status, 201);
+  assert.equal((await upload('adapter_config.json', Buffer.from('{"ar":true,"rank":8}'))).status, 201);
+  assert.equal((await upload('notes.txt', Buffer.from('x'))).status, 400, 'only weights and the config are accepted');
+  assert.equal((await upload('../evil.safetensors', Buffer.from('x'), 'not-a-uuid')).status, 400);
+  const imported = await fetch(`${base}/api/adapters/import`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: '내 스타일', uploadId }) });
+  assert.equal(imported.status, 201, JSON.stringify(await imported.clone().json()));
+  const list = (await (await fetch(`${base}/api/adapters`)).json()).adapters;
+  assert.equal(list.length, 1);
+  assert.equal(list[0].displayName, '내 스타일');
+  assert.equal(list[0].rank, 8);
+  assert.equal(await readFile(path.join(root, 'models', 'yue-adapters', list[0].name, 'my-style.safetensors'), 'utf8'), 'weights-bytes');
+  // the temporary upload folder is gone, and importing it again fails cleanly
+  const again = await fetch(`${base}/api/adapters/import`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'x', uploadId }) });
+  assert.equal(again.status, 400);
+});

@@ -104,3 +104,11 @@ button.adapter-card, label.adapter-card { cursor: pointer; }
 .adapter-icon-btn.danger { border-color: #7a4a44; color: #e5a19a; }
 .adapter-icon-btn.danger:hover:not(:disabled) { background: #4a2f2b; color: #ffd0ca; }
 .adapter-icon-btn.confirm { background: #5a2f2a; color: #ffd0ca; }
+
+.adapter-dropzone { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 22px 16px; border-radius: 10px; border: 2px dashed #4b5d48; color: #a9bd9f; font-size: 13px; cursor: pointer; text-align: center; }
+.adapter-dropzone:hover, .adapter-dropzone.over { border-color: #8fbf7f; background: #202b1f; color: #eaf3e2; }
+.adapter-import-files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.adapter-import-files li { display: flex; align-items: center; gap: 10px; padding: 5px 10px; border-radius: 7px; background: #202b1f; font-size: 12.5px; color: #cfdcc6; }
+.adapter-import-files li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.adapter-import-files li small { color: #7f917a; }
+.adapter-import-files li button { background: transparent; border: 0; color: #8fa280; cursor: pointer; }

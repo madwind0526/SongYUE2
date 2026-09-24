@@ -1,5 +1,8 @@
 import http from 'node:http';
 import { mkdir, readFile, writeFile, rename, readdir, access, unlink, rm, stat, copyFile } from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
+import { Transform } from 'node:stream';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash, randomInt, randomUUID } from 'node:crypto';
@@ -1342,7 +1345,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   }
   // Previews of an earlier run of the server are ephemeral: remove them.
   for (const name of await readdir(outputDirectory).catch(() => [])) {
-    if (/^polish-[\da-f-]{36}$/i.test(name)) await rm(path.join(outputDirectory, name), { recursive: true, force: true }).catch(() => {});
+    if (/^(polish|adapter-upload)-[\da-f-]{36}$/i.test(name)) await rm(path.join(outputDirectory, name), { recursive: true, force: true }).catch(() => {});
   }
   async function saveArbitraryAudio(dataUrl, title) {
     const match = typeof dataUrl === 'string' && dataUrl.match(/^data:audio\/wav;base64,(.+)$/);
@@ -2061,14 +2064,39 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         });
         return send(202, { jobId });
       }
+      // A file chosen in the browser is sent as the raw request body (one request per file) into a temporary folder;
+      // POST /api/adapters/import with that uploadId then turns the folder into an adapter.
+      if (req.method === 'POST' && pathname === '/api/adapters/upload') {
+        const uploadId = requestUrl.searchParams.get('uploadId') || '';
+        const fileName = path.basename(requestUrl.searchParams.get('filename') || '');
+        if (!uuidPattern.test(uploadId)) throw fail(400, '업로드 번호가 올바르지 않습니다.');
+        if (!/\.(safetensors|json)$/i.test(fileName) || fileName.startsWith('.')) throw fail(400, '.safetensors 파일(과 adapter_config.json)만 올릴 수 있습니다.');
+        const dir = path.join(outputDirectory, `adapter-upload-${uploadId}`);
+        await mkdir(dir, { recursive: true });
+        const target = path.join(dir, fileName);
+        let received = 0;
+        const limit = new Transform({ transform(chunk, _encoding, callback) { received += chunk.length; callback(received > 2 * 1024 ** 3 ? new Error('파일이 너무 큽니다(최대 2 GB).') : null, chunk); } });
+        try { await pipeline(req, limit, createWriteStream(target)); }
+        catch (error) { await rm(target, { force: true }).catch(() => {}); throw fail(400, error.message); }
+        return send(201, { ok: true, name: fileName, bytes: received });
+      }
       if (req.method === 'POST' && pathname === '/api/adapters/import') {
         const input = await body(req, 16 * 1024);
         const paths = yueServerPaths(root);
-        const files = (Array.isArray(input.paths) ? input.paths : []).map((item) => text(item, 1000).trim().replace(/^"|"$/g, '')).filter(Boolean);
-        for (const file of files) if (!path.isAbsolute(file)) throw fail(400, '파일은 전체 경로(예: C:/폴더/파일.safetensors)로 입력해 주세요.');
+        const uploadId = typeof input.uploadId === 'string' ? input.uploadId : '';
+        const uploadDir = uuidPattern.test(uploadId) ? path.join(outputDirectory, `adapter-upload-${uploadId}`) : null;
+        let files;
+        if (uploadDir) {
+          files = (await readdir(uploadDir).catch(() => [])).filter((name) => /\.(safetensors|json)$/i.test(name)).map((name) => path.join(uploadDir, name));
+          if (!files.length) throw fail(400, '올린 파일을 찾을 수 없습니다. 파일을 다시 선택해 주세요.');
+        } else {
+          files = (Array.isArray(input.paths) ? input.paths : []).map((item) => text(item, 1000).trim().replace(/^"|"$/g, '')).filter(Boolean);
+          for (const file of files) if (!path.isAbsolute(file)) throw fail(400, '파일은 전체 경로(예: C:/폴더/파일.safetensors)로 입력해 주세요.');
+        }
         const existingNames = (await listAdapters(paths.adapters)).map((item) => item.name);
         try { return send(201, await importLocalFiles({ adapterDir: paths.adapters, existingNames, name: text(input.name, 120).trim(), paths: files })); }
         catch (error) { throw fail(400, error.message); }
+        finally { if (uploadDir) await rm(uploadDir, { recursive: true, force: true }).catch(() => {}); }
       }
       const installStatusMatch = pathname.match(/^\/api\/adapters\/hub\/install\/([^/]+)$/);
       if (installStatusMatch && req.method === 'GET') {

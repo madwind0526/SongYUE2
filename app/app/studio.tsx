@@ -3211,7 +3211,7 @@ type InstallJob = { status: string; downloaded: number; total: number; names: st
 type AdapterChoice = { name: string; arScale: number; narScale: number };
 const STAGE_LABEL: Record<string, string> = { ar: '작곡 (AR)', nar: '사운드 (NAR)', both: '작곡+사운드', unknown: '종류 확인 필요' };
 const KIND_LABEL: Record<string, string> = { style: '스타일', artist: '아티스트', composition: '작곡', sound: '사운드', slider: '슬라이더' };
-const formatSize = (bytes: number) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : bytes > 0 ? `${Math.max(1, Math.round(bytes / 1e6))} MB` : '');
+const formatSize = (bytes: number) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : bytes >= 1e6 ? `${Math.round(bytes / 1e6)} MB` : bytes > 0 ? `${Math.max(1, Math.round(bytes / 1e3))} KB` : '');
 // "cc-by-nc-4.0" is the Creative Commons Attribution-NonCommercial 4.0 license: free to use and share with credit, but not for commercial use.
 const LICENSE_NAMES: Record<string, string> = { 'cc-by-nc-4.0': 'CC BY-NC 4.0 · 비상업 전용', 'cc-by-4.0': 'CC BY 4.0', 'cc-by-sa-4.0': 'CC BY-SA 4.0', 'cc0-1.0': 'CC0 (공개)', 'apache-2.0': 'Apache 2.0', mit: 'MIT', 'openrail': 'OpenRAIL', other: '기타 조건' };
 const licenseLabel = (license: string) => (license ? LICENSE_NAMES[license.toLowerCase()] || license : '라이선스 표기 없음');
@@ -3298,7 +3298,9 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
   const [job, setJob] = useState<InstallJob | null>(null);
   const [running, setRunning] = useState(false);
   const [importName, setImportName] = useState('');
-  const [importPaths, setImportPaths] = useState('');
+  const [importPicked, setImportPicked] = useState<File[]>([]);
+  const [importing, setImporting] = useState('');
+  const [dragging, setDragging] = useState(false);
 
   const reload = () => api<AdapterList>('/adapters').then(setMine).catch(error => notify((error as Error).message, true));
   const reloadCatalog = () => api<{ entries: CatalogEntry[] }>('/adapters/catalog').then(result => setCatalog(result.entries)).catch(error => notify((error as Error).message, true));
@@ -3336,12 +3338,30 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
     try { await api(`/adapters/${encodeURIComponent(installedItem.name)}`, 'DELETE'); notify(`"${entry.name}"을(를) 삭제했습니다.`); setDeleting(''); await reload(); await reloadCatalog(); }
     catch (error) { notify((error as Error).message, true); }
   }
+  // Weight files (and an adapter_config.json) chosen in the file dialog or dropped on the box.
+  function pickImportFiles(list: FileList | File[] | null) {
+    const wanted = Array.from(list || []).filter(file => /\.safetensors$/i.test(file.name) || file.name.toLowerCase() === 'adapter_config.json');
+    if (!wanted.length) { notify('.safetensors 파일(과 adapter_config.json)을 선택해 주세요.', true); return; }
+    setImportPicked(wanted);
+    const first = wanted.find(file => /\.safetensors$/i.test(file.name));
+    if (first && !importName.trim()) setImportName(first.name.replace(/\.safetensors$/i, ''));
+  }
   async function importFiles() {
+    const weights = importPicked.filter(file => /\.safetensors$/i.test(file.name));
+    if (weights.length < 1 || weights.length > 2) { notify('.safetensors 파일을 1~2개 선택해 주세요. (작곡용과 사운드용이 따로 있으면 2개)', true); return; }
+    const uploadId = crypto.randomUUID();
     try {
-      const paths = importPaths.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-      await api('/adapters/import', 'POST', { name: importName, paths });
-      notify('LoRA를 가져왔습니다.'); setImportName(''); setImportPaths(''); await reload();
+      for (let index = 0; index < importPicked.length; index += 1) {
+        const file = importPicked[index];
+        setImporting(`올리는 중… (${index + 1}/${importPicked.length}) ${file.name}`);
+        const response = await fetch(`/api/adapters/upload?uploadId=${uploadId}&filename=${encodeURIComponent(file.name)}`, { method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: file });
+        if (!response.ok) throw new Error(((await response.json().catch(() => ({}))) as { error?: string }).error || '파일을 올리지 못했습니다.');
+      }
+      setImporting('LoRA를 만드는 중…');
+      await api('/adapters/import', 'POST', { name: importName, uploadId });
+      notify('LoRA를 가져왔습니다.'); setImportName(''); setImportPicked([]); await reload();
     } catch (error) { notify((error as Error).message, true); }
+    finally { setImporting(''); }
   }
   async function openDetail(repoId: string) {
     setDetailLoading(repoId); setUnitsPicked([]);
@@ -3366,7 +3386,7 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
     <div className="page-heading"><span className="eyebrow">노래의 색깔을 바꾸는 작은 모델</span><h1>LoRA 관리</h1><p>스타일, 아티스트, 사운드를 가르치는 작은 추가 모델입니다. Preset이나 허깅페이스에서 받고, 곡을 만들 때 "고급 설정"에서 골라 각 부분의 강도를 조절합니다.</p></div>
     <div className="adapter-tabs" role="tablist">
       <button role="tab" aria-selected={tab === 'mine'} className={tab === 'mine' ? 'active' : ''} onClick={() => setTab('mine')}>Installed{mine ? ` (${mine.adapters.length})` : ''}</button>
-      <button role="tab" aria-selected={tab === 'catalog'} className={tab === 'catalog' ? 'active' : ''} onClick={() => setTab('catalog')}>Preset{catalog ? ` (${catalog.length})` : ''}</button>
+      <button role="tab" aria-selected={tab === 'catalog'} className={tab === 'catalog' ? 'active' : ''} onClick={() => setTab('catalog')}>Preset{catalog ? ` (${catalog.filter(entry => !entry.installed).length}/${catalog.length})` : ''}</button>
       <button role="tab" aria-selected={tab === 'hub'} className={tab === 'hub' ? 'active' : ''} onClick={() => setTab('hub')}>허깅페이스</button>
     </div>
     {mine && !mine.engineReady && <p className="field-hint warning">LoRA로 곡을 만들려면 엔진 파일이 더 필요합니다 (없는 것: {mine.missing.join(', ')}). docs/models.md의 "LoRA 엔진"을 확인해 주세요.</p>}
@@ -3374,9 +3394,13 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
 
     {tab === 'mine' && <>
       <div className="adapter-import"><strong><FolderOpen size={15}/> 파일 가져오기</strong>
-        <span className="adapter-sub">내 PC에 있는 .safetensors 파일의 전체 경로를 한 줄에 하나씩 적으세요 (1~2개, 작곡용과 사운드용이 따로 있으면 2개). 같은 폴더의 adapter_config.json은 함께 가져옵니다.</span>
-        <div className="adapter-import-row"><Input value={importName} placeholder="이름" maxLength={120} aria-label="가져올 LoRA 이름" onChange={event => setImportName(event.target.value)}/><Button variant="outline" disabled={!importPaths.trim()} onClick={() => void importFiles()}><Upload size={14}/>가져오기</Button></div>
-        <Textarea value={importPaths} placeholder="C:/Users/me/loras/my-style.safetensors" aria-label="가져올 파일 경로" onChange={event => setImportPaths(event.target.value)}/>
+        <label className={`adapter-dropzone${dragging ? ' over' : ''}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); pickImportFiles(event.dataTransfer.files); }}>
+          <input type="file" multiple accept=".safetensors,.json" hidden disabled={Boolean(importing)} onChange={event => { pickImportFiles(event.target.files); event.target.value = ''; }}/>
+          <Upload size={18}/><span>.safetensors 파일을 여기에 끌어다 놓거나, 눌러서 선택하세요</span>
+        </label>
+        {importPicked.length > 0 && <ul className="adapter-import-files">{importPicked.map(file => <li key={file.name}><span>{file.name}</span><small>{formatSize(file.size)}</small><button type="button" aria-label={`${file.name} 빼기`} onClick={() => setImportPicked(importPicked.filter(item => item !== file))} disabled={Boolean(importing)}><X size={12}/></button></li>)}</ul>}
+        <div className="adapter-import-row"><Input value={importName} placeholder="이름 (비워 두면 파일 이름)" maxLength={120} aria-label="가져올 LoRA 이름" disabled={Boolean(importing)} onChange={event => setImportName(event.target.value)}/><Button variant="outline" disabled={!importPicked.some(file => /\.safetensors$/i.test(file.name)) || Boolean(importing)} onClick={() => void importFiles()}>{importing ? <LoaderCircle className="spin" size={14}/> : <Upload size={14}/>}가져오기</Button></div>
+        <span className="adapter-sub">{importing || '작곡용과 사운드용이 따로 있으면 두 파일을 함께 선택하세요. adapter_config.json이 있으면 같이 선택하면 됩니다.'}</span>
       </div>
       {mine ? (mine.adapters.length ? <div className="adapter-grid">{mine.adapters.map(item => <AdapterCard key={item.name} item={item} onChanged={() => void reload()} notify={notify} running={running} setRunning={setRunning}/>)}</div>
         : <div className="empty-library"><h2>받은 LoRA가 아직 없어요</h2><p>Preset에서 마음에 드는 것을 받거나, 가지고 있는 파일을 가져오세요.</p><Button variant="outline" className="soft-button" onClick={() => setTab('catalog')}><Search/>Preset 보기</Button></div>)
