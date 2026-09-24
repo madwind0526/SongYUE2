@@ -2895,7 +2895,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
             {TIMBRE_ENGINES.map(item => <button key={item.id} type="button" className={`timbre-model-btn${engine === item.id ? ' active' : ''}`} onClick={() => setEngine(item.id)} disabled={busy}>{item.label}</button>)}
           </div>
 
-          {engine !== 'ddsp' && engine !== 'rvc' && <div className="timbre-engine-options">
+          {engine !== 'ddsp' && engine !== 'rvc' && engine !== 'meanvc2' && <div className="timbre-engine-options">
             <div className="timbre-option-head" style={{ marginTop: 16 }}>긴 보컬 자동 분할 기준</div>
             <div className="runtime-options" style={{ gridTemplateColumns: '1fr 1fr' }}><label>청크(초)<Input type="number" min={1} max={120} value={chunkSeconds} onChange={event => setChunkSeconds(Math.max(1, Math.min(120, Number(event.target.value) || 10)))} disabled={busy}/></label><label>겹침(초)<Input type="number" min={0} value={overlapSeconds} onChange={event => setOverlapSeconds(Math.max(0, Math.min(Math.floor(chunkSeconds / 2), Number(event.target.value) || 0)))} disabled={busy}/></label></div>
             <p className="field-hint">긴 보컬은 청크(초) 단위로 나눠 순차 처리하고 겹침(초)만큼 겹친 뒤 연결합니다. 겹침은 청크의 절반 이하로 자동 조정되며, 겹친 양쪽을 겹침의 절반만큼 잘라 이어붙입니다.</p>

@@ -895,8 +895,10 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       const durationMs = await measureDurationMs(originalVocalsWav);
       const durationSeconds = durationMs ? durationMs / 1000 : 0;
       const chunkParams = resolveChunkParams(options.chunkSeconds, options.overlapSeconds);
-      // RVC splits long audio at quiet points by itself and reloads ~1 GB of weights per run, so it takes the whole vocal.
-      const useChunking = svcEngine !== 'rvc' && durationSeconds > chunkParams.chunkSeconds;
+      // RVC splits long audio at quiet points by itself (and reloads ~1 GB of weights per run), and MeanVC2 is a streaming
+      // model that handles long input fine (63 s whole: CER 0.07 in 4 s vs 0.18 with 10 s chunks), so both take the whole vocal.
+      // Seed-VC/Vevo collapse on long input and still need the overlapping 10 s windows.
+      const useChunking = svcEngine !== 'rvc' && svcEngine !== 'meanvc2' && durationSeconds > chunkParams.chunkSeconds;
       const chunkPlan = useChunking ? buildChunkPlan(durationSeconds, chunkParams.chunkSeconds, chunkParams.overlapSeconds) : [];
       const warning = useChunking
         ? `긴 보컬을 ${chunkParams.chunkSeconds}초 단위(겹침 ${chunkParams.overlapSeconds}초)로 ${chunkPlan.length}개로 나눠 같은 참조 목소리로 변환한 뒤 연결했습니다. 조각 경계 부근에서 음색 전환이 어색할 수 있습니다.`
