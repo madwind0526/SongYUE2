@@ -2565,8 +2565,8 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
   const [rvcPreviewing, setRvcPreviewing] = useState(false);
   const rvcPreviewAudioRef = useRef<HTMLAudioElement | null>(null);
   const [rvcVoice, setRvcVoice] = useState('default');
-  const [rvcSemitone, setRvcSemitone] = useState(0);
-  const [rvcRetrieval, setRvcRetrieval] = useState(0);
+  const [rvcSemitone, setRvcSemitone] = useState('0');
+  const [rvcRetrieval, setRvcRetrieval] = useState('0');
   const [meanvcPrecision, setMeanvcPrecision] = useState<'q4_k' | 'fp32'>('q4_k');
   const [vevoRoute, setVevoRoute] = useState<'style_preserved_svc' | 'style_preserved_vc'>('style_preserved_svc');
   const [ddspReferencePaths, setDdspReferencePaths] = useState<string[]>([]);
@@ -2730,7 +2730,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
     setRvcPreviewing(true);
     setErrorText('');
     try {
-      const result = await api<{ dataUrl: string }>(`/timbre-transform/${previewId}/rvc-preview`, 'POST', { rvcVoice, rvcSemitone, rvcRetrieval });
+      const result = await api<{ dataUrl: string }>(`/timbre-transform/${previewId}/rvc-preview`, 'POST', { rvcVoice, rvcSemitone: Number(rvcSemitone) || 0, rvcRetrieval: Number(rvcRetrieval) || 0 });
       rvcPreviewAudioRef.current?.pause();
       rvcPreviewAudioRef.current = new Audio(result.dataUrl);
       await rvcPreviewAudioRef.current.play();
@@ -2762,7 +2762,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
     try {
       await withEstimatedProgress(async () => {
         const dataUrl = referenceBlobRef.current ? await readFileAsDataUrl(referenceBlobRef.current) : undefined;
-        const result = await api<{ ok: boolean; warning: string | null }>(`/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl, engine, seedF0Condition, seedAutoF0Adjust, seedInferenceSteps, vevoRoute, rvcVoice, rvcSemitone, rvcRetrieval, meanvcPrecision, chunkSeconds, overlapSeconds });
+        const result = await api<{ ok: boolean; warning: string | null }>(`/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl, engine, seedF0Condition, seedAutoF0Adjust, seedInferenceSteps, vevoRoute, rvcVoice, rvcSemitone: Number(rvcSemitone) || 0, rvcRetrieval: Number(rvcRetrieval) || 0, meanvcPrecision, chunkSeconds, overlapSeconds });
         setWarningText(result.warning || '');
         const ctx = t.ensureAudioContext();
         const [vocalsResponse, instrumentalResponse] = await Promise.all([
@@ -2876,8 +2876,8 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
             <div className="timbre-option-head" style={{ marginTop: 18 }}>{engine === 'rvc' ? 'RVC 목소리' : 'MeanVC2 모델'}</div>
             {engine === 'rvc' && <>
               <div className="runtime-options"><label>내장 목소리<div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6 }}><select style={{ flex: 1, minWidth: 0 }} value={rvcVoice} onChange={event => setRvcVoice(event.target.value)} disabled={busy}>{(vcFamily?.voices || [{ id: 'default', label: 'default' }]).map(voice => <option key={voice.id} value={voice.id}>{voice.label}</option>)}</select><Button variant="outline" size="sm" aria-label="목소리 듣기" title="원본 보컬 앞 8초를 이 목소리로 바꿔 들어봅니다" disabled={busy || rvcPreviewing || !previewId || !vcModelReady} onClick={() => void previewRvcVoice()}>{rvcPreviewing ? <LoaderCircle className="spin" size={13}/> : <Play size={13}/>}</Button></div></label>
-                <label>음높이(반음)<Input type="number" min={-24} max={24} value={rvcSemitone} onChange={event => setRvcSemitone(Math.max(-24, Math.min(24, Number(event.target.value) || 0)))} disabled={busy}/></label></div>
-              <div className="runtime-options"><label>검색 블렌딩(0~1)<Input type="number" min={0} max={1} step={0.1} value={rvcRetrieval} onChange={event => setRvcRetrieval(Math.max(0, Math.min(1, Number(event.target.value) || 0)))} disabled={busy}/></label></div>
+                <label>음높이(반음)<Input type="text" inputMode="decimal" value={rvcSemitone} onChange={event => setRvcSemitone(event.target.value)} onBlur={() => setRvcSemitone(String(Math.max(-24, Math.min(24, Math.round(Number(rvcSemitone)) || 0))))} disabled={busy}/></label></div>
+              <div className="runtime-options"><label>검색 블렌딩(0~1)<Input type="text" inputMode="decimal" value={rvcRetrieval} onChange={event => setRvcRetrieval(event.target.value)} onBlur={() => setRvcRetrieval(String(Math.max(0, Math.min(1, Number(rvcRetrieval) || 0))))} disabled={busy}/></label></div>
               <p className="field-hint">RVC는 참조 audio가 아니라 내장 목소리 4개 중 하나로 바꿉니다. 원곡과 음역이 다르면 음높이(반음)로 맞추세요.</p>
             </>}
             {engine === 'meanvc2' && <>
