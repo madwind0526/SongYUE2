@@ -3290,6 +3290,7 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
   const [hubError, setHubError] = useState('');
   const [hubLoading, setHubLoading] = useState(false);
   const [query, setQuery] = useState('');
+  const [queryText, setQueryText] = useState('');
   const [category, setCategory] = useState('');
   const [language, setLanguage] = useState('');
   const [sort, setSort] = useState<'az' | 'za' | 'likes' | 'updated' | 'samples'>('likes');
@@ -3387,7 +3388,12 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
   const categories = [...new Set((hub || []).flatMap(item => item.categories))];
   const languages = [...new Set((hub || []).flatMap(item => item.languages))];
   const needle = query.trim().toLowerCase();
-  const pastedRepo = REPO_LINK.exec(query)?.[1] || (/^[\w.-]+\/[\w.-]+$/.test(query.trim()) ? query.trim() : '');
+  function runSearch() {
+    const text = queryText.trim();
+    const pasted = REPO_LINK.exec(text)?.[1] || (/^[\w.-]+\/[\w.-]+$/.test(text) ? text : '');
+    if (pasted) void openDetail(pasted);
+    setQuery(pasted ? '' : text);
+  }
   const shown = (hub || []).filter(item => (!category || item.categories.includes(category)) && (!language || item.languages.includes(language))
     && (!needle || [item.id, item.title, ...item.tags, ...item.categories, ...item.languages].join(' ').toLowerCase().includes(needle)))
     .sort((a, b) => sort === 'az' ? a.title.localeCompare(b.title) : sort === 'za' ? b.title.localeCompare(a.title) : sort === 'likes' ? b.likes - a.likes : sort === 'samples' ? b.sampleCount - a.sampleCount : b.updatedAt.localeCompare(a.updatedAt));
@@ -3444,12 +3450,11 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
     {tab === 'hub' && <>
       <p className="field-hint">허깅페이스에서 YuE2용 LoRA를 찾습니다. 카드의 다운로드 아이콘으로 바로 받고, 카드를 누르면 샘플을 듣고 받을 파일을 고를 수 있습니다. 주소를 붙여 넣어도 됩니다.</p>
       <div className="adapter-filters">
-        <Input value={query} placeholder="이름, 장르, 언어로 찾기 또는 허깅페이스 주소 붙여넣기" aria-label="LoRA 검색" onChange={event => setQuery(event.target.value)}/>
-        <Button variant="outline" size="sm" disabled={hubLoading} onClick={() => void loadHub()}><RefreshCw size={14}/>새로고침</Button>
+        <Input value={queryText} placeholder="이름, 장르, 언어로 찾기 또는 허깅페이스 주소 붙여넣기" aria-label="LoRA 검색" onChange={event => setQueryText(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') runSearch(); }}/>
+        <Button className="adapter-find-btn" onClick={runSearch}><Search size={15}/>찾기</Button>
       </div>
-      {pastedRepo && <div className="adapter-paste"><span>{pastedRepo}</span><Button size="sm" onClick={() => void openDetail(pastedRepo)}>이 저장소 열기</Button></div>}
       {categories.length > 0 && <div className="adapter-chiprow"><span>분류</span><button className={!category ? 'active' : ''} onClick={() => setCategory('')}>전체</button>{categories.map(label => <button key={label} className={category === label ? 'active' : ''} onClick={() => setCategory(category === label ? '' : label)}>{label}</button>)}</div>}
-      <div className="adapter-chiprow">{languages.length > 0 && <><span>언어</span><button className={!language ? 'active' : ''} onClick={() => setLanguage('')}>전체</button>{languages.map(label => <button key={label} className={language === label ? 'active' : ''} onClick={() => setLanguage(language === label ? '' : label)}>{label}</button>)}</>}<span className="adapter-sortbar" role="group" aria-label="정렬"><button type="button" className={sort === 'az' ? 'active' : ''} aria-label="이름 A→Z" aria-pressed={sort === 'az'} title="이름 A→Z" onClick={() => setSort('az')}><ArrowDownAZ size={15}/></button><button type="button" className={sort === 'za' ? 'active' : ''} aria-label="이름 Z→A" aria-pressed={sort === 'za'} title="이름 Z→A" onClick={() => setSort('za')}><ArrowDownZA size={15}/></button><button type="button" className={sort === 'likes' ? 'active' : ''} aria-label="좋아요 순" aria-pressed={sort === 'likes'} title="좋아요 순" onClick={() => setSort('likes')}><Heart size={15}/></button><button type="button" className={sort === 'updated' ? 'active' : ''} aria-label="최신 순" aria-pressed={sort === 'updated'} title="최신 순" onClick={() => setSort('updated')}><Clock size={15}/></button><button type="button" className={sort === 'samples' ? 'active' : ''} aria-label="샘플 많은 순" aria-pressed={sort === 'samples'} title="샘플 많은 순" onClick={() => setSort('samples')}><Headphones size={15}/></button></span></div>
+      <div className="adapter-chiprow">{languages.length > 0 && <><span>언어</span><button className={!language ? 'active' : ''} onClick={() => setLanguage('')}>전체</button>{languages.map(label => <button key={label} className={language === label ? 'active' : ''} onClick={() => setLanguage(language === label ? '' : label)}>{label}</button>)}</>}<span className="adapter-sortbar" role="group" aria-label="정렬과 새로고침"><button type="button" aria-label="새로고침" title="새로고침" disabled={hubLoading} onClick={() => void loadHub()}><RefreshCw size={15} className={hubLoading ? 'spin' : ''}/></button><i className="adapter-sortbar-sep" aria-hidden="true"/><button type="button" className={sort === 'az' ? 'active' : ''} aria-label="이름 A→Z" aria-pressed={sort === 'az'} title="이름 A→Z" onClick={() => setSort('az')}><ArrowDownAZ size={15}/></button><button type="button" className={sort === 'za' ? 'active' : ''} aria-label="이름 Z→A" aria-pressed={sort === 'za'} title="이름 Z→A" onClick={() => setSort('za')}><ArrowDownZA size={15}/></button><button type="button" className={sort === 'likes' ? 'active' : ''} aria-label="좋아요 순" aria-pressed={sort === 'likes'} title="좋아요 순" onClick={() => setSort('likes')}><Heart size={15}/></button><button type="button" className={sort === 'updated' ? 'active' : ''} aria-label="최신 순" aria-pressed={sort === 'updated'} title="최신 순" onClick={() => setSort('updated')}><Clock size={15}/></button><button type="button" className={sort === 'samples' ? 'active' : ''} aria-label="샘플 많은 순" aria-pressed={sort === 'samples'} title="샘플 많은 순" onClick={() => setSort('samples')}><Headphones size={15}/></button></span></div>
       {hubLoading && <p className="field-hint"><LoaderCircle className="spin" size={14}/> 허깅페이스에서 목록을 읽는 중…</p>}
       {hubError && <p className="field-hint warning">{hubError}</p>}
       <div className="adapter-grid catalog">{shown.map(item => {
