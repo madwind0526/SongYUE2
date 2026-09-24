@@ -2609,8 +2609,8 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
         {errorText && <p className="field-hint warning">{errorText}</p>}
       </div>
       <div className="audio-tools-result">
-        {isVc && micPanelOpen && <div className="at-result-row" style={{ border: '1px solid #3b493d', borderRadius: 10, padding: 10, marginBottom: 10 }}>
-          <div className="audio-compare-toolbar" style={{ flexWrap: 'wrap', gap: 8 }}>
+        {isVc && micPanelOpen && <div className="at-result-row" style={{ border: '1px solid #3b493d', borderRadius: 10, padding: 10, marginBottom: 10, marginLeft: 'var(--chart-left)', marginRight: 'var(--chart-right)' }}>
+          <div className="audio-compare-toolbar" style={{ flexWrap: 'wrap', gap: 8, marginLeft: 0, marginRight: 0 }}>
             <Mic size={16} style={{ color: recState === 'recording' ? '#f87171' : undefined }}/>
             <select value={micId} onChange={event => setMicId(event.target.value)} disabled={recState !== 'idle'} aria-label="입력 장치" style={{ flex: 1, minWidth: 140, background: '#232b23', color: '#e4ece0', border: '1px solid #3b493d', borderRadius: 6, padding: '5px 8px', fontSize: 12 }}>{micDevices.length === 0 && <option value="">입력 장치 없음</option>}{micDevices.map(device => <option key={device.id} value={device.id}>{device.label}</option>)}</select>
             <Button variant="outline" size="sm" aria-label="녹음 시작" title="녹음 시작" onClick={() => void startRecording()} disabled={recState !== 'idle' || running}><span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 5, background: '#f87171' }}/></Button>
