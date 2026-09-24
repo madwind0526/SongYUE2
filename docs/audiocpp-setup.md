@@ -124,9 +124,19 @@ RTX 5070(12GB) 기준 Q4_0 + F16 VAE 조합으로 58초 분량 음악을 22.9초
 | 메뉴 항목 | `--family` | 모델 파일 | 결과 | 특징 |
 |---|---|---|---|---|
 | STEM 분리 (보컬+악기) | `mel_band_roformer` | `models/audio-cpp/audio.cpp-gguf/Mel-Band-RoFormer-GGUF/mel-band-roformer-f16.gguf` | `vocals`, `instrumental` (2갈래) | 다른 아키텍처라 보컬 누출이 더 적음. 매우 빠름(RTX 5070에서 2분 12초 곡 기준 약 10초, RTF 0.076) |
-| STEM 분리 (보컬+드럼+베이스+기타) | `htdemucs` | `models/audio-cpp/audio.cpp-gguf/HTDemucs-GGUF/htdemucs-q8_0.gguf` | `vocals`, `drums`, `bass`, `other` (4갈래) | 악기별로 더 세분화되지만, 엔진이 고품질 앙상블("bag"/ft) 모델은 지원 안 해서(`"HTDemucs package-spec loader currently supports only single-model manifests"`) 단일 체크포인트만 사용 — 보컬 누출이 상대적으로 더 있을 수 있음. 매우 빠름(같은 곡 기준 약 5~7초, RTF 0.037) |
+| STEM 분리 (보컬+드럼+베이스+그 외; "그 외"=other, guitar 아님) | `htdemucs` | `models/audio-cpp/audio.cpp-gguf/HTDemucs-GGUF/htdemucs-q8_0.gguf` | `vocals`, `drums`, `bass`, `other` (4갈래) | 악기별로 더 세분화되지만, 엔진이 고품질 앙상블("bag"/ft) 모델은 지원 안 해서(`"HTDemucs package-spec loader currently supports only single-model manifests"`) 단일 체크포인트만 사용 — 보컬 누출이 상대적으로 더 있을 수 있음. 매우 빠름(같은 곡 기준 약 5~7초, RTF 0.037) |
 
 **2026-09-14: bs_roformer(ep368) → mel_band_roformer(F16)로 교체.** 처음엔 bs_roformer를 "보컬+악기" 모드로 썼는데, 사용자가 실제로 들어보고 "보컬이 너무 많이 짤린다"고 지적했습니다. `num_overlap`을 4→8로 올려 실측 비교했지만 코사인 유사도 0.9996, 무음 구간 개수도 거의 동일해 overlap은 원인이 아님을 확인(자세한 수치는 [revision.md](../revision.md) 참고). `model_specs/`를 전체 확인해보니 audio.cpp가 sep 작업을 지원하는 RoFormer 계열 패밀리가 `bs_roformer` 외에 `mel_band_roformer`도 있었고(같은 코드 경로, 다른 체크포인트), F16 GGUF를 받아 같은 곡으로 비교한 결과(코사인 0.97 — 실제로 다른 결과) 사용자가 직접 듣고 mel_band 쪽을 선호해서 교체했습니다. 참고로 `mel_band_roformer.json`에는 3번째 패키지(`mlx-community/mel-roformer-mlx`, safetensors)도 있지만 메타데이터가 없어 검증하지 않았습니다.
+
+**6갈래 STEM 분리(`htdemucs_6s`: 드럼·베이스·보컬·기타(guitar)·피아노·그 외)**는 audio.cpp가 GGUF로 배포하지 않아서 공식 체크포인트를 직접 변환해 씁니다. YuE2 파이썬 환경(torch + safetensors)으로:
+
+```powershell
+test\YuE2-source\.venv\Scripts\python.exe scripts\setup_htdemucs_6s.py
+```
+
+Meta의 Demucs 릴리스 서버에서 `5c90dfd2-34c22ccb.th`(53 MB)를 받고 SHA-256 앞자리를 검증한 뒤 `scripts/convert_htdemucs_checkpoint.py`로 `models/audio-cpp/htdemucs-6s/`(107 MB, `manifest.json` + `955717e8/config.json` + `model.safetensors`)를 만듭니다. 폴더 이름 `955717e8`은 엔진의 htdemucs 모델 스펙이 기대하는 이름이라 유지하고, 진짜 서명(`5c90dfd2`)은 `config.json`에 적힙니다. 두 가지 보정이 들어갑니다: ① 6갈래 모델은 채널 병목이 없는데(`bottom_channels: 0`) 엔진은 항상 up/down 투영을 만들므로, 트랜스포머 폭(384)의 항등 1x1 컨볼루션을 넣습니다(계산 결과는 동일). ② 어텐션 헤드가 384/8 = 48로 CUDA flash-attention 커널이 지원하지 않는 크기라서, 엔진의 `src/models/demucs/pipeline.cpp`가 지원 크기(64, 80, 96, 112, 128, 256)가 아니면 일반 행렬곱 경로를 쓰도록 고쳤습니다 — `docs/patches/audiocpp-htdemucs-head-size.patch`(로컬 브랜치 `songyue2-local` 커밋 `ccfc8525`). 이 패치가 없는 순정 빌드에서는 6갈래를 돌리면 `fattn.cu:550: fatal error`로 종료합니다. 참고: 엔진의 CPU 백엔드는 htdemucs 결과가 틀려서(4갈래 원본 모델도 보컬이 -20 dB 어긋남) 이 모델은 CUDA에서만 씁니다.
+
+YuE2 Studio도 같은 `htdemucs_6s` 모델을 쓰지만 ONNX(`htdemucs_6s_fp16.onnx`, 136 MB)를 ONNX Runtime CUDA로 돌리는 방식입니다. 이 앱은 audio.cpp 엔진을 그대로 쓰기 위해 원본 체크포인트를 변환합니다.
 
 위 빌드 명령에 두 모델을 포함하지 않았다면 해당 메뉴를 눌렀을 때 "STEM 분리 모델(HTDemucs)이 없습니다"/"STEM 분리 모델(Mel-Band RoFormer)이 없습니다" 오류가 납니다 — `-Models "yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc"`로 다시 빌드하세요(`bs_roformer` 별칭이 `mel_band_roformer` 로더도 같이 빌드합니다). bs_roformer의 GGUF는 "legacy model spec"을 내장하고 있어 `model_specs/bs_roformer.json`으로 보충해야 했는데(mel_band_roformer GGUF는 이 문제가 없음), 백엔드가 `audiocpp_cli.exe`를 audio.cpp 소스 루트(`engine/audio.cpp`)를 작업 디렉터리로 실행해 이 조회가 항상 되도록 일괄 처리합니다(직접 CLI 테스트할 땐 `engine/audio.cpp` 안에서 실행해야 함).
 

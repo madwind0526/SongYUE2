@@ -80,7 +80,7 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 | GET `/api/generate/status` | 생성 진행 상황 폴링용. `{active:false,elapsedMs:0,expectedMs:0}` 또는 `{active:true,projectId,elapsedMs,expectedMs}` |
 | GET `/api/projects/:id/audio` | 완성된 오디오를 실제 확장자에 맞는 Content-Type(wav/flac/mp3/mp4)으로 스트리밍. 아직 생성되지 않았거나 파일이 없으면 404 |
 | POST `/api/projects/:id/post-process` | `{dataUrl}`(`audio/wav`, base64, 최대 150MB) → 브라우저에서 Web Audio로 EQ/FX/리버브·에코 처리된 오디오를 원본과 같은 파일 형식(mp4는 원본 비디오+새 오디오 트랙 합성)으로 재인코딩해 바이너리로 응답(다운로드). 원본 프로젝트 파일 자체는 바뀌지 않음. `ffmpeg`가 없거나 실패하면 502 |
-| POST `/api/projects/:id/stems` | `{mode?:"full"\|"vocal"}`(기본 `"full"`) → 완성곡을 `audiocpp_cli --task sep`로 분리해 `runs/:id/stems/`에 저장(먼저 `ffmpeg`로 44.1kHz WAV 변환). `full`은 `--family htdemucs`로 보컬/드럼/베이스/기타 4갈래(`{stems:["vocals","drums","bass","other"]}`), `vocal`은 `--family mel_band_roformer`로 보컬/악기 2갈래(`{stems:["vocals","instrumental"]}`) 반환. 해당 모델/엔진이 없으면 400, 분리 실패 시 502. 생성과 동시 실행 차단(`generating` 플래그 공유) |
+| POST `/api/projects/:id/stems` | `{mode?:"full"\|"full6"\|"vocal"\|"channel"}`(기본 `"full"`) → 완성곡을 `audiocpp_cli --task sep`로 분리해 `runs/:id/stems/`에 저장(먼저 `ffmpeg`로 44.1kHz WAV 변환). `full`은 `--family htdemucs`로 보컬/드럼/베이스/그 외 4갈래(`{stems:["vocals","drums","bass","other"]}`), `full6`은 htdemucs_6s로 6갈래(`{stems:["vocals","drums","bass","guitar","piano","other"]}`), `vocal`은 `--family mel_band_roformer`로 보컬/악기 2갈래(`{stems:["vocals","instrumental"]}`) 반환. 해당 모델/엔진이 없으면 400, 분리 실패 시 502. 생성과 동시 실행 차단(`generating` 플래그 공유) |
 | GET `/api/projects/:id/stems/:stem` | 분리된 스템 하나를 `audio/wav`로 스트리밍. 먼저 STEM 분리를 실행해야 함(없으면 404) |
 | DELETE `/api/projects/:id/stems` | `runs/:id/stems/`를 통째로 삭제(임시 파일 정리). 프론트엔드는 STEM 분리 다이얼로그를 닫을 때(합치기 완료 포함) 항상 호출 |
 
@@ -183,9 +183,10 @@ YuE2는 범용 악보 리더가 아니라, `V: Vocal`/`V: Ins` 두 성부를 각
 
 ## STEM 분리 (audio.cpp HTDemucs / Mel-Band RoFormer)
 
-완성곡 메뉴의 "STEM 분리"에는 두 모드가 있고 `separateStems()`가 `mode`에 따라 다른 `--family`로 `audiocpp_cli --task sep`를 호출합니다:
+완성곡 메뉴의 "STEM 분리"에는 세 모드(4갈래·6갈래·2갈래)가 있고 `separateStems()`가 `mode`에 따라 다른 `--family`로 `audiocpp_cli --task sep`를 호출합니다:
 
-- **보컬+드럼+베이스+기타** (`mode:"full"`, 기본값): `--family htdemucs --model models/audio-cpp/audio.cpp-gguf/HTDemucs-GGUF/htdemucs-q8_0.gguf` → 4갈래 WAV. 매우 빠름(RTX 5070 2분짜리 곡 기준 약 5~7초, RTF ≈ 0.037)이지만 엔진이 고품질 앙상블("bag") 체크포인트를 지원하지 않아 보컬 누출이 상대적으로 있을 수 있음.
+- **보컬+드럼+베이스+그 외** (`mode:"full"`, 기본값; "그 외"는 `other`, 즉 나머지 악기 전부이지 guitar가 아닙니다): `--family htdemucs --model models/audio-cpp/audio.cpp-gguf/HTDemucs-GGUF/htdemucs-q8_0.gguf` → 4갈래 WAV. 매우 빠름(RTX 5070 2분짜리 곡 기준 약 5~7초, RTF ≈ 0.037)이지만 엔진이 고품질 앙상블("bag") 체크포인트를 지원하지 않아 보컬 누출이 상대적으로 있을 수 있음.
+- **보컬+드럼+베이스+기타(guitar)+피아노+그 외** (`mode:"full6"`): `--family htdemucs --model models/audio-cpp/htdemucs-6s`(Meta의 공식 `htdemucs_6s` 체크포인트를 `scripts/setup_htdemucs_6s.py`로 받아 변환한 폴더) → 6갈래 WAV(`vocals, drums, bass, guitar, piano, other`). audio.cpp가 배포하는 GGUF 패키지에는 4갈래 모델뿐이라 이 모드는 직접 변환한 safetensors 패키지를 씁니다. RTX 5070에서 30초 클립 3초. 6갈래 모델의 어텐션 헤드가 48이라 CUDA flash-attention 커널이 없어서(그대로면 `fattn.cu: fatal error`로 종료) 엔진을 고쳤습니다(`docs/patches/audiocpp-htdemucs-head-size.patch`, 로컬 브랜치 `songyue2-local`). 한계: Demucs 저자도 밝혔듯 피아노는 상대적으로 품질이 낮고, 6갈래 스템의 합은 원곡과 4갈래보다 덜 정확히 맞습니다(실측 -25.7 dB, 4갈래 -32.8 dB). 모델 폴더가 없으면 400(`setup_htdemucs_6s` 안내).
 - **보컬+악기** (`mode:"vocal"`): `--family mel_band_roformer --model models/audio-cpp/audio.cpp-gguf/Mel-Band-RoFormer-GGUF/mel-band-roformer-f16.gguf` → 2갈래 WAV. 다른 아키텍처라 보컬 누출이 더 적음(RTX 5070 기준 약 10초, RTF ≈ 0.076). 처음엔 BS-RoFormer(ep368)를 썼다가 사용자가 직접 듣고 mel_band_roformer가 더 낫다고 판단해 교체했습니다 — 자세한 비교 경위는 [models.md](models.md)와 [audiocpp-setup.md](audiocpp-setup.md#stem-분리-보컬드럼베이스기타-악기) 참고.
 
 두 패밀리 모두 audio.cpp 빌드 시 기본으로 포함되지 않으므로 `-Models yue2,htdemucs,bs_roformer`로 함께 빌드해야 하며(`bs_roformer` 별칭이 `mel_band_roformer` 로더도 같이 빌드함), 안 되어 있으면 400으로 명확히 실패합니다(자세한 빌드는 [audiocpp-setup.md](audiocpp-setup.md) 참고).

@@ -38,6 +38,8 @@ const COMFYUI_MODELS = {
 };
 const AUDIOCPP_SIDECARS = ['sidecars/yue2-model-config.json', 'sidecars/yue2-generation-config.json', 'sidecars/yue2-qwen.tiktoken', 'sidecars/yue2-vae-config.json'];
 const HTDEMUCS_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf', 'HTDemucs-GGUF', 'htdemucs-q8_0.gguf');
+// htdemucs_6s (converted by scripts/setup_htdemucs_6s.py): drums, bass, other, vocals, guitar, piano
+const HTDEMUCS_6S_MODEL_PATH = path.join('models', 'audio-cpp', 'htdemucs-6s');
 const MEL_BAND_ROFORMER_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf', 'Mel-Band-RoFormer-GGUF', 'mel-band-roformer-f16.gguf');
 const AUDIOSR_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf', 'AudioSR-GGUF', 'audiosr-basic-f32.gguf');
 const MUSCRIPTOR_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf', 'MuScriptor-Small-GGUF', 'muscriptor-small-f32.gguf');
@@ -45,6 +47,7 @@ const MUSCRIPTOR_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf',
 const VOCAL_TIMBRE_ENGINES = new Set(['rvc']);
 const STEM_MODES = {
   full: { family: 'htdemucs', modelPath: HTDEMUCS_MODEL_PATH, stems: ['vocals', 'drums', 'bass', 'other'], missingModel: 'STEM 분리 모델(HTDemucs)이 없습니다. scripts/download_models.py를 실행해 주세요.' },
+  full6: { family: 'htdemucs', modelPath: HTDEMUCS_6S_MODEL_PATH, stems: ['vocals', 'drums', 'bass', 'guitar', 'piano', 'other'], missingModel: '6갈래 STEM 분리 모델이 없습니다. scripts/setup_htdemucs_6s.py를 실행해 모델을 받아 변환해 주세요(docs/audiocpp-setup.md 참고).' },
   vocal: { family: 'mel_band_roformer', modelPath: MEL_BAND_ROFORMER_MODEL_PATH, stems: ['vocals', 'instrumental'], missingModel: 'STEM 분리 모델(Mel-Band RoFormer)이 없습니다. scripts/download_models.py를 실행해 주세요.' },
   // No AI model: a plain ffmpeg L/R channel split, reusing the STEM dialog's separate-then-post-
   // process-then-merge flow for independent per-channel EQ/FX instead of source separation.

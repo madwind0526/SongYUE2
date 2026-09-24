@@ -261,7 +261,8 @@ function makeFakeSpawn() {
     if (args.includes('sep')) {
       const behavior = sep;
       const outDir = args[args.indexOf('--out-dir') + 1];
-      const names = args.includes('mel_band_roformer') ? ['vocals', 'instrumental'] : ['vocals', 'drums', 'bass', 'other'];
+      const modelArg = String(args[args.indexOf('--model') + 1] || '');
+      const names = args.includes('mel_band_roformer') ? ['vocals', 'instrumental'] : modelArg.includes('htdemucs-6s') ? ['vocals', 'drums', 'bass', 'guitar', 'piano', 'other'] : ['vocals', 'drums', 'bass', 'other'];
       (async () => {
         await new Promise(resolve => setTimeout(resolve, behavior.delayMs || 0));
         if (behavior.writeOutput && behavior.exitCode === 0) {
@@ -587,6 +588,20 @@ test('STEM separation (HTDemucs/Mel-Band RoFormer/plain L-R channel split) split
   assert.ok(roformerCall, 'expected a --family mel_band_roformer invocation');
   assert.equal((await call(`/api/projects/${songId}/stems/instrumental`)).status, 200);
   assert.equal((await call(`/api/projects/${songId}/stems/drums`)).status, 404, 'vocal mode never produced a drums stem');
+  assert.equal((await callJson(`/api/projects/${songId}/stems`, 'DELETE', {})).status, 200);
+
+  // mode: "full6" is the 6-way htdemucs_6s package (guitar and piano get their own stems); it needs its converted model folder
+  const missing6 = await callJson(`/api/projects/${songId}/stems`, 'POST', { mode: 'full6' });
+  assert.equal(missing6.status, 400);
+  assert.match(missing6.data.error, /setup_htdemucs_6s/);
+  await mkdir(path.join(root, 'models', 'audio-cpp', 'htdemucs-6s'), { recursive: true });
+  const sixWay = await callJson(`/api/projects/${songId}/stems`, 'POST', { mode: 'full6' });
+  assert.equal(sixWay.status, 200);
+  assert.deepEqual(sixWay.data.stems, ['vocals', 'drums', 'bass', 'guitar', 'piano', 'other']);
+  const sixCall = fakeSpawn.calls.filter(c => c.args.includes('sep')).at(-1);
+  assert.ok(sixCall.args.includes('htdemucs'));
+  assert.ok(sixCall.args[sixCall.args.indexOf('--model') + 1].endsWith('htdemucs-6s'));
+  for (const name of ['guitar', 'piano']) assert.equal(await (await call(`/api/projects/${songId}/stems/${name}`)).text(), `fake-${name}-bytes`);
   assert.equal((await callJson(`/api/projects/${songId}/stems`, 'DELETE', {})).status, 200);
 
   // mode: "channel" is a plain ffmpeg L/R split, no audio.cpp/model involved at all
