@@ -19,9 +19,8 @@ REPOS = {
     # this to just the packages SongYUE2 uses (HTDemucs for the 4-way vocals/drums/
     # bass/other stem split, Mel-Band RoFormer for the cleaner 2-way vocals/instrumental
     # split, AudioSR for the "음원 복원" low-quality audio restoration feature, MuScriptor
-    # for "MIDI로 내보내기", Seed-VC and Vevo2 -- two alternative engines -- for the
-    # "보컬 음색 변환" singing voice conversion feature), instead of pulling everything
-    # in the repo.
+    # for "MIDI로 내보내기"), instead of pulling everything in the repo. (Seed-VC and Vevo2
+    # were removed from the timbre-transform window; RVC/MeanVC2 download in-app.)
     "audio-cpp/audio.cpp-gguf": {
         "revision": "6d5436fc85f7a20c2e9f4e472b7f3a532f686444",
         "prefixes": [
@@ -29,8 +28,6 @@ REPOS = {
             "Mel-Band-RoFormer-GGUF/mel-band-roformer-f16.gguf",
             "AudioSR-GGUF/audiosr-basic-f32.gguf",
             "MuScriptor-Small-GGUF/muscriptor-small-f32.gguf",
-            "SeedVC-MLX-GGUF/seed-vc-mlx-q8_0.gguf",
-            "Vevo2-GGUF/vevo2-q8_0.gguf",
         ],
     },
 }

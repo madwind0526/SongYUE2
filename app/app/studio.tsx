@@ -2293,6 +2293,8 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
     } catch (error) { setErrorText((error as Error).message); }
     finally { setPreviewing(false); }
   }
+  // A family button stays visible after its model files were deleted; picking it explains that the download is needed.
+  const familyInstalled = (variants: TtsVariantInfo[]) => variants.some(variant => variant.precisions.some(item => item.installed));
   async function downloadModel(family: string, mode: string, size: string, precision: string) {
     try {
       await api('/audio-tools/tts/download', 'POST', { family, mode, size, precision });
@@ -2790,8 +2792,12 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
         {isTts && <>
           <div className="at-section-head">모델 선택</div>
           <div className="audio-tools-model-switch two-rows" role="group" aria-label="TTS 모델">
-            {[...ttsModels.filter(family => ttsVariantsFor(ttsModels, family.id, ttsMode).length > 0), ...(ttsMode !== 'preset' && typecastAvailable ? [{ id: 'typecast', label: 'Typecast (클라우드)' }] : [])].map(family => <button key={family.id} type="button" className={ttsFamily === family.id ? 'active' : ''} aria-pressed={ttsFamily === family.id} onClick={() => setTtsFamily(family.id)} disabled={running}>{family.label}</button>)}
+            {[...ttsModels.filter(family => ttsVariantsFor(ttsModels, family.id, ttsMode).length > 0), ...(ttsMode !== 'preset' && typecastAvailable ? [{ id: 'typecast', label: 'Typecast (클라우드)' }] : [])].map(family => {
+              const missing = family.id !== 'typecast' && !familyInstalled(ttsVariantsFor(ttsModels, family.id, ttsMode));
+              return <button key={family.id} type="button" className={ttsFamily === family.id ? 'active' : ''} aria-pressed={ttsFamily === family.id} title={missing ? '모델 다운로드가 필요합니다' : undefined} style={missing ? { opacity: 0.6 } : undefined} onClick={() => setTtsFamily(family.id)} disabled={running}>{family.label}</button>;
+            })}
           </div>
+          {ttsFamily !== 'typecast' && ttsModels.length > 0 && !familyInstalled(ttsVariantsFor(ttsModels, ttsFamily, ttsMode)) && <span className="field-hint warning">{ttsModels.find(family => family.id === ttsFamily)?.label} 모델은 아직 내려받지 않았습니다. 아래 "모델 받기" 버튼을 눌러 다운로드해 주세요.</span>}
           {!isTypecast && <>
           <div className="runtime-options">
             <label>크기<select value={ttsSize} onChange={event => setTtsSize(event.target.value)} disabled={running} aria-label="TTS 모델 크기">{ttsVariantsFor(ttsModels, ttsFamily, ttsMode).map(variant => <option key={variant.size} value={variant.size}>{variant.size}</option>)}</select></label>
@@ -2823,8 +2829,12 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
         {isAsr && <>
           <div className="at-section-head">모델 선택</div>
           <div className="audio-tools-model-switch" role="group" aria-label="음성 인식 (STT) 모델">
-            {asrModels.map(family => <button key={family.id} type="button" className={asrFamily === family.id ? 'active' : ''} aria-pressed={asrFamily === family.id} onClick={() => setAsrFamily(family.id)} disabled={running}>{family.label}</button>)}
+            {asrModels.map(family => {
+              const missing = !familyInstalled(family.variants);
+              return <button key={family.id} type="button" className={asrFamily === family.id ? 'active' : ''} aria-pressed={asrFamily === family.id} title={missing ? '모델 다운로드가 필요합니다' : undefined} style={missing ? { opacity: 0.6 } : undefined} onClick={() => setAsrFamily(family.id)} disabled={running}>{family.label}</button>;
+            })}
           </div>
+          {asrFamilyInfo && !familyInstalled(asrFamilyInfo.variants) && <span className="field-hint warning">{asrFamilyInfo.label} 모델은 아직 내려받지 않았습니다. 아래 "모델 받기" 버튼을 눌러 다운로드해 주세요.</span>}
           <div className="runtime-options">
             <label>크기<select value={asrSize} onChange={event => setAsrSize(event.target.value)} disabled={running} aria-label="음성 인식 (STT) 모델 크기">{(asrFamilyInfo?.variants || []).map(variant => <option key={variant.size} value={variant.size}>{variant.size}</option>)}</select></label>
             <label>정밀도<select value={asrPrecision} onChange={event => setAsrPrecision(event.target.value)} disabled={running} aria-label="음성 인식 (STT) 모델 정밀도">{(asrVariant?.precisions || []).map(item => <option key={item.precision} value={item.precision}>{TTS_PRECISION_LABELS[item.precision] || item.precision}{item.installed ? '' : ' · 받기 필요'}</option>)}</select></label>
@@ -3085,11 +3095,9 @@ const DDSP_STATUS_LABEL: Record<string, string> = {
 };
 
 
-type TimbreEngine = 'seed_vc' | 'vevo2' | 'rvc' | 'ddsp';
+type TimbreEngine = 'rvc' | 'ddsp';
 const TIMBRE_ENGINES: { id: TimbreEngine; label: string }[] = [
   { id: 'rvc', label: 'RVC' },
-  { id: 'seed_vc', label: 'Seed-VC' },
-  { id: 'vevo2', label: 'Vevo' },
   { id: 'ddsp', label: 'DDSP-SVC' },
 ];
 function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onDdspJobStarted, onDdspJobCleared }: {
@@ -3099,15 +3107,8 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
   const t = useAudioTransport();
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [sourceName, setSourceName] = useState<string | null>(null);
-  const [referenceName, setReferenceName] = useState<string | null>(null);
-  const referenceBlobRef = useRef<Blob | null>(null);
   const [preparing, setPreparing] = useState(false);
   const [engine, setEngine] = useState<TimbreEngine>('rvc');
-  const [chunkSeconds, setChunkSeconds] = useState(10);
-  const [overlapSeconds, setOverlapSeconds] = useState(2);
-  const [seedF0Condition, setSeedF0Condition] = useState(true);
-  const [seedAutoF0Adjust, setSeedAutoF0Adjust] = useState(true);
-  const [seedInferenceSteps, setSeedInferenceSteps] = useState(80);
   const [vcModels, setVcModels] = useState<TtsFamilyInfo[]>([]);
   const [rvcPreviewing, setRvcPreviewing] = useState(false);
   const [rvcSearch, setRvcSearch] = useState('');
@@ -3121,7 +3122,6 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
   const [rvcVoice, setRvcVoice] = useState('default');
   const [rvcSemitone, setRvcSemitone] = useState('0');
   const [rvcRetrieval, setRvcRetrieval] = useState('0');
-  const [vevoRoute, setVevoRoute] = useState<'style_preserved_svc' | 'style_preserved_vc'>('style_preserved_svc');
   const [ddspReferencePaths, setDdspReferencePaths] = useState<string[]>([]);
   const [ddspTargetStep, setDdspTargetStep] = useState(40000);
   const [ddspFeatureEncoder, setDdspFeatureEncoder] = useState<'contentvec' | 'hubertsoft'>('contentvec');
@@ -3129,7 +3129,6 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
   const [ddspVocoder, setDdspVocoder] = useState<'nsf_hifigan' | 'pc_nsf_hifigan'>('nsf_hifigan');
   const [ddspPickerOpen, setDdspPickerOpen] = useState(false);
   const [sourcePickerOpen, setSourcePickerOpen] = useState(false);
-  const [referencePickerOpen, setReferencePickerOpen] = useState(false);
   const [applying, setApplying] = useState(false);
   const [applyProgress, setApplyProgress] = useState(0);
   const [starting, setStarting] = useState(false);
@@ -3139,9 +3138,6 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
   // 앱에서 만든 곡이면 오디오 옆 {제목}.json에 그대로 저장된 가사가 있다 -- 표시 용도로만 쓴다.
   const [sourceLyrics, setSourceLyrics] = useState<string | null>(null);
   const [ddspJob, setDdspJob] = useState<DdspJobStatus | null>(null);
-  const [separatingRef, setSeparatingRef] = useState(false);
-  const [refVocalError, setRefVocalError] = useState<string | null>(null);
-  const referenceSepTokenRef = useRef(0);
   const ddspResultLoadedRef = useRef<string | null>(null);
   useEffect(() => () => t.closeContext(), []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -3226,45 +3222,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
     finally { setPreparing(false); }
   }
 
-  async function pickReference(relPath: string) {
-    setErrorText('');
-    try {
-      const response = await fetch(`/api/library/file?path=${encodeURIComponent(relPath)}`);
-      if (!response.ok) throw new Error('파일을 불러오지 못했습니다.');
-      const blob = await response.blob();
-      referenceBlobRef.current = blob;
-      setReferenceName(relPath.split('/').pop() || relPath);
-      try {
-        const ctx = t.ensureAudioContext();
-        const buffer = await ctx.decodeAudioData(await blob.arrayBuffer());
-        t.setBuffer('reference', buffer);
-      } catch { t.setBuffer('reference', null); }
-      void separateReferenceVocal(blob);
-    } catch (error) { setErrorText((error as Error).message); }
-  }
-  // "참조 보컬" 행용: 참조 오디오를 서버에서 STEM 분리해 vocals만 로드한다. 분리 실패는 치명적이지
-  // 않으므로 조용히 참조 보컬 행만 비워 두고, 연속 클릭 시 마지막 선택만 적용되도록 토큰으로 거른다.
-  async function separateReferenceVocal(blob: Blob) {
-    const token = ++referenceSepTokenRef.current;
-    t.setBuffer('reference-vocal', null);
-    setRefVocalError(null);
-    setSeparatingRef(true);
-    try {
-      const dataUrl = await readFileAsDataUrl(blob);
-      const result = await api<{ vocalsDataUrl: string }>('/timbre-transform/reference/separate', 'POST', { referenceDataUrl: dataUrl });
-      if (token !== referenceSepTokenRef.current) return;
-      const ctx = t.ensureAudioContext();
-      const buffer = await ctx.decodeAudioData(await (await fetch(result.vocalsDataUrl)).arrayBuffer());
-      t.setBuffer('reference-vocal', buffer);
-    } catch (error) {
-      if (token !== referenceSepTokenRef.current) return;
-      t.setBuffer('reference-vocal', null);
-      setRefVocalError((error as Error).message || '참조 보컬 분리에 실패했습니다.');
-    }
-    finally { if (token === referenceSepTokenRef.current) setSeparatingRef(false); }
-  }
-
-  // Seed-VC/Vevo2 적용은 서버가 실시간 %를 안 주므로(DDSP-SVC처럼 스텝 단위 진행이 없음),
+  // RVC 적용은 서버가 실시간 %를 안 주므로(DDSP-SVC처럼 스텝 단위 진행이 없음),
   // "노래 만들기"와 같은 방식(POST /generate/status의 elapsedMs/expectedMs 추정치)을 그대로 재사용한다.
   function withEstimatedProgress<T>(run: () => Promise<T>): Promise<T> {
     setApplyProgress(0);
@@ -3338,14 +3296,13 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
     return () => window.clearInterval(timer);
   }, [vcDownloading]);
   async function applyLegacy() {
-    if (!previewId || (engine !== 'rvc' && !referenceBlobRef.current)) return;
+    if (!previewId || engine !== 'rvc') return;
     setApplying(true);
     setErrorText('');
     setWarningText('');
     try {
       await withEstimatedProgress(async () => {
-        const dataUrl = referenceBlobRef.current ? await readFileAsDataUrl(referenceBlobRef.current) : undefined;
-        const result = await api<{ ok: boolean; warning: string | null }>(`/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl, engine, seedF0Condition, seedAutoF0Adjust, seedInferenceSteps, vevoRoute, rvcVoice, rvcSemitone: Number(rvcSemitone) || 0, rvcRetrieval: Number(rvcRetrieval) || 0, chunkSeconds, overlapSeconds });
+        const result = await api<{ ok: boolean; warning: string | null }>(`/timbre-transform/${previewId}/legacy/apply`, 'POST', { engine, rvcVoice, rvcSemitone: Number(rvcSemitone) || 0, rvcRetrieval: Number(rvcRetrieval) || 0});
         setWarningText(result.warning || '');
         const ctx = t.ensureAudioContext();
         const [vocalsResponse, instrumentalResponse] = await Promise.all([
@@ -3363,7 +3320,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
         t.setBuffer('result', mixed);
       });
     } catch (error) {
-      const message = error instanceof Error && error.message && error.message !== 'load failed' ? error.message : '보컬 음색 변환에 실패했습니다. audio.cpp가 Seed-VC/Vevo2 모델을 포함해 빌드되어 있는지, 모델 파일이 있는지 확인해 주세요.';
+      const message = error instanceof Error && error.message && error.message !== 'load failed' ? error.message : '보컬 음색 변환에 실패했습니다. audio.cpp가 RVC를 포함해 빌드되어 있는지, 모델 파일이 있는지 확인해 주세요.';
       setErrorText(message);
     } finally { setApplying(false); }
   }
@@ -3412,8 +3369,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
   const isTraining = !!ddspJob && !['completed', 'failed', 'cancelled'].includes(ddspJob.status);
   const busy = preparing || applying || starting;
   const canApply = engine === 'ddsp' ? !!ddspReferencePaths.length && !!previewId && !isTraining
-    : engine === 'rvc' ? !!previewId && vcModelReady
-    : !!previewId && !!referenceName && vcModelReady;
+    : !!previewId && vcModelReady;
   const resultBuffer = t.bufferForKey('result');
   const ddspProgress = ddspJob?.targetStep ? Math.min(100, Math.round(ddspJob.currentStep / ddspJob.targetStep * 100)) : 0;
   // 레거시 목록은 원곡/참고곡/변환곡을 색으로 구분하므로, 재생 중 글로우도 그 가족 색을 따르게 한다.
@@ -3425,35 +3381,18 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
   return <Dialog open onOpenChange={next => { if (!next) onClose(); }}>
     <DialogContent className="studio-dialog audio-compare-dialog timbre-transform-dialog">
       <DialogTitle>음색 변조 (평가중)</DialogTitle>
-      <DialogDescription>라이브러리에서 원본과 참조 audio를 고르고, 모델을 골라 음색을 바꿔 보세요.</DialogDescription>
+      <DialogDescription>라이브러리에서 원본 audio를 고르고, 모델을 골라 음색을 바꿔 보세요.</DialogDescription>
       <div className="timbre-transform-body">
         <div className="timbre-left-panel">
           <div className="timbre-section-heading">Audio 선택</div>
           <Button variant="outline" className="voice-convert-file-btn" onClick={() => setSourcePickerOpen(true)} disabled={busy} title={sourceName || undefined}>
             <Upload size={14}/><span className="voice-convert-file-name">{sourceName || '원본 audio 선택'}</span>
           </Button>
-          <Button variant="outline" className={`voice-convert-file-btn${engine === 'rvc' ? ' disabled' : ''}`} onClick={() => setReferencePickerOpen(true)} disabled={busy || engine === 'rvc'} title={engine === 'rvc' ? 'RVC는 참조 audio 없이 내장 목소리를 씁니다.' : referenceName || undefined}>
-            <Upload size={14}/><span className="voice-convert-file-name">{referenceName || '참조 audio 선택'}</span>
-          </Button>
 
           <div className="timbre-section-heading">모델 Selection</div>
           <div className="timbre-model-grid" role="group" aria-label="음색 변조 모델">
             {TIMBRE_ENGINES.map(item => <button key={item.id} type="button" className={`timbre-model-btn${engine === item.id ? ' active' : ''}`} onClick={() => setEngine(item.id)} disabled={busy}>{item.label}</button>)}
           </div>
-
-          {engine !== 'ddsp' && engine !== 'rvc' && <div className="timbre-engine-options">
-            <div className="timbre-option-head" style={{ marginTop: 16 }}>긴 보컬 자동 분할 기준</div>
-            <div className="runtime-options" style={{ gridTemplateColumns: '1fr 1fr' }}><label>청크(초)<Input type="number" min={1} max={120} value={chunkSeconds} onChange={event => setChunkSeconds(Math.max(1, Math.min(120, Number(event.target.value) || 10)))} disabled={busy}/></label><label>겹침(초)<Input type="number" min={0} value={overlapSeconds} onChange={event => setOverlapSeconds(Math.max(0, Math.min(Math.floor(chunkSeconds / 2), Number(event.target.value) || 0)))} disabled={busy}/></label></div>
-            <p className="field-hint">긴 보컬은 청크(초) 단위로 나눠 순차 처리하고 겹침(초)만큼 겹친 뒤 연결합니다. 겹침은 청크의 절반 이하로 자동 조정되며, 겹친 양쪽을 겹침의 절반만큼 잘라 이어붙입니다.</p>
-          </div>}
-
-          {engine === 'seed_vc' && <div className="timbre-engine-options">
-            <div className="timbre-option-head" style={{ marginTop: 18 }}>Seed-VC 실행 옵션</div>
-            <label className="timbre-option-check"><input type="checkbox" checked={seedF0Condition} onChange={event => setSeedF0Condition(event.target.checked)} disabled={busy}/>원곡 음정선 사용 (F0 condition)</label>
-            <label className="timbre-option-check"><input type="checkbox" checked={seedAutoF0Adjust} onChange={event => setSeedAutoF0Adjust(event.target.checked)} disabled={busy}/>참조 목소리에 맞춰 음정 자동 조절</label>
-            <div className="runtime-options"><label>추론 스텝<Input type="number" min={1} max={200} value={seedInferenceSteps} onChange={event => setSeedInferenceSteps(Math.max(1, Math.min(200, Number(event.target.value) || 80)))} disabled={busy}/></label></div>
-            <p className="field-hint">기본값은 노래 변환용으로 확인한 F0 사용 · 자동 음정 조절 · 80스텝입니다.</p>
-          </div>}
 
           {vcFamilyId && <div className="timbre-engine-options">
             <div className="timbre-option-head" style={{ marginTop: 18 }}>RVC 목소리</div>
@@ -3471,12 +3410,6 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
               : vcPrecisionInfo.download?.state === 'running'
                 ? <span className="field-hint">내려받는 중… {vcPrecisionInfo.download.totalBytes ? Math.round(vcPrecisionInfo.download.receivedBytes / vcPrecisionInfo.download.totalBytes * 100) : 0}%</span>
                 : <div className="voice-convert-topbar"><Button variant="outline" size="sm" onClick={() => void downloadVcModel()} disabled={busy}><Download size={13}/>모델 받기 (약 {vcPrecisionInfo.sizeMb} MB)</Button>{vcPrecisionInfo.download?.error && <span className="field-hint warning">{vcPrecisionInfo.download.error}</span>}</div>)}
-          </div>}
-
-          {engine === 'vevo2' && <div className="timbre-engine-options">
-            <div className="timbre-option-head" style={{ marginTop: 18 }}>Vevo 변환 라우트</div>
-            <div className="runtime-options"><label>변환 방식<select value={vevoRoute} onChange={event => setVevoRoute(event.target.value as typeof vevoRoute)} disabled={busy}><option value="style_preserved_svc">노래 스타일 유지 SVC (권장)</option><option value="style_preserved_vc">발화 스타일 유지 VC</option></select></label></div>
-            <p className="field-hint">노래에는 SVC가 적합합니다. VC는 말소리용이라 넓은 음정 변화가 손상될 수 있습니다.</p>
           </div>}
 
           {engine === 'ddsp' && <div className="timbre-engine-options">
@@ -3530,18 +3463,6 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
                 <span className="stem-label">원곡 악기</span>
                 <Waveform peaks={t.peaksForKey('source-instrumental')} playedFraction={t.playedFraction} variant="source"/>
               </div>
-              <div className={legacyRowClass('reference', 'stem-row')}>
-                <button type="button" className="pp-waveform-label" aria-label="참고곡 재생/일시정지" onClick={() => t.handleKeyClick('reference')} disabled={!t.peaksForKey('reference').length}>{t.activeKey === 'reference' && t.isPlaying ? <Pause size={15}/> : <Mic size={15}/>}</button>
-                <span className="stem-label">참고곡</span>
-                <Waveform peaks={t.peaksForKey('reference')} playedFraction={t.playedFraction} variant="reference"/>
-              </div>
-              <div className={legacyRowClass('reference-vocal', 'stem-row stem-row-sub')}>
-                <button type="button" className="pp-waveform-label" aria-label="참조 보컬 재생/일시정지" onClick={() => t.handleKeyClick('reference-vocal')} disabled={!t.peaksForKey('reference-vocal').length}>{t.activeKey === 'reference-vocal' && t.isPlaying ? <Pause size={15}/> : <Mic size={15}/>}</button>
-                <span className="stem-label">참조 보컬</span>
-                {separatingRef && !t.peaksForKey('reference-vocal').length ? <span className="stem-separating-note"><LoaderCircle className="spin"/>보컬 분리 중...</span>
-                  : refVocalError ? <span className="stem-separating-note stem-separating-error"><X size={13}/>{refVocalError}</span>
-                  : <Waveform peaks={t.peaksForKey('reference-vocal')} playedFraction={t.playedFraction} variant="reference"/>}
-              </div>
               <div className={legacyRowClass('result', 'stem-row')}>
                 <button type="button" className="pp-waveform-label" aria-label="변환곡 재생/일시정지" onClick={() => t.handleKeyClick('result')} disabled={!t.peaksForKey('result').length}>{t.activeKey === 'result' && t.isPlaying ? <Pause size={15}/> : <Combine size={15}/>}</button>
                 <span className="stem-label">변환곡</span>
@@ -3561,16 +3482,6 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
                 <div className="audio-compare-charts">
                   <CompareWaveform peaks={t.peaksForKey('source')} fraction={t.positionSeconds / (t.bufferForKey('source')?.duration || 1)} processed={false}/>
                   <CompareSpectrogram buffer={t.bufferForKey('source')} fraction={t.positionSeconds / (t.bufferForKey('source')?.duration || 1)}/>
-                </div>
-              </div>
-              <div className={t.rowClass('reference', 'stem-row')}>
-                <div className="audio-compare-toolbar">
-                  <button type="button" className="pp-waveform-label" aria-label="참고곡 재생/일시정지" onClick={() => t.handleKeyClick('reference')} disabled={!t.peaksForKey('reference').length}>{t.activeKey === 'reference' && t.isPlaying ? <Pause size={15}/> : <Play size={15}/>}</button>
-                  <span className="stem-label audio-compare-label"><strong>참고곡</strong></span>
-                </div>
-                <div className="audio-compare-charts">
-                  <CompareWaveform peaks={t.peaksForKey('reference')} fraction={t.positionSeconds / (t.bufferForKey('reference')?.duration || 1)} processed={false}/>
-                  <CompareSpectrogram buffer={t.bufferForKey('reference')} fraction={t.positionSeconds / (t.bufferForKey('reference')?.duration || 1)}/>
                 </div>
               </div>
               <div className={t.rowClass('result', 'stem-row')}>
@@ -3597,7 +3508,6 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
       </div>
     </DialogContent>
     <MultiFileLibraryPicker open={sourcePickerOpen} onClose={() => setSourcePickerOpen(false)} onConfirm={paths => paths[0] && void pickSource(paths[0])} title="원본 audio 선택" description="음색을 바꿀 원본 오디오 파일을 골라 주세요."/>
-    <MultiFileLibraryPicker open={referencePickerOpen} onClose={() => setReferencePickerOpen(false)} onConfirm={paths => paths[0] && void pickReference(paths[0])} title="참조 audio 선택" description="목표 음색의 참조 오디오 파일을 골라 주세요."/>
     <Dialog open={rvcManageOpen} onOpenChange={setRvcManageOpen}>
       <DialogContent className="studio-dialog voice-convert-browser-dialog" style={{ width: 520 }}>
         <DialogTitle>받은 RVC 목소리 관리</DialogTitle>
@@ -4311,6 +4221,17 @@ export default function Studio() {
     const poll = () => { void api<Inventory>('/models').then(setInventory).catch(() => {}); };
     poll(); const timer = setInterval(poll, 4000); return () => clearInterval(timer);
   }, []);
+  // A saved selection whose model file was deleted would fail at generation: fall back to an installed model and say so.
+  useEffect(() => {
+    if (!loaded || !inventory) return;
+    const has = (item: typeof models[number]) => !!inventory.repositories?.some(repo => (item.id !== 'yue2-original' || repo.id === 'm-a-p/YuE2-3B') && repo.files?.some(file => file.path.endsWith(item.file) && file.state === 'complete'));
+    const current = models.find(item => item.id === draft.modelId);
+    if (current && has(current)) return;
+    const fallback = models.find(has);
+    if (!fallback || fallback.id === draft.modelId) return;
+    setDraft(previous => ({ ...previous, modelId: fallback.id }));
+    setNotice({ text: `${current?.name || '선택한 모델'} 파일이 없어 ${fallback.name}(으)로 바꿨습니다.`, error: false });
+  }, [loaded, inventory, draft.modelId]);
   useEffect(() => { if (loaded) { try { localStorage.setItem('songyue2-composer', JSON.stringify(draft)); } catch { /* Explicit disk save remains available. */ } } }, [draft, loaded]);
   useEffect(() => { if (!notice) return; const timer = setTimeout(() => setNotice(null), notice.error ? 14000 : 5000); return () => clearTimeout(timer); }, [notice]);
   useEffect(() => {
@@ -4853,7 +4774,7 @@ export default function Studio() {
   return <div className="studio-shell">
     <aside className={`sidebar ${mobileNav ? 'mobile-open' : ''}`}><button className="brand" onClick={() => navigate('create')} aria-label="SongYUE2 만들기로 이동"><span className="brand-symbol"><AudioLines size={25}/></span><span>Song<b>YUE2</b><small>by madwind</small></span></button><div className="sidebar-main"><nav aria-label="주 메뉴">{([{ id: 'create', icon: Sparkles }, { id: 'home', icon: Home }, { id: 'projects', icon: Folder }, { id: 'library', icon: ListMusic }, { id: 'playlists', icon: ListPlus }, { id: 'abc', icon: FileText }, { id: 'favorites', icon: Heart }] as const).map(({ id, icon: Icon }) => <button className={`nav-item ${page === id ? 'active' : ''}`} onClick={() => navigate(id)} key={id} aria-current={page === id ? 'page' : undefined}><Icon size={19}/><span>{titles[id]}</span>{id === 'create' && <Plus size={15} className="nav-plus"/>}</button>)}</nav><div className="sidebar-divider"/><div className="sidebar-subhead"><span>최근 프로젝트</span><button aria-label="프로젝트 보기" onClick={() => navigate('projects')}><Plus size={14}/></button></div>{(() => { const recentDrafts = projects.filter(item => item.status === 'draft').slice(0, 4); return recentDrafts.length ? recentDrafts.map(item => <button className="recent-item" key={item.id} onClick={() => loadProject(item)}><span className="recent-dot"/>{item.title}</button>) : <p className="sidebar-empty">새로운 아이디어가<br/>음악이 되는 곳.</p>; })()}</div><div className="sidebar-bottom"><nav aria-label="도구 메뉴"><button className="nav-item" onClick={() => { setCompareOpen(true); setMobileNav(false); }}><GitCompare size={18}/>음원 비교</button><button className={`nav-item ${page === 'restore' ? 'active' : ''}`} onClick={() => navigate('restore')}><Upload size={18}/>음원 복원 (실험적)</button><button className="nav-item" onClick={() => { setTimbreTransformOpen(true); setMobileNav(false); }}><WandSparkles size={18}/>음색 변조 (평가중)</button><button className={`nav-item ${page === 'tools' ? 'active' : ''}`} onClick={() => navigate('tools')}><SlidersHorizontal size={18}/>Audio Tools</button><button className={`nav-item ${page === 'models' ? 'active' : ''}`} onClick={() => navigate('models')}><Cpu size={18}/>모델 관리</button><button className={`nav-item ${page === 'settings' ? 'active' : ''}`} onClick={() => navigate('settings')}><Settings2 size={18}/>설정</button><button className="nav-item" onClick={() => { setHelp(true); setMobileNav(false); }}><CircleHelp size={18}/>도움말</button></nav><div className="profile"><span className="avatar"><Headphones size={18}/></span><div>나의 스튜디오<small>로컬 워크스페이스</small></div><span className="version">0.1</span></div></div></aside>
     {mobileNav && <button className="nav-scrim" aria-label="메뉴 닫기" onClick={() => setMobileNav(false)}/>}
-    <main className="main-shell"><header className="topbar"><div className="topbar-title"><Button variant="ghost" size="icon" className="mobile-menu" aria-label="메뉴 열기" onClick={() => setMobileNav(true)}><Menu/></Button><span className="breadcrumb">작업 공간</span><ChevronRight size={14}/><strong>{titles[page]}</strong></div><Popover open={modelOpen} onOpenChange={setModelOpen}><PopoverTrigger render={<Button variant="outline" className="model-trigger" aria-label="음악 모델 선택"/>}><AudioLines size={17}/><span>{model.name}</span><span className="model-recommended">{model.id === 'yue2-q4' ? '추천' : model.engine}</span><ChevronDown size={15}/></PopoverTrigger><PopoverContent className="model-menu" align="start"><div className="menu-heading">음악 생성 모델<span>새 작업에 적용할 모델을 선택하세요</span></div>{models.map(item => <button key={item.id} className={`model-option ${draft.modelId === item.id ? 'selected' : ''}`} disabled={item.selectable === false} onClick={() => { if (item.selectable === false) return; update({ modelId: item.id }); setModelOpen(false); }}><Cpu size={18}/><span><strong>{item.name}<em>{item.badge}</em></strong><small>{item.detail} · {item.size}</small></span>{draft.modelId === item.id && <Check size={17}/>}</button>)}<div className="model-menu-footer">모델 파일과 실행 엔진의 준비 상태는 별도로 확인합니다.<button onClick={() => { navigate('models'); setModelOpen(false); }}>모델 관리 <ArrowRight size={13}/></button></div></PopoverContent></Popover><div className="device-status"><span className={`status-dot ${online ? '' : 'offline'}`}/><span>{online ? '로컬 연결됨' : '로컬 연결 대기'}</span><span className="device-divider"/><Cpu size={14}/><span>RTX 5070 <span className="muted">· 12 GB</span></span></div></header>
+    <main className="main-shell"><header className="topbar"><div className="topbar-title"><Button variant="ghost" size="icon" className="mobile-menu" aria-label="메뉴 열기" onClick={() => setMobileNav(true)}><Menu/></Button><span className="breadcrumb">작업 공간</span><ChevronRight size={14}/><strong>{titles[page]}</strong></div><Popover open={modelOpen} onOpenChange={setModelOpen}><PopoverTrigger render={<Button variant="outline" className="model-trigger" aria-label="음악 모델 선택"/>}><AudioLines size={17}/><span>{model.name}</span><span className="model-recommended">{model.id === 'yue2-q8' ? '추천' : model.engine}</span><ChevronDown size={15}/></PopoverTrigger><PopoverContent className="model-menu" align="start"><div className="menu-heading">음악 생성 모델<span>새 작업에 적용할 모델을 선택하세요</span></div>{models.map(item => { const missing = !!inventory && !installed(item); return <button key={item.id} className={`model-option ${draft.modelId === item.id ? 'selected' : ''}`} style={missing ? { opacity: 0.6 } : undefined} disabled={item.selectable === false} onClick={() => { if (item.selectable === false) return; if (missing) { notify(`${item.name} 모델은 다운로드가 필요합니다. 모델 파일을 내려받은 뒤 선택해 주세요.`, true); return; } update({ modelId: item.id }); setModelOpen(false); }}><Cpu size={18}/><span><strong>{item.name}<em>{missing ? '다운로드 필요' : item.badge}</em></strong><small>{item.detail} · {item.size}</small></span>{draft.modelId === item.id && <Check size={17}/>}</button>; })}<div className="model-menu-footer">모델 파일과 실행 엔진의 준비 상태는 별도로 확인합니다.<button onClick={() => { navigate('models'); setModelOpen(false); }}>모델 관리 <ArrowRight size={13}/></button></div></PopoverContent></Popover><div className="device-status"><span className={`status-dot ${online ? '' : 'offline'}`}/><span>{online ? '로컬 연결됨' : '로컬 연결 대기'}</span><span className="device-divider"/><Cpu size={14}/><span>RTX 5070 <span className="muted">· 12 GB</span></span></div></header>
     {page === 'create' ? <div className="creation-layout"><section className="composer" aria-label="노래 편집기"><div className="composer-scroll"><div className="composer-heading"><div><h1>어떤 노래를 만들까요?</h1></div><Music2 size={24}/></div><div className="mode-switch" aria-label="제작 모드"><button className={draft.mode === 'simple' ? 'active' : ''} aria-pressed={draft.mode === 'simple'} onClick={() => update({ mode: 'simple' })}>간편 모드</button><button className={draft.mode === 'custom' ? 'active' : ''} aria-pressed={draft.mode === 'custom'} onClick={() => update({ mode: 'custom' })}>직접 만들기<SlidersHorizontal size={14}/></button></div><div className="mode-switch vocal-mode-switch" aria-label="보컬 여부"><button className={!draft.instrumental ? 'active' : ''} aria-pressed={!draft.instrumental} onClick={() => update({ instrumental: false })}><Mic size={14}/>보컬+악기</button><button className={draft.instrumental ? 'active' : ''} aria-pressed={draft.instrumental} onClick={() => update({ instrumental: true })}><Guitar size={14}/>악기만</button></div>
     {draft.mode === 'simple' && <div className="form-section idea-section"><label htmlFor="idea">떠오르는 아이디어</label><Textarea id="idea" value={idea} onChange={event => setIdea(event.target.value)} placeholder="친구에게 위로를 건네는 따뜻한 노래"/><Button variant="outline" onClick={() => void assist('lyrics')} disabled={!!busy}><WandSparkles/>아이디어로 가사 초안 만들기</Button><p className="field-hint">설정한 LLM이 가사 작성을 도와줘요. 직접 작성해도 좋아요.</p></div>}
     <div className="form-section"><div className="field-heading"><label htmlFor="lyrics"><FileText size={16}/>가사</label><button className="text-action" onClick={() => void assist('lyrics')} disabled={!!busy}><WandSparkles size={13}/>작사 도우미</button></div><div className="lyrics-box"><Textarea id="lyrics" value={draft.lyrics} onChange={event => update({ lyrics: event.target.value })} placeholder={'[Verse]\n이곳에 나만의 이야기를 적어 주세요.\n직접 쓴 가사를 붙여 넣어도 좋아요.\n\n[Chorus]\n마음에 남을 후렴을 들려주세요.'} maxLength={12000}/><div className="textarea-footer"><span>{draft.lyrics.length.toLocaleString()} / 12,000</span></div></div>{draft.instrumental && <p className="field-hint">악기만 선택 시 악보의 보컬 성부를 자동으로 쉼표 처리해 생성합니다(악보가 없으면 먼저 심볼릭 작곡을 실행). 가사는 스타일 프롬프트에만 참고로 남고, 실제로 불려지지 않도록 구조적으로 처리됩니다.</p>}</div>
@@ -4863,7 +4784,7 @@ export default function Studio() {
     : page === 'settings' ? <section className="settings-page page-scroll"><div className="page-heading"><span className="eyebrow">내 작업 방식에 맞게</span><h1>스튜디오 설정</h1><p>작사 도우미와 로컬 작업 환경을 설정하세요.</p></div><section className="settings-section"><div className="settings-section-heading"><div className="setting-icon"><WandSparkles size={21}/></div><div><h2>작사 도우미</h2><p>가사와 스타일을 함께 다듬을 LLM을 선택하세요.</p></div><span className="small-badge">선택 기능</span></div><div className="provider-grid">{providers.map(provider => <button key={provider.id} className={`provider-card ${settings.provider === provider.id ? 'selected' : ''}`} aria-pressed={settings.provider === provider.id} onClick={() => void selectProvider(provider.id)}><span className="provider-mark">{provider.mark}</span><strong>{provider.label}</strong><small>{provider.description}</small>{settings.provider === provider.id && <Check className="provider-check" size={15}/>}</button>)}</div>
     {settings.provider !== 'none' ? <div className="settings-form"><label className="wide-field">연결 주소<Input value={settings.endpoint || '.env 파일에 값이 없습니다'} readOnly/></label><label>LLM 모델 이름<Input value={settings.llmModel || '.env 파일에 값이 없습니다'} readOnly/></label>{settings.provider !== 'ollama' && <label>API 키<Input value={settings.apiKey || '.env 파일에 값이 없습니다'} readOnly/></label>}<p className="field-hint wide-field">연결 주소, 모델 이름, API 키는 프로젝트 폴더의 .env 파일에서 읽어옵니다. .env.sample을 복사해 .env로 저장한 뒤 값을 입력하고 앱을 다시 실행해 주세요.<br/>연결 확인은 실제 짧은 요청을 전송합니다.</p></div> : <div className="inline-note"><Check size={17}/><span>LLM 없이도 직접 쓴 가사와 스타일로 작업할 수 있어요.</span></div>}
     <div className="settings-actions"><Button variant="outline" onClick={() => { setSettings(savedSettings); notify('저장된 설정으로 되돌렸습니다.'); }}>변경 취소</Button>{settings.provider !== 'none' && <Button variant="outline" disabled={!!busy} onClick={() => void storeSettings(true)}>{busy === 'test' ? <LoaderCircle className="spin"/> : <RefreshCw/>}저장 후 연결 확인</Button>}<Button disabled={!!busy} onClick={() => void storeSettings()}><Save/>설정 저장</Button></div></section><section className="settings-section"><div className="settings-section-heading"><div className="setting-icon"><Cpu size={21}/></div><div><h2>로컬 실행 환경</h2><p>음악 생성 엔진과 라이브러리 폴더 위치입니다.</p></div></div><div className="settings-form"><label className="wide-field">audio.cpp 실행 파일 (GGUF 모델용)<Input value={settings.enginePath} onChange={event => setSettings({ ...settings, enginePath: event.target.value })} placeholder={DEFAULT_ENGINE_PATH}/></label><label className="wide-field">Python 실행 파일 (원본 모델용)<Input value={settings.pythonEnginePath} onChange={event => setSettings({ ...settings, pythonEnginePath: event.target.value })} placeholder="예: test\YuE2-source\.venv\Scripts\python.exe (24GB급 VRAM 권장)"/></label><label className="wide-field">Python 스크립트 (run_yue2.py)<Input value={settings.pythonScriptPath} onChange={event => setSettings({ ...settings, pythonScriptPath: event.target.value })} placeholder="예: test\YuE2-source\skills\yue2-music\scripts\run_yue2.py"/></label><label>Python 메모리 예산 (GiB)<Input type="number" min="1" max="64" value={settings.pythonMemoryBudgetGib} onChange={event => setSettings({ ...settings, pythonMemoryBudgetGib: Number(event.target.value) })}/></label><label className="wide-field">SheetSage2 Python 실행 파일 (제로샷 커버용, 별도 venv 필요)<Input value={settings.sheetSagePythonPath} onChange={event => setSettings({ ...settings, sheetSagePythonPath: event.target.value })} placeholder="예: test\YuE2-source\.venv-sheetsage2\Scripts\python.exe"/></label><label className="wide-field">ComfyUI 연결 주소 (INT8 ConvRot 모델용)<Input value={settings.comfyUiEndpoint} onChange={event => setSettings({ ...settings, comfyUiEndpoint: event.target.value })} placeholder={DEFAULT_COMFYUI_ENDPOINT}/></label><label className="wide-field">ComfyUI 설치 폴더 (필요 시 자동 실행)<Input value={settings.comfyUiEnginePath} onChange={event => setSettings({ ...settings, comfyUiEnginePath: event.target.value })} placeholder={DEFAULT_COMFYUI_ENGINE_PATH}/></label><label className="wide-field">DDSP-SVC 설치 폴더 (음색 변조 - DDSP-SVC 탭)<Input value={settings.ddspSvcPath} onChange={event => setSettings({ ...settings, ddspSvcPath: event.target.value })} placeholder={DEFAULT_DDSP_SVC_PATH}/></label><label className="wide-field">Setting 폴더<Input value={settings.settingPath} onChange={event => setSettings({ ...settings, settingPath: event.target.value })} placeholder={DEFAULT_SETTING_PATH}/></label><label className="wide-field">Music 폴더<Input value={settings.musicPath} onChange={event => setSettings({ ...settings, musicPath: event.target.value })} placeholder={DEFAULT_MUSIC_PATH}/></label><label className="wide-field">예시 폴더<Input value={settings.examplesPath} onChange={event => setSettings({ ...settings, examplesPath: event.target.value })} placeholder={DEFAULT_EXAMPLES_PATH}/></label><label className="wide-field">앨범 표지 폴더<Input value={settings.coversPath} onChange={event => setSettings({ ...settings, coversPath: event.target.value })} placeholder={DEFAULT_COVERS_PATH}/></label><label className="wide-field">ABC 악보 폴더<Input value={settings.abcNotesPath} onChange={event => setSettings({ ...settings, abcNotesPath: event.target.value })} placeholder={DEFAULT_ABC_NOTES_PATH}/></label><label>저장 파일 형식<select value={settings.saveFormat} onChange={event => setSettings({ ...settings, saveFormat: event.target.value as Settings['saveFormat'] })}>{saveFormats.map(format => <option key={format.id} value={format.id}>{format.label}</option>)}</select></label><label>보기 방식<select value={settings.viewMode} onChange={event => void setViewMode(event.target.value as Settings['viewMode'])}>{viewModes.map(mode => <option key={mode.id} value={mode.id}>{mode.label}</option>)}</select></label><label className="wide-field">로그 폴더(읽기 전용)<Input value={settings.outputDirectory} readOnly/></label></div><p className="field-hint wide-field">실행 파일/스크립트/폴더는 모두 SongYUE2 폴더 기준 상대 경로입니다(절대 경로도 입력 가능). 비워두면 위 placeholder 경로가 사용되며, 폴더가 없으면 자동으로 만들어집니다. 메모리 예산은 원본 모델 생성 시 GPU VRAM 사용 한도(GiB)이며, 낮출수록 저사양 GPU에서도 동작할 가능성이 높아지지만 너무 낮으면 실패할 수 있습니다.</p><div className="settings-actions"><Button onClick={() => void storeSettings()} disabled={!!busy}><Save/>설정 저장</Button></div></section><section className="settings-section"><div className="settings-section-heading"><div className="setting-icon"><Sparkles size={21}/></div><div><h2>Music style Presets</h2><p>만들기 화면의 음악 스타일 아래에 뜨는 빠른 태그 버튼입니다. 한 줄에 하나씩 입력하세요.</p></div></div><Textarea className="style-presets-textarea" value={settings.stylePresets} onChange={event => setSettings({ ...settings, stylePresets: event.target.value })} placeholder={DEFAULT_STYLE_PRESETS}/><div className="settings-actions"><Button onClick={() => void storeSettings()} disabled={!!busy}><Save/>설정 저장</Button></div></section><section className="settings-section"><div className="settings-section-heading"><div className="setting-icon"><AudioLines size={21}/></div><div><h2>후처리 비주얼라이저</h2><p>후처리 / EQ 창의 원형 라이브 비주얼라이저 표시 여부와 모양입니다.</p></div></div><div className="settings-form"><label className="checkbox-label wide-field"><input type="checkbox" checked={settings.visualizerEnabled} onChange={event => setSettings({ ...settings, visualizerEnabled: event.target.checked })}/>비주얼라이저 표시</label><div className="wide-field visualizer-row"><label>라인 모드<select value={settings.visualizerRingMode} onChange={event => setSettings({ ...settings, visualizerRingMode: event.target.value as Settings['visualizerRingMode'] })}><option value="radial">1: 회전(R) 방향 — 같은 순간을 링마다 다른 각도로 표시</option><option value="time">2: 시간축 — 링마다 다른 과거 시점의 소리를 표시</option></select></label>{settings.visualizerRingMode === 'radial' ? <label>R 간격<Input type="number" min="0.1" max="20" step="0.1" value={settings.visualizerRingStep} onChange={event => setSettings({ ...settings, visualizerRingStep: Number(event.target.value) })}/></label> : <><label>시간 간격(초)<Input type="number" min="0.02" max="2" step="0.1" value={settings.visualizerTimeStep} onChange={event => setSettings({ ...settings, visualizerTimeStep: Number(event.target.value) })}/></label><label>가속도<Input type="number" min="0.2" max="4" step="0.1" value={settings.visualizerTimeSkew} onChange={event => setSettings({ ...settings, visualizerTimeSkew: Number(event.target.value) })}/></label></>}</div><div className="wide-field visualizer-row"><label>라인 색상(색조 0~360)<Input type="number" min="0" max="359" value={settings.visualizerHue} onChange={event => setSettings({ ...settings, visualizerHue: Number(event.target.value) })}/></label><label>라인 개수<Input type="number" min="1" max="40" value={settings.visualizerRingCount} onChange={event => setSettings({ ...settings, visualizerRingCount: Number(event.target.value) })}/></label><label>라인 굵기<Input type="number" min="0.5" max="8" step="0.5" value={settings.visualizerLineWidth} onChange={event => setSettings({ ...settings, visualizerLineWidth: Number(event.target.value) })}/></label><label>변동폭<Input type="number" min="0.1" max="10" step="0.1" value={settings.visualizerAmplitude} onChange={event => setSettings({ ...settings, visualizerAmplitude: Number(event.target.value) })}/></label><label>잔상(0~95)<Input type="number" min="0" max="95" value={settings.visualizerTrail} onChange={event => setSettings({ ...settings, visualizerTrail: Number(event.target.value) })}/></label><label>나선 정도(0~100)<Input type="number" min="0" max="100" value={settings.visualizerSpiral} onChange={event => setSettings({ ...settings, visualizerSpiral: Number(event.target.value) })}/></label></div></div><p className="field-hint wide-field">기본값: 표시 켬 · 라인 모드 1(회전) · R 간격 {DEFAULT_VISUALIZER_RING_STEP} · 시간 간격 {DEFAULT_VISUALIZER_TIME_STEP}초 · 가속도 {DEFAULT_VISUALIZER_TIME_SKEW} · 색조 {DEFAULT_VISUALIZER_HUE} · 라인 {DEFAULT_VISUALIZER_RING_COUNT}개 · 굵기 {DEFAULT_VISUALIZER_LINE_WIDTH} · 변동폭 {DEFAULT_VISUALIZER_AMPLITUDE} · 잔상 {DEFAULT_VISUALIZER_TRAIL} · 나선 정도 {DEFAULT_VISUALIZER_SPIRAL}. 라인 모드 1(회전)은 모든 링이 같은 순간의 소리를 각각 다른 반지름·각도로 보여줍니다 — R 간격은 링 사이의 반지름 차이입니다. 라인 모드 2(시간축)는 모든 링이 같은 반지름에서 서로 다른 과거 시점의 소리를 보여줍니다 — 시간 간격은 링 사이의 기본 시간 간격(초), 가속도는 그 간격이 링이 오래될수록 점점 벌어지는(&gt;1) 또는 점점 좁아지는(&lt;1) 정도입니다(1=일정한 간격). 변동폭은 소리 크기에 따라 반지름이 기본 반지름을 중심으로 얼마나 늘었다 줄었다 하는지입니다(중간 음량이면 기본 반지름 그대로, 조용하면 안쪽으로 줄어들고 크면 바깥으로 부풀어 오름 — 줄어드는 폭은 늘어나는 폭의 절반) — 키울수록 안팎으로 더 역동적으로 움직입니다. 잔상은 이전 프레임이 사라지는 속도를 늦춰 꼬리를 남깁니다(0=꼬리 없음, 높을수록 길게 남음). 나선 정도는 두 모드 모두에서 링마다 반지름과 함께 회전 위상이 어긋나는 정도입니다(0=완전한 동심원, 100=나선형).</p><div className="settings-actions"><Button onClick={() => void storeSettings()} disabled={!!busy}><Save/>설정 저장</Button></div></section></section>
-    : page === 'models' ? <section className="models-page page-scroll"><div className="page-heading"><span className="eyebrow">내 스튜디오의 사운드 엔진</span><h1>모델 관리</h1><p>원본과 GGUF 모델을 보관하고, 상단에서 사용할 모델을 고르세요.</p></div><div className="download-overview"><div className="setting-icon"><ArrowDownToLine size={23}/></div><div className="download-copy"><h2>{inventory?.state === 'complete' ? '모델 다운로드 완료' : '모델 파일 준비 중'}</h2><p>{inventory ? `${gb(inventory.completedBytes)} / ${gb(inventory.totalBytes)}` : '로컬 다운로드 상태를 확인하고 있습니다.'}</p><Progress aria-label="전체 모델 다운로드" value={inventory?.totalBytes ? Math.min(100, inventory.completedBytes / inventory.totalBytes * 100) : 0}/></div><span className="small-badge">Hugging Face</span></div><div className="model-card-grid">{models.map(item => <article className={`model-detail-card ${draft.modelId === item.id ? 'selected' : ''}`} key={item.id}><div className="model-card-top"><Cpu size={23}/><span className="small-badge">{item.badge}</span></div><h2>{item.name}</h2><p>{item.detail}</p><div className="model-meta"><span>실행 방식<strong>{item.engine}</strong></span><span>본체 크기<strong>{item.size}</strong></span></div><div className="model-file-state"><span className={`status-dot ${installed(item) ? '' : 'amber'}`}/>{installed(item) ? '본체 다운로드됨' : '파일 준비 중'}<span>{item.engine === 'audio.cpp' ? '생성 지원' : '엔진 미지원'}</span></div><Button variant={draft.modelId === item.id ? 'default' : 'outline'} disabled={item.selectable === false} onClick={() => { update({ modelId: item.id }); notify(`${item.name} 모델을 선택했습니다.`); }}>{draft.modelId === item.id ? <><Check/>현재 선택한 모델</> : item.selectable === false ? '연결 대기' : '이 모델 선택'}</Button></article>)}</div><section className="repository-section"><h2>다운로드 보관함</h2>{inventory?.repositories?.map(repo => <div className="repository-row" key={repo.id}><Folder size={19}/><div><strong>{repo.id}</strong><small>{repo.files?.filter(file => file.state === 'complete').length || 0} / {repo.files?.length || 0}개 파일 · {gb(repo.completedBytes)} / {gb(repo.totalBytes)}</small></div><span className="small-badge">{repo.state === 'complete' ? '완료' : '다운로드 중'}</span></div>)}</section><div className="inline-note"><ShieldCheck size={18}/><span>모델 가중치 라이선스: CC BY-NC 4.0. 앱 배포 파일과 모델은 분리해 관리합니다. 다운로드와 실제 실행 가능 여부는 다릅니다.</span></div></section>
+    : page === 'models' ? <section className="models-page page-scroll"><div className="page-heading"><span className="eyebrow">내 스튜디오의 사운드 엔진</span><h1>모델 관리</h1><p>원본과 GGUF 모델을 보관하고, 상단에서 사용할 모델을 고르세요.</p></div><div className="download-overview"><div className="setting-icon"><ArrowDownToLine size={23}/></div><div className="download-copy"><h2>{inventory?.state === 'complete' ? '모델 다운로드 완료' : '모델 파일 준비 중'}</h2><p>{inventory ? `${gb(inventory.completedBytes)} / ${gb(inventory.totalBytes)}` : '로컬 다운로드 상태를 확인하고 있습니다.'}</p><Progress aria-label="전체 모델 다운로드" value={inventory?.totalBytes ? Math.min(100, inventory.completedBytes / inventory.totalBytes * 100) : 0}/></div><span className="small-badge">Hugging Face</span></div><div className="model-card-grid">{models.map(item => <article className={`model-detail-card ${draft.modelId === item.id ? 'selected' : ''}`} key={item.id}><div className="model-card-top"><Cpu size={23}/><span className="small-badge">{item.badge}</span></div><h2>{item.name}</h2><p>{item.detail}</p><div className="model-meta"><span>실행 방식<strong>{item.engine}</strong></span><span>본체 크기<strong>{item.size}</strong></span></div><div className="model-file-state"><span className={`status-dot ${installed(item) ? '' : 'amber'}`}/>{installed(item) ? '본체 다운로드됨' : '다운로드 필요'}<span>{item.engine === 'audio.cpp' ? '생성 지원' : '엔진 미지원'}</span></div><Button variant={draft.modelId === item.id ? 'default' : 'outline'} disabled={item.selectable === false} onClick={() => { if (inventory && !installed(item)) { notify(`${item.name} 모델은 다운로드가 필요합니다. 모델 파일을 내려받은 뒤 선택해 주세요.`, true); return; } update({ modelId: item.id }); notify(`${item.name} 모델을 선택했습니다.`); }}>{draft.modelId === item.id ? <><Check/>현재 선택한 모델</> : item.selectable === false ? '연결 대기' : '이 모델 선택'}</Button></article>)}</div><section className="repository-section"><h2>다운로드 보관함</h2>{inventory?.repositories?.map(repo => <div className="repository-row" key={repo.id}><Folder size={19}/><div><strong>{repo.id}</strong><small>{repo.files?.filter(file => file.state === 'complete').length || 0} / {repo.files?.length || 0}개 파일 · {gb(repo.completedBytes)} / {gb(repo.totalBytes)}</small></div><span className="small-badge">{repo.state === 'complete' ? '완료' : '다운로드 중'}</span></div>)}</section><div className="inline-note"><ShieldCheck size={18}/><span>모델 가중치 라이선스: CC BY-NC 4.0. 앱 배포 파일과 모델은 분리해 관리합니다. 다운로드와 실제 실행 가능 여부는 다릅니다.</span></div></section>
     : page === 'playlists' ? playlistPage()
     : page === 'abc' ? abcNotePage()
     : page === 'restore' ? restorePage()

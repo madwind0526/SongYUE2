@@ -23,7 +23,7 @@ export const DEFAULT_VISUALIZER_AMPLITUDE = 2;
 export type Inventory = { state: string; totalBytes: number; completedBytes: number; repositories: { id: string; state: string; path: string; totalBytes: number; completedBytes: number; files: { path: string; state: string; size: number }[] }[] };
 export type SystemInfo = { vramMb: number | null };
 export const PYTHON_MODEL_MIN_VRAM_MB = 12 * 1024;
-export const emptyDraft: Draft = { title: '', lyrics: '', style: '', modelId: 'yue2-q4', seed: 42, steps: 8, cot: 'full', vocalGender: '', instrumental: false, abc: '', mode: 'custom' };
+export const emptyDraft: Draft = { title: '', lyrics: '', style: '', modelId: 'yue2-q8', seed: 42, steps: 8, cot: 'full', vocalGender: '', instrumental: false, abc: '', mode: 'custom' };
 export const initialSettings: Settings = { provider: 'none', endpoint: '', llmModel: '', apiKey: null, enginePath: '', pythonEnginePath: '', pythonScriptPath: '', pythonMemoryBudgetGib: 11, sheetSagePythonPath: '', comfyUiEndpoint: '', comfyUiEnginePath: '', ddspSvcPath: '', settingPath: '', musicPath: '', examplesPath: '', coversPath: '', abcNotesPath: '', stylePresets: DEFAULT_STYLE_PRESETS, visualizerEnabled: DEFAULT_VISUALIZER_ENABLED, visualizerRingCount: DEFAULT_VISUALIZER_RING_COUNT, visualizerHue: DEFAULT_VISUALIZER_HUE, visualizerLineWidth: DEFAULT_VISUALIZER_LINE_WIDTH, visualizerTrail: DEFAULT_VISUALIZER_TRAIL, visualizerSpiral: DEFAULT_VISUALIZER_SPIRAL, visualizerRingMode: DEFAULT_VISUALIZER_RING_MODE, visualizerTimeStep: DEFAULT_VISUALIZER_TIME_STEP, visualizerTimeSkew: DEFAULT_VISUALIZER_TIME_SKEW, visualizerRingStep: DEFAULT_VISUALIZER_RING_STEP, visualizerAmplitude: DEFAULT_VISUALIZER_AMPLITUDE, saveFormat: 'wav', viewMode: 'list', outputDirectory: '' };
 export const DEFAULT_SETTING_PATH = 'Library\\Setting';
 export const DEFAULT_MUSIC_PATH = 'Library\\Music';
@@ -46,8 +46,8 @@ export const saveFormats: { id: SaveFormat; label: string }[] = [
   { id: 'mp4', label: 'MP4-video (앨범 표지 + 오디오)' },
 ];
 export const models: { id: string; name: string; detail: string; size: string; engine: string; file: string; repo?: string; badge: string; selectable?: boolean }[] = [
-  { id: 'yue2-q4', name: 'YuE2 - Q4 GGUF', detail: '가벼운 시작', size: '2.67 GB', engine: 'audio.cpp', file: 'yue2-3b-q4_0.gguf', badge: '이 PC 추천' },
-  { id: 'yue2-q8', name: 'YuE2 - Q8 GGUF', detail: '정밀도 우선', size: '4.26 GB', engine: 'audio.cpp', file: 'yue2-3b-q8_0.gguf', badge: '실험적' },
+  { id: 'yue2-q8', name: 'YuE2 - Q8 GGUF', detail: '정밀도 우선', size: '4.26 GB', engine: 'audio.cpp', file: 'yue2-3b-q8_0.gguf', badge: '이 PC 추천' },
+  { id: 'yue2-q4', name: 'YuE2 - Q4 GGUF', detail: '가볍지만 품질이 낮아 권장하지 않음', size: '2.67 GB', engine: 'audio.cpp', file: 'yue2-3b-q4_0.gguf', badge: '품질 낮음' },
   { id: 'yue2-bf16', name: 'YuE2 - BF16 GGUF', detail: '원본 본체를 GGUF로 변환한 BF16', size: '7.26 GB', engine: 'audio.cpp', file: 'yue2-3b-bf16.gguf', badge: '고용량 GPU' },
   { id: 'yue2-int8-convrot', name: 'YuE2 - INT8 ConvRot', detail: 'ComfyUI로 생성 (VRAM 절약은 없음)', size: '3.96 GB', engine: 'ComfyUI', file: 'yue2_3b_int8_convrot.safetensors', repo: 'comfy-org/YuE2', badge: 'ComfyUI 연동' },
   { id: 'yue2-original', name: 'YuE2 - 원본', detail: '공식 Python safetensors 본체', size: '7.26 GB', engine: 'Python', file: 'model.safetensors', badge: '24 GB 환경 권장' },

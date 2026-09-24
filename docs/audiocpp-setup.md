@@ -67,7 +67,7 @@ nvcc --version
 git clone -b dev --depth 1 https://github.com/0xShug0/audio.cpp.git engine/audio.cpp
 cd engine/audio.cpp
 .\scripts\build_windows.ps1 -Preset windows-cuda-release -Target audiocpp_cli `
-  -ModelSet custom -Models "yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc" -CudaArchitectures 120a-real -Jobs 18
+  -ModelSet custom -Models "yue2,htdemucs,bs_roformer,audiosr,muscriptor" -CudaArchitectures 120a-real -Jobs 18
 ```
 
 - `engine/`은 프로젝트 루트 기준 권장 위치이며 `.gitignore`에 등록되어 있습니다 (대용량 서드파티 소스 트리는 커밋하지 않음).
@@ -158,55 +158,16 @@ audiocpp_cli --task midi --family muscriptor `
 
 모델 파일이 없으면 "MuScriptor 모델이 없습니다. scripts/download_models.py를 실행해 주세요." 오류가 납니다. 빌드에 `muscriptor`가 빠져 있으면 "MuScriptor 엔진을 실행할 수 없습니다" 계열 오류가 날 수 있습니다.
 
-## 보컬 음색 변환 (Seed-VC)
+## 보컬 음색 변환 (RVC, DDSP-SVC)
 
-완성곡 메뉴의 "보컬 음색 변환"은 audio.cpp의 Seed-VC(`--task svc --family seed_vc --task-route v1_svc`, Singing Voice Conversion)로 곡의 보컬을 다른 목소리로 바꿉니다. RVC(`model_specs/rvc.json`, `"status": "experimental"`, 패키지에 내장된 4개 음색 중에서만 선택 가능)보다 Seed-VC(`model_specs/seed_vc.json`, `"status": "supported"`)를 선택했습니다 — 실험적이지 않고, 사용자가 올린 임의의 짧은 참조 오디오만으로 제로샷 변환(`speaker_reference` capability)이 가능하기 때문입니다.
+완성곡 메뉴가 아니라 사이드바 "음색 변조" 창에서 원본 audio의 보컬을 바꿉니다. 엔진은 두 가지입니다.
 
-Seed-VC는 보컬 트랙 하나만 변환하는 모델이라, 생성 단계에서 참조 음색을 받는 건 불가능합니다(YuE2 자체에 참조 오디오 기반 화자 임베딩 입력이 없음, "커버" 기능 때 확인된 제약과 동일) — 그래서 이 기능은 완성곡에 대한 **후처리**로만 동작합니다. RVC/Seed-VC류 음색 변환 모델은 항상 "보컬/반주 분리 → 보컬만 변환 → 반주와 재합성" 구조를 거쳐야 하므로(모델의 content-feature 추출기가 깨끗한 보컬 단독 신호로 학습돼 있어 믹스를 그대로 넣으면 안 됨), UI도 이 구조를 그대로 보여주는 STEM 분리 다이얼로그(STEM1) 골격을 재사용합니다 — 왼쪽 사이드바에서 참조 음색 선택+적용, 적용되면 보컬/악기 두 트랙이 각각 나타나 개별 "후처리"(EQ/FX)가 가능하고, 아래엔 원본/미리듣기 비교가 있습니다:
+- **RVC**: audio.cpp의 `--task vc --family rvc`. 내장 목소리 4개 또는 HuggingFace에서 받은 목소리(`models/rvc-voices/`)로 바꾸며 참조 audio는 필요 없습니다. 모델(`RVC-GGUF/rvc-f16.gguf`, 약 1.3GB)은 창의 "모델 받기"로 내려받습니다.
+- **DDSP-SVC**: 목표 목소리 레퍼런스로 실제 학습해 변환합니다(`test/DDSP-SVC`).
 
-1. 사이드바에서 제목을 확인하고, 목표 음색의 참조 오디오 파일을 고른 뒤 "적용"을 누릅니다. 서버가 Mel-Band RoFormer STEM 분리(`vocal` 모드)로 완성곡을 보컬/반주로 나눈 뒤(최초 1회만), 분리된 보컬과 참조 음색(ffmpeg로 44.1kHz 모노 WAV로 정규화)을 Seed-VC SVC(`v1_svc` 라우트)에 넣어 보컬만 변환합니다. **변환 직후 음량 보정**: Seed-VC 출력이 원본 보컬보다 조용하게 나오는 경우가 실측으로 확인돼(약 7~8dB), `ffmpeg -af volumedetect`로 변환 전/후 평균 음량을 재서 그 차이만큼(-6~+18dB로 clamp) `-af "volume=XdB,alimiter=limit=0.97:level=false"`로 게인+피크 리미팅을 같이 적용한 뒤(게인만 넣으면 원본 출력 피크가 이미 높아서 하드클리핑함) STEM 폴더의 `vocals.wav`를 이 결과로 덮어씁니다.
-2. 보컬/악기 두 트랙이 STEM1처럼 나타나고, 각 트랙 옆의 "후처리" 버튼으로 EQ/FX를 개별 적용할 수 있습니다. "합치기"를 누르면 두 트랙(후처리 반영)을 브라우저에서 Web Audio로 합쳐 아래 "미리듣기" 파형이 갱신됩니다.
-3. 다른 참조 오디오로 다시 "적용"을 누르면 이미 분리해둔 원본 보컬을 재사용해 **보컬만 다시 변환**합니다(STEM 분리는 다시 하지 않음, 악기 트랙에 적용한 후처리도 유지됨).
-4. "저장"을 누르면 브라우저에서 합친 최종 WAV를 서버로 올려 새 완성곡으로 라이브러리에 저장합니다(원곡은 그대로 유지).
+흐름: 원본을 고르면 서버가 보컬/악기를 한 번만 분리해 캐시(`vocals-original.wav`)하고, "적용"은 그 캐시된 보컬을 변환합니다. 변환 직후 원본 보컬과의 **음량 차이를 자동 보정**(`volume` + `alimiter`)하고, 원본이 완전한 무음인 구간은 **사이드체인 게이트**로 무음 처리합니다(변환 모델은 무음을 그대로 통과시키지 않고 잡음을 채우기 때문). 반주와의 합성과 저장은 브라우저에서 합니다.
 
-```powershell
-audiocpp_cli --task svc --family seed_vc `
-  --model models/audio-cpp/audio.cpp-gguf/SeedVC-MLX-GGUF/seed-vc-mlx-q8_0.gguf `
-  --backend cuda --task-route v1_svc --request-option f0_condition=true `
-  --audio vocals.wav --voice-ref target-voice.wav --out converted-vocals.wav
-```
-
-**`f0_condition=true`가 꼭 필요한 이유(2026-09-16 실측)**: `model_specs/seed_vc.json`/`docs/models/seed_vc.md`에 따르면 `v1_svc` 라우트의 `f0_condition`(피치 컨디셔닝) 기본값은 `false`입니다. 이걸 빼고 노래(SVC) 변환을 하면 모델이 원본 보컬의 피치 궤적을 전혀 참고하지 않아, 결과물이 "꽥꽥거리는" 로봇 잡음에 가깝게 나옵니다(사용자 제보, 모델 정밀도를 바꿔도 재현되어 모델 자체 문제가 아님을 확인) — 원곡/변환곡 스펙트로그램(`ffmpeg -lavfi showspectrumpic`)을 비교해 확정: `f0_condition` 없이는 하모닉 밴딩이 거의 없는 뭉개진 broadband 잡음+구간 타이밍이 원곡과 어긋났고, 추가 후에는 하모닉이 선명해지고 타이밍도 원곡과 일치했습니다.
-
-**실측**: RTX 5070에서 RTF ≈ 0.82(실시간보다 조금 빠름) — 40초 보컬 클립을 약 33초에 변환(2분 11초 완성곡 전체는 보컬 분리+변환+음량 보정까지 합쳐 약 2분 전후 소요). MuScriptor/HTDemucs류보다 훨씬 느리고 AudioSR과 비슷한 체감 속도라, "적용" 버튼에 진행률 폴링 UI(`generating`/`/api/generate/status`)를 사용합니다. 2분 11초짜리 실제 완성곡으로 브라우저에서 종단 검증 완료(참조 음색 업로드 → 적용 → 보컬/악기 STEM 확인 → 합치기 → 저장까지 전부 확인, 결과 길이가 원곡과 정확히 일치, ffmpeg astats로 클리핑 없음도 확인).
-
-**음량 보정이 필요했던 이유(2026-09-16 실측)**: 최초 구현은 변환된 보컬을 그대로 반주와 합쳐서, 사용자가 "저장된 곡에 보컬이 아예 없고 악기만 남았다"고 제보 — `ffmpeg volumedetect`로 확인한 결과 Seed-VC 변환 보컬이 원본 보컬보다 평균 음량이 7.6dB 낮아서(-26.4dB → -34.0dB) 반주(-24.1dB)에 완전히 묻힌 것이 원인이었습니다. 게인 보정만 넣었더니 이번엔 원본 출력의 피크가 이미 -2.2dB 근처라 보정 후 0dBFS를 넘어 하드클리핑(실측 `max_volume` 정확히 0.0dB) — `alimiter=limit=0.97:level=false`를 추가해 게인은 유지하면서 피크만 눌러 해결했습니다(보정 후 mean -27.0dB≈원본과 거의 일치, peak -0.3dB로 클리핑 없음).
-
-### "찢어지는 소리" 제보와 무음 구간 할루시네이션(2026-09-17 실측)
-
-`f0_condition=true` 적용 후에도 "변환곡 보컬이 거의 찢어지는 소리만 난다"는 제보가 이어졌다. 직접 재현하며 확인한 두 가지 원인과 대응:
-
-1. **Seed-VC 파라미터 튜닝의 한계**: 업스트림 `Plachtaa/seed-vc`의 Gradio UI 자체가 `num_inference_steps`는 "50~100 for best quality"를, `auto_f0_adjust`는 기본 `true`를 권장한다(audio.cpp CLI 기본값은 각각 30/`false`). `runSeedVcSvc()`에 `auto_f0_adjust=true`+`num_inference_steps=80`을 추가해 권장 조합과 맞췄지만, 문제가 된 구간에서 spectral flatness(0=순음, 1=잡음, `ffmpeg -af aspectralstats=measure=flatness`)로 직접 측정한 결과 전체 트랙 기준 거의 개선이 없었다(0.4657→0.4668) — 파라미터 튜닝만으로는 해결되지 않는 문제였다.
-2. **진짜 원인 — 무음 구간 할루시네이션**: 분리된 원곡 보컬(`vocals-original.wav`)의 노래 사이 간격은 실측상 진짜 디지털 무음(-inf dB)인데, Seed-VC와 Vevo2 둘 다 이 구간에서도 스스로 무음을 출력하지 못하고 계속 소리를 만들어냈다(전체 트랙 스펙트로그램으로 확인: 원곡은 도입부 0~15.9초가 완전히 비어있는데 변환곡은 그 구간에도 밀도 높은 브로드밴드 에너지로 채워짐). 사용자가 "1:40쯤에 원곡 도입부가 다시 들리는 것 같다"고 보고한 현상이 바로 이것 — 시간축이 늘어진 게 아니라(duration 실측: 모든 변환 결과가 원곡과 101.6초로 정확히 일치, 샘플레이트 불일치 가설은 기각됨) 무음이어야 할 구간에 모델이 소리를 만들어 채워 넣은 것이다.
-
-**해결**: `applyVocalTimbre()` 마지막 단계에 원곡 보컬을 사이드체인으로 쓰는 노이즈 게이트를 추가했다 — `ffmpeg -i leveled.wav -i vocals-original.wav -filter_complex "sidechaingate=threshold=0.003:ratio=20:attack=5:release=100:range=0.02" -ar 44100`. 원곡이 무음인 구간은 변환 결과도 강제로 무음 처리되고(게이트 후 실측 RMS -25dB → -57.7dB, 사실상 무음), 원곡이 노래하는 구간은 그대로 통과된다. 엔진(Seed-VC/Vevo2)과 무관하게 적용되고, `-ar 44100`이 Vevo2의 24kHz 네이티브 출력도 나머지 파이프라인과 같은 샘플레이트로 맞춰준다.
-
-### 대체 엔진: Vevo2
-
-Seed-VC의 참조 오디오 종류(발화 vs 노래)나 파라미터를 바꿔도 근본적인 음질 한계가 있어, `model_specs/vevo2.json`(`"status": "supported"`, `svc` task에 `speaker_reference`+`singing` capability)을 대체 엔진으로 추가했다. Seed-VC와 마찬가지로 제로샷(짧은 목표 음색 클립만 있으면 되고 별도 학습 불필요)이라 기존 UI 흐름을 그대로 재사용할 수 있다.
-
-```powershell
-audiocpp_cli --task svc --family vevo2 `
-  --model models/audio-cpp/audio.cpp-gguf/Vevo2-GGUF/vevo2-q8_0.gguf `
-  --backend cuda --task-route style_preserved_svc `
-  --source-audio vocals.wav --target-voice target-voice.wav --out converted-vocals.wav
-```
-
-`style_preserved_svc`는 `svc` task의 기본 라우트로, 원곡의 창법/스타일을 유지하면서 목소리만 바꾼다. **주의**: 이 GGUF 패키지의 보코더는 네이티브 24kHz(Nyquist 12kHz)로 출력해 Seed-VC(44.1kHz, Nyquist 22kHz)보다 고음역 디테일이 적다 — `applyVocalTimbre()`의 게이트 단계에서 `-ar 44100`으로 리샘플링하지만 12kHz 위 대역이 새로 생기지는 않는다. 실측(2026-09-17)에서 Seed-VC 대비 뚜렷한 음질 우위는 확인되지 않았고(사용자 청취 확인 결과 "차이를 잘 모르겠다"), 무음 구간 할루시네이션 문제도 동일하게 있었다(위 게이트로 해결) — 그래서 어느 쪽이 더 나은지는 곡/참조 오디오에 따라 달라질 수 있다고 보고 `POST /vocal-timbre/apply`에 `engine: 'seed_vc' | 'vevo2'`를 받아 프론트에서 사용자가 선택하게 했다.
-
-모델은 `models/audio-cpp/audio.cpp-gguf/Vevo2-GGUF/vevo2-q8_0.gguf`(Q8_0, 약 3.2GB)이며 `scripts/download_models.py`의 프리픽스 목록에 포함되어 있다. 빌드 시 `-Models`에 `vevo2`를 추가해야 한다(위 "audio.cpp 빌드" 섹션 참고) — 빠뜨리면 `audiocpp_cli failed: unsupported model family hint: vevo2`로 실패한다(실측 확인).
-
-모델 파일이 없으면 "Seed-VC 모델이 없습니다. scripts/download_models.py를 실행해 주세요." 오류가 납니다. 결과물은 보컬 분리(STEM)와 음색 변환을 순서대로 거치므로 원곡보다 음질이 떨어질 수 있고, 참조 음색과의 유사도는 참조 오디오 품질(짧고 깨끗할수록 좋음)에 크게 좌우됩니다.
+> **제거된 엔진 (2026-09-25)**: Seed-VC와 Vevo2는 결과 음질이 좋지 않아 음색 변조에서 뺐습니다(코드, 모델 파일, 다운로드 스크립트 항목 삭제). 이에 따라 긴 보컬을 10초 창으로 나눠 변환하던 청크 처리와 참조 audio 선택도 함께 없앴습니다(RVC는 긴 오디오를 스스로 조용한 지점에서 나눕니다). audio.cpp의 `seed_vc`/`vevo2` 패밀리는 이미 빌드된 실행 파일 안에 남아 있지만 앱은 쓰지 않으며, 다음 재빌드부터 `-Models` 목록에서 빼도 됩니다.
 
 ## "악기만"/ABC 커버를 GGUF에서 쓰려면 Python도 필요
 
@@ -231,7 +192,7 @@ GGUF 모델로 최종 오디오를 생성하는 데는 이 문서만으로 충�
 엔진에 패밀리가 컴파일돼 있어야 한다(없으면 "unsupported model family hint"). 재빌드는 `engine\audio.cpp\run-build.ps1`을 실행한다(로그 `build-asr.log`, 끝에 `EXIT=0` 확인). 현재 `-Models` 목록:
 
 ```
-yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc,vevo2,qwen3_tts,chatterbox,qwen3_asr,qwen3_forced_aligner,nemotron_asr,vibevoice_asr,voxcpm2,omnivoice,supertonic,fish_audio,magpie_tts,rvc,meanvc2,dots_tts,stable_audio
+yue2,htdemucs,bs_roformer,audiosr,muscriptor,qwen3_tts,chatterbox,qwen3_asr,qwen3_forced_aligner,nemotron_asr,vibevoice_asr,voxcpm2,omnivoice,supertonic,fish_audio,magpie_tts,rvc,meanvc2,dots_tts,stable_audio
 ```
 
 새 모델을 추가하는 절차: ① `-Models`에 패밀리 추가 후 재빌드 ② `backend/tts.mjs`의 `TTS_FAMILIES`/`ASR_FAMILIES`에 파일·크기·정밀도 등록 ③ `buildTtsArgs`에 CLI 인자 분기 추가 ④ 한국어 문장으로 실측(`test/tts-model-comparison/`). 한국어를 지원하지 않는 모델은 넣지 않는다.

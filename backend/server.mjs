@@ -36,9 +36,8 @@ const HTDEMUCS_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf', '
 const MEL_BAND_ROFORMER_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf', 'Mel-Band-RoFormer-GGUF', 'mel-band-roformer-f16.gguf');
 const AUDIOSR_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf', 'AudioSR-GGUF', 'audiosr-basic-f32.gguf');
 const MUSCRIPTOR_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf', 'MuScriptor-Small-GGUF', 'muscriptor-small-f32.gguf');
-const SEED_VC_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf', 'SeedVC-MLX-GGUF', 'seed-vc-mlx-q8_0.gguf');
-const VEVO2_MODEL_PATH = path.join('models', 'audio-cpp', 'audio.cpp-gguf', 'Vevo2-GGUF', 'vevo2-q8_0.gguf');
-const VOCAL_TIMBRE_ENGINES = new Set(['seed_vc', 'vevo2', 'rvc']);
+// Song-vocal engines of the timbre-transform window that convert a cached vocal in one request (DDSP-SVC trains per job instead).
+const VOCAL_TIMBRE_ENGINES = new Set(['rvc']);
 const STEM_MODES = {
   full: { family: 'htdemucs', modelPath: HTDEMUCS_MODEL_PATH, stems: ['vocals', 'drums', 'bass', 'other'], missingModel: 'STEM 분리 모델(HTDemucs)이 없습니다. scripts/download_models.py를 실행해 주세요.' },
   vocal: { family: 'mel_band_roformer', modelPath: MEL_BAND_ROFORMER_MODEL_PATH, stems: ['vocals', 'instrumental'], missingModel: 'STEM 분리 모델(Mel-Band RoFormer)이 없습니다. scripts/download_models.py를 실행해 주세요.' },
@@ -77,8 +76,6 @@ const DEFAULT_ENGINE_PATH = path.join('engine', 'audio.cpp', 'build', 'windows-c
 const DEFAULT_COMFYUI_ENDPOINT = 'http://127.0.0.1:8190';
 // Own install under engine/ (gitignored, same as engine/audio.cpp).
 const DEFAULT_COMFYUI_ENGINE_PATH = path.join('engine', 'ComfyUI');
-const CHUNK_SECONDS = 10;
-const CHUNK_OVERLAP_SECONDS = 2;
 const DEFAULT_DDSP_SVC_PATH = path.join('test', 'DDSP-SVC');
 const COMFYUI_GENERATE_DEADLINE_MS = GENERATE_TIMEOUT_MS;
 const COMFYUI_MAX_DURATION_SECONDS = 240;
@@ -99,25 +96,6 @@ const DEFAULT_VISUALIZER_AMPLITUDE = 2;
 const VOCAL_HINTS = { male: ', male vocal', female: ', female vocal', duet: ', duet: male and female vocals' };
 const vocalHint = (gender) => VOCAL_HINTS[gender] || '';
 
-// Chunk/overlap come from the API as {chunkSeconds, overlapSeconds} (UI defaults 10s/2s). Overlap
-// is clamped to at most half the chunk so the plan always strides forward.
-function resolveChunkParams(chunkSeconds, overlapSeconds) {
-  const chunk = Number.isFinite(chunkSeconds) && chunkSeconds >= 1 ? Math.min(120, Math.round(chunkSeconds)) : CHUNK_SECONDS;
-  const maxOverlap = Math.floor(chunk / 2);
-  const overlap = Number.isFinite(overlapSeconds) && overlapSeconds >= 0 ? Math.min(maxOverlap, Math.round(overlapSeconds)) : Math.min(maxOverlap, CHUNK_OVERLAP_SECONDS);
-  return { chunkSeconds: chunk, overlapSeconds: overlap, edgeTrimSeconds: overlap / 2 };
-}
-function buildChunkPlan(durationSeconds, chunkSeconds = CHUNK_SECONDS, overlapSeconds = CHUNK_OVERLAP_SECONDS) {
-  const chunks = [];
-  const stride = Math.max(1, chunkSeconds - overlapSeconds);
-  for (let start = 0; start < durationSeconds - 0.001;) {
-    const duration = Math.min(chunkSeconds, durationSeconds - start);
-    chunks.push({ start, duration });
-    if (start + duration >= durationSeconds - 0.001) break;
-    start += stride;
-  }
-  return chunks;
-}
 // YuE2 has no dedicated instrumental flag and both the audio.cpp and Python engines require
 // non-empty lyrics (audio.cpp throws "Yue2 requires non-empty lyrics" outright), so "instrumental"
 // mode can only ever be a soft style hint on top of the real lyrics, not a way to omit them.
@@ -570,31 +548,6 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   // "음색 변조" 팝업의 "참조 보컬" 표시용: 참조 오디오를 mel_band_roformer로 한 번 더 분리해
   // vocals를 dataUrl로 돌려준다. 원본(prepare)과 달리 preview 캐시가 없어 선택할 때마다 다시
   // 돌리며, 결과는 보관하지 않는다.
-  async function separateReferenceVocal(referenceDataUrl) {
-    const match = typeof referenceDataUrl === 'string' && referenceDataUrl.match(/^data:(audio\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
-    if (!match) throw fail(400, '지원하지 않는 참조 오디오 형식입니다.');
-    const ext = AUDIO_MIME[match[1]];
-    if (!ext) throw fail(400, '지원하지 않는 오디오 형식입니다. MP3/WAV/FLAC/M4A/OGG 파일을 사용해 주세요.');
-    const buffer = Buffer.from(match[2], 'base64');
-    if (buffer.length > 200 * 1024 * 1024) throw fail(413, '참조 오디오 파일이 너무 큽니다. 200MB 이하로 줄여 주세요.');
-    const workDir = path.join(outputDirectory, `timbre-ref-${randomUUID()}`);
-    await mkdir(workDir, { recursive: true });
-    try {
-      const sourceRaw = path.join(workDir, `source-raw.${ext}`);
-      await writeFile(sourceRaw, buffer);
-      const sourceFile = path.join(workDir, 'source.wav');
-      await new Promise((resolve, reject) => {
-        const child = spawnImpl('ffmpeg', ['-y', '-i', sourceRaw, sourceFile], { windowsHide: true });
-        child.once('error', reject);
-        child.once('close', (code) => code === 0 ? resolve() : reject(new Error(`ffmpeg exited with code ${code}`)));
-      }).catch(() => { throw fail(502, '참조 오디오 변환에 실패했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
-      await separateStemsCore(sourceFile, path.join(workDir, 'stems'), 'vocal');
-      const vocals = await readFile(path.join(workDir, 'stems', 'vocals.wav'));
-      return { vocalsDataUrl: `data:audio/wav;base64,${vocals.toString('base64')}` };
-    } finally {
-      await rm(workDir, { recursive: true, force: true }).catch(() => {});
-    }
-  }
   async function runAudioSr(inputWav, outputWav) {
     const engine = resolveConfigPath(settings.enginePath, DEFAULT_ENGINE_PATH);
     const args = ['--task', 's2s', '--family', 'audiosr', '--model', path.join(root, AUDIOSR_MODEL_PATH), '--backend', 'cuda', '--audio', inputWav, '--request-option', 'num_inference_steps=50', '--request-option', 'guidance_scale=3.5', '--request-option', 'ddim_eta=1.0', '--request-option', 'seed=42', '--out', outputWav];
@@ -692,8 +645,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       await rm(workDir, { recursive: true, force: true }).catch(() => {});
     }
   }
-  // Shared by runSeedVcSvc()/runVevo2Svc() -- both are just "run audiocpp_cli with these args and
-  // fail clearly if it doesn't produce outputWav", differing only in the args themselves.
+  // Shared by the voice-conversion runners: run audiocpp_cli with these args and fail clearly if it does not produce outputWav.
   async function runSvcCli(args, engineNotRunnableMessage) {
     const engine = resolveConfigPath(settings.enginePath, DEFAULT_ENGINE_PATH);
     const outputWav = args[args.indexOf('--out') + 1];
@@ -710,25 +662,6 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     }).catch(() => { throw fail(502, engineNotRunnableMessage); });
     if (log.signal) throw fail(502, '보컬 음색 변환이 제한 시간을 넘어 중단되었습니다.');
     if (log.code !== 0 || !(await exists(outputWav))) throw fail(502, `보컬 음색 변환에 실패했습니다 (종료 코드 ${log.code}). ${log.text.trim().slice(0, 500) || '알 수 없는 오류'}`);
-  }
-  async function runSeedVcSvc(vocalsWav, voiceRefWav, outputWav, options = {}) {
-    // f0_condition defaults to false on the v1_svc route (engine/audio.cpp/docs/models/seed_vc.md),
-    // meaning the model gets no pitch-contour guidance from the source singing -- without it the
-    // output loses the correct pitch trajectory entirely, which is what produced the "quacking"
-    // artifact reported in real testing (2026-09-16). Singing voice conversion needs this on.
-    //
-    // auto_f0_adjust and num_inference_steps=80 (upstream Plachtaa/seed-vc's own Gradio UI
-    // recommends 50-100 "for best quality", and defaults auto_f0_adjust to true -- audio.cpp's
-    // CLI defaults both to off/30) were added 2026-09-17 to match the upstream-recommended
-    // combination after a real "tearing" quality report. In direct A/B testing this combination
-    // barely moved a spectral-flatness noise measurement on the specific pathological passage that
-    // prompted the report, so it is not a fix on its own -- see the silence-gate step in
-    // applyVocalTimbreCore() and the vevo2 alternative engine for the changes that actually mattered.
-    // It is kept anyway because it matches the authors' own recommended defaults at no extra cost.
-    const f0Condition = options.f0Condition !== false;
-    const autoF0Adjust = options.autoF0Adjust !== false;
-    const inferenceSteps = Math.max(1, Math.min(200, Math.round(Number(options.inferenceSteps)) || 80));
-    await runSvcCli(['--task', 'svc', '--family', 'seed_vc', '--model', path.join(root, SEED_VC_MODEL_PATH), '--backend', 'cuda', '--task-route', 'v1_svc', '--request-option', `f0_condition=${f0Condition}`, '--request-option', `auto_f0_adjust=${autoF0Adjust}`, '--request-option', `num_inference_steps=${inferenceSteps}`, '--audio', vocalsWav, '--voice-ref', voiceRefWav, '--out', outputWav], 'Seed-VC 엔진을 실행할 수 없습니다.');
   }
   // RVC converts into a packaged voice (no reference clip); MeanVC2 is zero-shot from a reference clip.
   async function vcModelPath(familyId, size, precision) {
@@ -758,15 +691,6 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const trimmedRef = path.join(path.dirname(outputWav), `meanvc-ref-${randomUUID().slice(0, 8)}.wav`);
     await runFfmpegCli(['-y', '-i', voiceRefWav, '-t', '20', '-ar', '16000', '-ac', '1', trimmedRef], '참조 오디오 자르기');
     await runSvcCli(['--task', 'vc', '--family', 'meanvc2', '--model', await vcModelPath('meanvc2', '120ms/40ms', precision), '--backend', 'cuda', '--audio', vocalsWav, '--voice-ref', trimmedRef, '--out', outputWav], 'MeanVC2 엔진을 실행할 수 없습니다.');
-  }
-  async function runVevo2Svc(vocalsWav, voiceRefWav, outputWav, route = 'style_preserved_svc') {
-    // style_preserved_svc is vevo2's default svc route: convert the source singing to the target
-    // voice while keeping the source's own singing style/prosody (engine/audio.cpp/docs/models/vevo2.md).
-    // Zero-shot like Seed-VC (a target-voice clip, no training), added 2026-09-17 as an alternative
-    // engine after Seed-VC's SVC output kept producing artifacts regardless of reference or parameters.
-    const selectedRoute = route === 'style_preserved_vc' ? route : 'style_preserved_svc';
-    const task = selectedRoute.endsWith('_vc') ? 'vc' : 'svc';
-    await runSvcCli(['--task', task, '--family', 'vevo2', '--model', path.join(root, VEVO2_MODEL_PATH), '--backend', 'cuda', '--task-route', selectedRoute, '--source-audio', vocalsWav, '--target-voice', voiceRefWav, '--out', outputWav], 'Vevo2 엔진을 실행할 수 없습니다.');
   }
   // ffmpeg's volumedetect filter is the cheapest way to read a file's average loudness without
   // pulling in a full loudness-analysis library -- parses the "mean_volume: X dB" line it prints
@@ -809,12 +733,10 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       return null;
     }
   }
-  // Shared by every SVC-style engine (Seed-VC, Vevo2, and later DDSP-SVC): matches the
-  // converted vocal's loudness to the pre-conversion vocal, then gates it silent wherever the
-  // source vocal is true digital silence, since none of these models pass true silence through
-  // on their own (confirmed for Seed-VC/Vevo2 in real testing 2026-09-17; DDSP-SVC is the
-  // same class of frame-aligned SVC artifact, so the fix applies unchanged). Returns the path of
-  // the final gated WAV inside workDir -- caller decides where that result gets copied to.
+  // Shared by every song-vocal converter (RVC, DDSP-SVC): matches the converted vocal's loudness to the
+  // pre-conversion vocal, then gates it silent wherever the source vocal is true digital silence, since
+  // frame-aligned voice converters do not pass true silence through on their own. Returns the path of the
+  // final gated WAV inside workDir -- the caller decides where that result gets copied to.
   async function postProcessConvertedVocal(convertedVocalWav, originalVocalWav, workDir) {
     const [originalDb, convertedDb] = await Promise.all([measureMeanVolumeDb(originalVocalWav), measureMeanVolumeDb(convertedVocalWav)]);
     const gainDb = (originalDb !== null && convertedDb !== null) ? Math.max(-6, Math.min(18, originalDb - convertedDb)) : 0;
@@ -831,8 +753,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     }).catch(() => { throw fail(502, '변환된 보컬의 음량을 맞추지 못했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
     // A sidechain noise gate keyed off the pre-conversion vocal forces the converted output
     // silent wherever the source actually is, which is what real singing does anyway. -ar 44100
-    // also normalizes engines with a different native sample rate (e.g. vevo2's 24kHz) to match
-    // the rest of the pipeline.
+    // also normalizes engines with a different native sample rate to match the rest of the pipeline.
     const gatedVocals = path.join(workDir, 'gated-vocals.wav');
     await new Promise((resolve, reject) => {
       const child = spawnImpl('ffmpeg', ['-y', '-i', leveledVocals, '-i', originalVocalWav, '-filter_complex', 'sidechaingate=threshold=0.003:ratio=20:attack=5:release=100:range=0.02', '-ar', '44100', gatedVocals], { windowsHide: true });
@@ -841,104 +762,28 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     }).catch(() => { throw fail(502, '변환된 보컬의 무음 구간을 정리하지 못했습니다. ffmpeg가 설치되어 있는지 확인해 주세요.'); });
     return gatedVocals;
   }
-  // Seed-VC only converts a single voice track, so the completed song's vocals must be pulled out
-  // first (reusing the mel_band_roformer STEM split) -- the instrumental is left alone and mixed
-  // back in client-side by the STEM1-style editor UI (VocalTimbreDialog), not here.
+  // Converts the cached source vocal of a timbre-transform preview with RVC (the completed song's vocals were already
+  // pulled out by prepareTimbrePreview(); the instrumental is left alone and mixed back in client-side).
   //
-  // The separated (pre-conversion) vocal is cached as vocals-original.wav so repeated "적용" clicks
-  // with a different reference re-convert from the same clean source instead of compounding
-  // conversions, while the servable vocals.wav (read by the existing GET /stems/vocals route) is
-  // overwritten with each new conversion result -- this lets the frontend reuse the STEM dialog's
-  // existing per-stem fetch/decode/waveform code unchanged.
-  //
-  // Seed-VC's raw output measured ~7-10dB quieter than the original (pre-conversion) vocal in
-  // real testing (2026-09-16) -- quiet enough that once mixed with the instrumental it sounded
-  // like the vocal had vanished entirely, not just changed timbre. So before anything else uses
-  // the converted vocal, its level is matched to the pre-conversion vocal's measured loudness.
-  // stems: 이 소스 오디오의 스템 캐시 디렉터리(prepareTimbrePreview()가 이미 vocals-original.wav를
-  // 채워둔 상태여야 함 -- 이 함수는 더 이상 분리를 직접 하지 않는다). 프로젝트와 무관, "음색 변조"
-  // 팝업이 라이브러리에서 자유롭게 고른 원본 오디오에 대해서도 그대로 쓸 수 있다.
-  async function applyVocalTimbreCore(stems, voiceRefDataUrl, engineChoice, engineOptions, onProgress) {
-    const svcEngine = VOCAL_TIMBRE_ENGINES.has(engineChoice) ? engineChoice : 'seed_vc';
-    const options = engineOptions && typeof engineOptions === 'object' ? engineOptions : {};
+  // The separated (pre-conversion) vocal stays cached as vocals-original.wav, so repeated "apply" clicks re-convert
+  // from the same clean source instead of compounding conversions, while the servable vocals.wav is overwritten with
+  // each new result. The converted vocal is loudness-matched to the original and gated silent where the source is.
+  async function applyVocalTimbreCore(stems, engineChoice, options, onProgress) {
+    if (!VOCAL_TIMBRE_ENGINES.has(engineChoice)) throw fail(400, '지원하지 않는 음색 변조 엔진입니다.');
     const engine = resolveConfigPath(settings.enginePath, DEFAULT_ENGINE_PATH);
     if (!(await exists(engine))) throw fail(400, `audio.cpp 실행 파일을 찾을 수 없습니다: ${path.relative(root, engine)}. 설정에서 경로를 확인해 주세요.`);
-    if (svcEngine === 'vevo2') {
-      if (!(await exists(path.join(root, VEVO2_MODEL_PATH)))) throw fail(400, 'Vevo2 모델이 없습니다. scripts/download_models.py를 실행해 주세요.');
-    } else if (svcEngine === 'seed_vc' && !(await exists(path.join(root, SEED_VC_MODEL_PATH)))) throw fail(400, 'Seed-VC 모델이 없습니다. scripts/download_models.py를 실행해 주세요.');
-    const needsReference = svcEngine !== 'rvc';
-    const match = typeof voiceRefDataUrl === 'string' && voiceRefDataUrl.match(/^data:(audio\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
-    if (needsReference && !match) throw fail(400, '목표 음색의 참조 오디오(MP3/WAV/FLAC/M4A/OGG)를 선택해 주세요.');
-    const ext = match ? AUDIO_MIME[match[1]] : 'wav';
-    if (!ext) throw fail(400, '지원하지 않는 오디오 형식입니다. MP3/WAV/FLAC/M4A/OGG 파일을 사용해 주세요.');
-    const buffer = match ? Buffer.from(match[2], 'base64') : Buffer.alloc(0);
-    if (buffer.length > 50 * 1024 * 1024) throw fail(413, '참조 오디오 파일이 너무 큽니다. 50MB 이하로 줄여 주세요.');
     const originalVocalsWav = path.join(stems, 'vocals-original.wav');
     if (!(await exists(originalVocalsWav))) throw fail(502, '보컬/악기 분리 결과를 찾을 수 없습니다.');
     const workDir = path.join(outputDirectory, `vocal-convert-${randomUUID()}`);
     await mkdir(workDir, { recursive: true });
     try {
-      const voiceRefSource = path.join(workDir, `voice-ref.${ext}`);
-      if (needsReference) await writeFile(voiceRefSource, buffer);
-      // Must be a different filename from voiceRefSource -- when the reference clip is itself a
-      // .wav, both used to resolve to the same "voice-ref.wav" path, so ffmpeg was asked to read
-      // and write the same file at once ("FFmpeg cannot edit existing files in-place") and always
-      // failed with a misleading "ffmpeg가 설치되어 있는지 확인해 주세요" error (2026-09-16, real bug).
-      const voiceRefWav = path.join(workDir, 'voice-ref-normalized.wav');
-      if (needsReference) await runFfmpegCli(['-y', '-i', voiceRefSource, '-ar', '44100', '-ac', '1', voiceRefWav], '참조 오디오 변환');
-      // One conversion call per (chunk of the) vocal, whatever the engine.
-      const convertOne = async (sourceWav, outputWav) => {
-        if (svcEngine === 'vevo2') await runVevo2Svc(sourceWav, voiceRefWav, outputWav, options.vevoRoute);
-        else if (svcEngine === 'rvc') await runRvcSvc(sourceWav, outputWav, options);
-        else await runSeedVcSvc(sourceWav, voiceRefWav, outputWav, options);
-      };
-
-      // 긴 보컬은 겹치는 10초 창으로 나눠 처리한다. Seed-VC/Vevo2는 소스
-      // 전체를 한 번에 변환할 때 길어질수록 점점 노이즈/변형으로 무너지는 것이 실제 테스트로
-      // 확인됐다(10초는 들을 만한데 2분이 되면 이상한 소리만 나오는 증상, 2026-09-22). 참조
-      // 목소리(voiceRefWav)는 조각과 무관해 모든 조각에 같은 것을 사용하며, 겹친 양 끝을 1초씩
-      // 잘라 이어붙인다.
-      const durationMs = await measureDurationMs(originalVocalsWav);
-      const durationSeconds = durationMs ? durationMs / 1000 : 0;
-      const chunkParams = resolveChunkParams(options.chunkSeconds, options.overlapSeconds);
+      if (typeof onProgress === 'function') onProgress(10, '음색 변환 중');
       // RVC splits long audio at quiet points by itself (and reloads ~1 GB of weights per run), so it takes the whole vocal.
-      // Seed-VC/Vevo collapse on long input and still need the overlapping 10 s windows.
-      const useChunking = svcEngine !== 'rvc' && durationSeconds > chunkParams.chunkSeconds;
-      const chunkPlan = useChunking ? buildChunkPlan(durationSeconds, chunkParams.chunkSeconds, chunkParams.overlapSeconds) : [];
-      const warning = useChunking
-        ? `긴 보컬을 ${chunkParams.chunkSeconds}초 단위(겹침 ${chunkParams.overlapSeconds}초)로 ${chunkPlan.length}개로 나눠 같은 참조 목소리로 변환한 뒤 연결했습니다. 조각 경계 부근에서 음색 전환이 어색할 수 있습니다.`
-        : null;
-
       const convertedVocals = path.join(workDir, 'converted-vocals.wav');
-      const runFfmpeg = (args, label) => runFfmpegCli(args, label);
-
-      if (useChunking) {
-        const stitchedParts = [];
-        if (typeof onProgress === 'function') onProgress(5, '보컬 조각 준비 중 (0/' + chunkPlan.length + ')');
-        for (let index = 0; index < chunkPlan.length; index += 1) {
-          const chunk = chunkPlan[index];
-          const chunkSource = path.join(workDir, `chunk-${String(index).padStart(3, '0')}.wav`);
-          const sourceFilter = `atrim=start=${chunk.start.toFixed(3)}:duration=${chunk.duration.toFixed(3)},asetpts=PTS-STARTPTS`;
-          await runFfmpeg(['-y', '-i', originalVocalsWav, '-af', sourceFilter, '-ar', '44100', '-ac', '1', chunkSource], '보컬 입력 조각 생성');
-          const rawOutput = path.join(workDir, `chunk-${String(index).padStart(3, '0')}-raw.wav`);
-          await convertOne(chunkSource, rawOutput);
-          const stitchedPart = path.join(workDir, `chunk-${String(index).padStart(3, '0')}-stitched.wav`);
-          const trimStart = index === 0 ? 0 : chunkParams.edgeTrimSeconds;
-          const trimEnd = index === chunkPlan.length - 1 ? null : Math.max(trimStart, chunk.duration - chunkParams.edgeTrimSeconds);
-          const trimFilter = `atrim=start=${trimStart.toFixed(3)}${trimEnd === null ? '' : `:end=${trimEnd.toFixed(3)}`},asetpts=PTS-STARTPTS`;
-          await runFfmpeg(['-y', '-i', rawOutput, '-af', trimFilter, '-ar', '44100', '-ac', '1', stitchedPart], '보컬 결과 조각 정리');
-          stitchedParts.push(stitchedPart);
-          if (typeof onProgress === 'function') onProgress(Math.round(5 + ((index + 1) / chunkPlan.length) * 85), `음색 변환 중 (${index + 1}/${chunkPlan.length})`);
-        }
-        const concatInputs = stitchedParts.flatMap((file) => ['-i', file]);
-        const concatFilter = `${stitchedParts.map((_, index) => `[${index}:a]`).join('')}concat=n=${stitchedParts.length}:v=0:a=1[out]`;
-        await runFfmpeg(['-y', ...concatInputs, '-filter_complex', concatFilter, '-map', '[out]', '-ar', '44100', '-ac', '1', convertedVocals], '보컬 결과 조각 연결');
-      } else {
-        await convertOne(originalVocalsWav, convertedVocals);
-      }
+      await runRvcSvc(originalVocalsWav, convertedVocals, options && typeof options === 'object' ? options : {});
       const gatedVocals = await postProcessConvertedVocal(convertedVocals, originalVocalsWav, workDir);
       await copyFile(gatedVocals, path.join(stems, 'vocals.wav'));
-      return { ok: true, warning, chunkCount: chunkPlan.length };
+      return { ok: true, warning: null };
     } finally {
       await rm(workDir, { recursive: true, force: true }).catch(() => {});
     }
@@ -1468,7 +1313,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const selected = pythonModelFor(project);
     const modelDir = path.join(root, selected.modelDir);
     const vaeDir = path.join(root, selected.vaeDir);
-    if (!(await exists(modelDir)) || !(await exists(vaeDir))) throw fail(400, '원본 모델 파일이 없습니다. 모델 관리 화면에서 다운로드 상태를 확인해 주세요.');
+    if (!(await exists(path.join(modelDir, 'model.safetensors'))) || !(await exists(path.join(vaeDir, 'model.safetensors')))) throw fail(400, '원본 YuE2 모델 파일이 없습니다. "악기만" 생성, ABC 악보 기능, 원본 모델 생성에는 이 모델이 필요하니 모델을 다시 내려받아 주세요(scripts/download_models.py).');
     if (!project.lyrics.trim() || !project.style.trim()) throw fail(400, '가사와 음악 스타일이 필요합니다.');
     if (project.abc && project.abc.trim() && project.cot === 'off') throw fail(400, '악보를 사용하려면 작곡 계획을 "멜로디 계획" 또는 "멜로디와 코드 계획"으로 설정해 주세요.');
     if (action === 'plan' && project.cot === 'off') throw fail(400, '"계획 없이 생성"에서는 심볼릭 작곡을 만들 수 없습니다. 작곡 계획을 바꿔 주세요.');
@@ -1686,6 +1531,25 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     if (!info?.isFile()) return null;
     return { path: relativePath.replaceAll(path.sep, '/'), size: info.size, state: 'complete', completedBytes: info.size };
   }
+  // The download manifest is a static record of what the download script fetched, so files the user deleted later
+  // still read "complete" there. Files that are gone from disk are dropped from the listing (and from the totals).
+  async function inventoryOnDisk(inventory) {
+    let removedBytes = 0;
+    const repositories = await Promise.all((inventory.repositories || []).map(async (repo) => {
+      const dir = path.join(root, 'models', ...String(repo.id).split('/'));
+      const kept = [];
+      let repoRemoved = 0;
+      for (const file of repo.files || []) {
+        const present = file.state !== 'complete' || await stat(path.join(dir, file.path)).then((info) => info.isFile() && info.size > 0, () => false);
+        if (present) kept.push(file); else repoRemoved += file.size || 0;
+      }
+      removedBytes += repoRemoved;
+      const completedBytes = kept.filter((file) => file.state === 'complete').reduce((sum, file) => sum + (file.size || 0), 0);
+      return { ...repo, files: kept, totalBytes: Math.max(0, (repo.totalBytes || 0) - repoRemoved), completedBytes };
+    }));
+    const completedBytes = repositories.reduce((sum, repo) => sum + repo.completedBytes, 0);
+    return { ...inventory, repositories, totalBytes: Math.max(0, (inventory.totalBytes || 0) - removedBytes), completedBytes };
+  }
   async function localModelRepositories() {
     const specs = [
       { id: 'comfy-org/YuE2', path: path.join('models', 'comfy-org', 'YuE2'), files: [path.join('models', 'comfy-org', 'YuE2', 'checkpoints', 'yue2_3b_int8_convrot.safetensors')] },
@@ -1821,7 +1685,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         }));
       }
       if (req.method === 'GET' && pathname === '/api/models') {
-        const inventory = await readJson(path.join(root, 'model-download-status.json'), { schemaVersion: 1, updatedAt: null, state: 'not_started', totalBytes: 0, completedBytes: 0, repositories: [] });
+        const inventory = await inventoryOnDisk(await readJson(path.join(root, 'model-download-status.json'), { schemaVersion: 1, updatedAt: null, state: 'not_started', totalBytes: 0, completedBytes: 0, repositories: [] }));
         const localRepositories = await localModelRepositories();
         const localBytes = localRepositories.reduce((sum, repo) => sum + repo.completedBytes, 0);
         return send(200, { ...inventory, totalBytes: inventory.totalBytes + localBytes, completedBytes: inventory.completedBytes + localBytes, repositories: [...(inventory.repositories || []), ...localRepositories], engineReady: await engineReady() });
@@ -2473,14 +2337,6 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         return send(200, { previewId });
       }
       // "음색 변조" 참조 보컬: 참조 오디오를 즉석 분리해 vocals dataUrl만 돌려준다.
-      if (req.method === 'POST' && pathname === '/api/timbre-transform/reference/separate') {
-        const input = await body(req, 200 * 1024 * 1024);
-        if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
-        generating = true;
-        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 60000 };
-        try { return send(200, await separateReferenceVocal(input.referenceDataUrl)); }
-        finally { generating = false; generationStatus = null; }
-      }
       const timbreAudioMatch = pathname.match(/^\/api\/timbre-transform\/([^/]+)\/audio$/);
       if (timbreAudioMatch && req.method === 'GET') {
         const file = path.join(timbrePreviewDir(timbreAudioMatch[1]), 'source.wav');
@@ -2522,7 +2378,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       }
       const timbreLegacyApplyMatch = pathname.match(/^\/api\/timbre-transform\/([^/]+)\/legacy\/apply$/);
       if (timbreLegacyApplyMatch && req.method === 'POST') {
-        const input = await body(req, 50 * 1024 * 1024);
+        const input = await body(req, 64 * 1024);
         const dir = timbrePreviewDir(timbreLegacyApplyMatch[1]);
         if (!(await exists(dir))) throw fail(404, '원본 오디오 준비 정보를 찾을 수 없습니다. 원본을 다시 선택해 주세요.');
         if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
@@ -2533,17 +2389,10 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           generationStatus.progress = progress;
           generationStatus.detail = detail;
         };
-        try { return send(200, await applyVocalTimbreCore(path.join(dir, 'stems'), input.dataUrl, input.engine, {
-          f0Condition: input.seedF0Condition,
-          autoF0Adjust: input.seedAutoF0Adjust,
-          inferenceSteps: input.seedInferenceSteps,
-          vevoRoute: input.vevoRoute,
+        try { return send(200, await applyVocalTimbreCore(path.join(dir, 'stems'), input.engine, {
           rvcVoice: input.rvcVoice,
           rvcSemitone: input.rvcSemitone,
           rvcRetrieval: input.rvcRetrieval,
-          meanvcPrecision: input.meanvcPrecision,
-          chunkSeconds: input.chunkSeconds,
-          overlapSeconds: input.overlapSeconds,
         }, onProgress)); }
         finally { generating = false; generationStatus = null; }
       }

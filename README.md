@@ -15,8 +15,8 @@
 - **채널 분리**: STEM 분리와 같은 UI를 AI 모델 없이 재사용 — 완성곡을 왼쪽/오른쪽 채널로 나눠 각각 EQ/FxSound를 적용한 뒤 다시 합쳐 저장(스테레오 곡만 가능)
 - **음원 복원 (실험적)**: 사이드바의 "음원 복원" 메뉴에서 저음질 외부 오디오 파일을 업로드하면 AudioSR로 복원해 새 완성곡으로 라이브러리에 추가. 스테레오는 왼쪽/오른쪽을 각각 복원한 뒤 합쳐서 스테레오를 유지(AudioSR 자체는 모노만 출력하는 모델 한계가 있음). 이미 무손실인 오디오에는 효과 없음 — 실제로 저음질인 소스 전용. **클릭/틱 잡음이 재현되는 것을 확인해 실험적 기능으로 표시했습니다**(`progress.md` 참고)
 - **MIDI로 내보내기**: 완성곡 메뉴에서 audio.cpp의 MuScriptor로 오디오를 표준 MIDI 파일(악기·음표·타이밍)로 변환. 바로 다운로드하지 않고 SVG 피아노롤 팝업으로 먼저 보여줘서 음표를 확인·이동·리사이즈·삭제·추가한 뒤 저장(또는 취소)할 수 있고, "미리듣기" 버튼으로 브라우저 안에서 간단한 신디사이저 소리로 편집 내용을 바로 들어볼 수 있음(Web Audio 오실레이터 기반). 매우 빠르고(RTX 5070에서 30초 곡 기준 약 0.7초) 결과는 곡별로 캐시됨
-- **음색 변조 (실험적)**: 완성곡(또는 라이브러리의 어떤 오디오라도)의 보컬 음색을 바꾸는 통합 팝업 — 3개 탭에서 엔진을 고릅니다.
-  - **기존 방식 (Seed-VC / Vevo2)**: 목표 음색의 짧은 참조 오디오를 고르면 보컬만 Singing Voice Conversion으로 변환. 변환 직후 원본과의 음량 차이를 자동 보정하고, 무음 구간에 엔진이 채우는 잡음은 게이트로 정리합니다. **긴 보컬은 10초 창(2초 겹침, 경계 1초 트림)으로 나눠 각각 변환한 뒤 이어붙여, 10초를 넘기는 입력에서 두 엔진이 소리를 노이즈로 붕괴시키는 문제를 회피합니다.** Seed-VC는 원곡 음정선 사용(F0 condition)·자동 음정 조절·추론 스텝(기본 80)을, Vevo2는 노래용 SVC/말소리용 VC 변환 라우트를 고를 수 있습니다. 결과는 원곡과 비교해 미리 듣고 "저장"으로 새 완성곡으로 라이브러리에 추가(원곡 유지). 보컬 분리+변환을 순서대로 거치므로 원곡보다 음질이 떨어질 수 있고 AudioSR만큼 느립니다(RTX 5070에서 RTF ≈ 0.82).
+- **음색 변조 (실험적)**: 완성곡(또는 라이브러리의 어떤 오디오라도)의 보컬 음색을 바꾸는 통합 팝업 — 두 엔진 중에서 고릅니다.
+  - **RVC**: 내장 목소리 4개나 HuggingFace에서 받은 목소리(라이선스 표기, 미리듣기, 관리 팝업 포함)로 보컬을 변환. 참조 오디오는 필요 없고, 음높이(반음)와 검색 블렌딩을 조절합니다. 변환 직후 원본과의 음량 차이를 자동 보정하고, 무음 구간의 잡음은 게이트로 없앱니다.
   - **DDSP-SVC**: 목표 목소리의 레퍼런스 여러 개로 실제 학습해 변환하는 방식 — 특징 인코더(ContentVec/HubertSoft)·음정 추출기(RMVPE/FCPE)·보코더(NSF-HiFiGAN/PC-NSF-HiFiGAN)·목표 스텝을 고르고, 목표 도달 시 학습을 정확히 중단한 뒤 그 체크포인트로 추론합니다. 프레임 단위로 처리해 긴 입력도 그대로 변환됩니다.
 - 라이브러리(완성곡) / 프로젝트(초안·설정) 완전 분리 — 하나를 지워도 다른 하나는 그대로 유지
 - 재생목록 생성 및 PC에서 연속 재생, 앨범 커버 등록
@@ -122,9 +122,8 @@ python scripts/download_models.py
 - **③ SheetSage2 (선택, "커버"/"오디오에서 추출" 기능 전용)**: 완성곡이나 업로드한 오디오에서 멜로디/코드를 ABC 악보로 추출합니다. ②와는 완전히 별도의 Python 가상환경이 필요합니다(버전 충돌 방지). `ffmpeg`도 PATH에 있어야 합니다. → **[docs/python-engine-setup.md](docs/python-engine-setup.md)의 SheetSage2 절**
 - **④ STEM 분리 / 채널 분리 (선택, 완성곡의 해당 메뉴 전용)**: 완성곡을 보컬/악기 2갈래(mel_band_roformer) 또는 보컬/드럼/베이스/기타 4갈래(htdemucs)로 분리합니다. "채널 분리"(왼쪽/오른쪽)는 AI 모델이 필요 없어 별도 빌드/다운로드가 없습니다. ①과 같은 `audiocpp_cli.exe`를 쓰므로, ①을 빌드할 때 `-Models "yue2,htdemucs,bs_roformer"`로 함께 빌드하면 별도 작업이 필요 없습니다(`bs_roformer`와 `mel_band_roformer`는 같은 CMake 모듈의 별칭이라 하나만 적어도 둘 다 빌드됨. `-Models` 값은 항상 따옴표로 감싸야 합니다). → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)의 STEM 분리/채널 분리 절**
 - **⑤ ComfyUI (선택, "YuE2 - INT8 ConvRot" 모델 전용)**: ComfyUI(v0.35.0+, YuE2 네이티브 지원)를 `engine/ComfyUI`에 독립 설치해 HTTP API로 연동합니다(약 4.2GB — `.venv`+코드, 체크포인트는 하드링크). VRAM 절약 효과는 없고 다운로드 용량만 작습니다 — 저VRAM 환경에서 고를 실익은 적습니다. → **[docs/comfyui-setup.md](docs/comfyui-setup.md)**
-- **⑥ AudioSR (선택, "음원 복원" 메뉴 전용, 실험적)**: 저음질 오디오를 복원하는 audio.cpp의 AudioSR 모델(약 6.18GB, f32 단일 정밀도)입니다. ①을 빌드할 때 `-Models "yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc"`로 `audiosr`을 포함해야 합니다. **클릭/틱 잡음이 재현되는 것을 확인한 실험적 기능**입니다 — `progress.md` 참고. → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)의 음원 복원 절**
-- **⑦ MuScriptor (선택, "MIDI로 내보내기" 메뉴 전용)**: 완성곡을 표준 MIDI 파일로 변환하는 audio.cpp의 MuScriptor 모델(약 412MB). 매우 빠름(RTX 5070에서 30초 곡 기준 약 0.7초). ①을 빌드할 때 `-Models "yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc"`로 `muscriptor`를 포함해야 합니다. → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)의 MIDI로 내보내기 절**
-- **⑧ Seed-VC / Vevo2 (선택, "음색 변조" 메뉴의 기존 방식 탭 전용, 실험적)**: 완성곡의 보컬 음색을 참조 오디오로 바꾸는 audio.cpp의 SVC 모델 두 가지 — Seed-VC(약 2.90GB, MLX Q8_0)와 Vevo2(약 3.2GB, Q8_0). ①을 빌드할 때 `-Models "yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc,vevo2"`로 `seed_vc`와 `vevo2`를 모두 포함해야 합니다. 보컬 분리(STEM)+음색 변환을 순서대로 거치는 다단계 파이프라인이라 원곡보다 음질이 떨어질 수 있고, AudioSR만큼 느립니다(RTX 5070에서 RTF ≈ 0.82). → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)의 보컬 음색 변환 절**
+- **⑥ AudioSR (선택, "음원 복원" 메뉴 전용, 실험적)**: 저음질 오디오를 복원하는 audio.cpp의 AudioSR 모델(약 6.18GB, f32 단일 정밀도)입니다. ①을 빌드할 때 `-Models "yue2,htdemucs,bs_roformer,audiosr,muscriptor"`로 `audiosr`을 포함해야 합니다. **클릭/틱 잡음이 재현되는 것을 확인한 실험적 기능**입니다 — `progress.md` 참고. → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)의 음원 복원 절**
+- **⑦ MuScriptor (선택, "MIDI로 내보내기" 메뉴 전용)**: 완성곡을 표준 MIDI 파일로 변환하는 audio.cpp의 MuScriptor 모델(약 412MB). 매우 빠름(RTX 5070에서 30초 곡 기준 약 0.7초). ①을 빌드할 때 `-Models "yue2,htdemucs,bs_roformer,audiosr,muscriptor"`로 `muscriptor`를 포함해야 합니다. → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)의 MIDI로 내보내기 절**
 - **⑨ Audio Tools 엔진 (audio.cpp, 선택)**: "오디오 도구" 페이지의 TTS(Qwen3-TTS·VoxCPM2·OmniVoice·Fish Audio·Supertonic 3·MagpieTTS·Chatterbox)와 음성 인식(Qwen3-ASR·Nemotron 3.5·VibeVoice-ASR)은 audio.cpp로 실행합니다. 모델은 앱에서 선택해 내려받고(미설치 시 "모델 받기"), 음성 조절(피치·속도·음량·노이즈)은 ffmpeg로 처리합니다. (이전의 AudioAuK 연동은 2026-09-24 제거되었습니다.)
 - **⑩ DDSP-SVC (선택, "음색 변조"의 DDSP-SVC 탭 전용, 실험적)**: 목표 목소리의 레퍼런스 클립들로 SVC 모델을 실제로 학습해(기본 4만 스텝 ≈ 1시간 반) 변환하는 파이프라인. 특징 인코더(ContentVec/HubertSoft)·음정 추출기(RMVPE/FCPE)·보코더(NSF-HiFiGAN/PC-NSF-HiFiGAN)와 목표 스텝을 고르고, 목표에 도달하면 학습을 정확히 중단해 그 체크포인트로 추론합니다. 별도의 DDSP-SVC 설치가 필요합니다(기본 경로 `test\DDSP-SVC`, `ddspSvcPath` 설정).
 
@@ -159,7 +158,7 @@ npm run dev
 ### 6단계. 정상 동작 확인
 
 1. 화면 상단의 연결 표시가 "로컬 연결됨"인지 확인하세요("로컬 연결 대기"이면 `npm run dev`가 아직 백엔드를 못 띄운 것 — 터미널의 에러 메시지를 확인).
-2. "만들기" 화면에서 상단 모델 선택을 방금 설치한 엔진(예: GGUF만 설치했다면 "YuE2 - Q4")으로 맞추세요.
+2. "만들기" 화면에서 상단 모델 선택을 방금 설치한 엔진(예: GGUF만 설치했다면 "YuE2 - Q8")으로 맞추세요.
 3. 예시 가사/스타일을 아무거나 채우고(간편 모드의 "예시로 시작하기"를 써도 됩니다) "노래 만들기"를 누르세요.
 4. 처음 생성은 모델 로딩 때문에 더 오래 걸릴 수 있습니다. 진행률 표시줄이 끝까지 차고 라이브러리에 곡이 생기면 설치 완료입니다.
 5. 실패하면 화면에 뜨는 오류 메시지와 함께 `runs/<프로젝트id>/generate.log`를 확인하세요(원본 Python 엔진은 `runs/<프로젝트id>/py-generate/`에 상세 산출물도 남습니다). 각 엔진 문서의 "자주 만나는 문제" 표도 참고하세요.
@@ -190,7 +189,7 @@ YuE2 모델 가중치(GGUF/원본 모두)는 CC BY-NC 4.0을 따릅니다. 비�
 
 ## 음색 변조 엔진 (audio.cpp)
 
-Seed-VC, Vevo, **MeanVC2**(참조 audio 제로샷, 말소리용), **RVC**(내장 목소리 4개 선택, 참조 audio 불필요), DDSP-SVC(학습형). RVC·MeanVC2 모델은 창에서 "모델 받기"로 내려받습니다.
+**MeanVC2**(참조 audio 제로샷, 말소리용), **RVC**(내장 목소리 4개 선택, 참조 audio 불필요), DDSP-SVC(학습형). RVC·MeanVC2 모델은 창에서 "모델 받기"로 내려받습니다.
 
 ## Audio Tools (audio.cpp 기반)
 
@@ -201,7 +200,7 @@ Seed-VC, Vevo, **MeanVC2**(참조 audio 제로샷, 말소리용), **RVC**(내장
   - 스타일 지시(선택): VoxCPM2, Qwen3 CustomVoice
 - **음성 인식**: Qwen3-ASR(0.6B/1.7B), Nemotron 3.5 ASR, VibeVoice-ASR. 결과는 텍스트로 저장할 수 있습니다.
 - **음성 조절**: ffmpeg(rubberband)로 피치·속도·음량, 노이즈 줄이기.
-- 엔진 빌드에는 `run-build.ps1`의 `-Models` 목록(`yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc,vevo2,qwen3_tts,chatterbox,qwen3_asr,qwen3_forced_aligner,nemotron_asr,vibevoice_asr,voxcpm2,omnivoice,supertonic,fish_audio,magpie_tts,rvc,meanvc2`)이 필요합니다. 모델 비교 결과는 `test/tts-model-comparison/README.md`.
+- 엔진 빌드에는 `run-build.ps1`의 `-Models` 목록(`yue2,htdemucs,bs_roformer,audiosr,muscriptor,qwen3_tts,chatterbox,qwen3_asr,qwen3_forced_aligner,nemotron_asr,vibevoice_asr,voxcpm2,omnivoice,supertonic,fish_audio,magpie_tts,rvc,meanvc2`)이 필요합니다. 모델 비교 결과는 `test/tts-model-comparison/README.md`.
 
 ### Typecast (클라우드 TTS, 선택)
 

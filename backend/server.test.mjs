@@ -491,6 +491,8 @@ test('audio.cpp (GGUF) generation accepts an external ABC score for cover/instru
   // final rendering below happens on audio.cpp
   await mkdir(path.join(root, 'models', 'm-a-p', 'YuE2-3B'), { recursive: true });
   await mkdir(path.join(root, 'models', 'm-a-p', 'YuE2-Vae'), { recursive: true });
+  await writeFile(path.join(root, 'models', 'm-a-p', 'YuE2-3B', 'model.safetensors'), 'stub');
+  await writeFile(path.join(root, 'models', 'm-a-p', 'YuE2-Vae', 'model.safetensors'), 'stub');
   const fakePython = makeFakePythonSpawn(pythonScriptPath);
   const fakeAudioCpp = makeFakeSpawn();
   // ABC prep (plan/mute-voice) always runs through Python; final audio still renders through
@@ -669,6 +671,8 @@ test('yue2-original routes to the Python runner, and downloads support on-demand
   const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-python-'));
   await mkdir(path.join(root, 'models', 'm-a-p', 'YuE2-3B'), { recursive: true });
   await mkdir(path.join(root, 'models', 'm-a-p', 'YuE2-Vae'), { recursive: true });
+  await writeFile(path.join(root, 'models', 'm-a-p', 'YuE2-3B', 'model.safetensors'), 'stub');
+  await writeFile(path.join(root, 'models', 'm-a-p', 'YuE2-Vae', 'model.safetensors'), 'stub');
   const pythonEnginePath = path.join(root, 'fake-python.exe');
   const pythonScriptPath = path.join(root, 'run_yue2.py');
   await writeFile(pythonEnginePath, 'stub');
@@ -785,6 +789,8 @@ test('symbolic planning, ABC score generation option, and the ABC-note library',
   const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-abc-'));
   await mkdir(path.join(root, 'models', 'm-a-p', 'YuE2-3B'), { recursive: true });
   await mkdir(path.join(root, 'models', 'm-a-p', 'YuE2-Vae'), { recursive: true });
+  await writeFile(path.join(root, 'models', 'm-a-p', 'YuE2-3B', 'model.safetensors'), 'stub');
+  await writeFile(path.join(root, 'models', 'm-a-p', 'YuE2-Vae', 'model.safetensors'), 'stub');
   const pythonEnginePath = path.join(root, 'fake-python.exe');
   const pythonScriptPath = path.join(root, 'run_yue2.py');
   const abcToolsPath = path.join(root, 'abc_tools.py');
@@ -1143,13 +1149,13 @@ test('MIDI 내보내기 (MuScriptor): exports a completed song to MIDI, caches t
   assert.match(noModel.data.error, /MuScriptor/);
 });
 
-test('음색 변조 - 기존 방식(Seed-VC) 탭: prepare가 원본을 한 번만 분리해두고, apply는 그 캐시를 재사용해 변환(음량 매칭 포함)하며, 저장은 범용 /api/audio-save로 끝난다', async t => {
+test('음색 변조 - RVC 탭: prepare가 원본을 한 번만 분리해두고, apply는 그 캐시를 재사용해 변환(음량 매칭 포함)하며, 저장은 범용 /api/audio-save로 끝난다', async t => {
   resetEnv();
   const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-vocaltimbre-'));
   const { enginePath } = await setUpEngine(root);
-  const seedVcModel = path.join(root, 'models', 'audio-cpp', 'audio.cpp-gguf', 'SeedVC-MLX-GGUF', 'seed-vc-mlx-q8_0.gguf');
-  await mkdir(path.dirname(seedVcModel), { recursive: true });
-  await writeFile(seedVcModel, 'stub');
+  const rvcModel = path.join(root, 'models', 'audio-cpp', 'audio.cpp-gguf', 'RVC-GGUF', 'rvc-f16.gguf');
+  await mkdir(path.dirname(rvcModel), { recursive: true });
+  await writeFile(rvcModel, 'stub');
   const fakeSpawn = makeFakeSpawn();
   const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}), spawnImpl: fakeSpawn.spawnImpl });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -1160,7 +1166,6 @@ test('음색 변조 - 기존 방식(Seed-VC) 탭: prepare가 원본을 한 번�
 
   await callJson('/api/settings', 'PUT', { enginePath });
   const sourceDataUrl = `data:audio/wav;base64,${Buffer.from('fake-source-song').toString('base64')}`;
-  const voiceRefDataUrl = `data:audio/wav;base64,${Buffer.from('fake-target-voice').toString('base64')}`;
 
   // 라이브러리에서 자유롭게 고른 "원본 audio" 준비: 프로젝트 없이 바로 소스 오디오만으로 분리까지 끝낸다
   const prepared = await callJson('/api/timbre-transform/prepare', 'POST', { sourceDataUrl });
@@ -1177,30 +1182,24 @@ test('음색 변조 - 기존 방식(Seed-VC) 탭: prepare가 원본을 한 번�
 
   // "적용": converts the already-separated vocal -- apply itself never re-runs STEM separation
   const callsBeforeApply = fakeSpawn.calls.length;
-  const firstApply = await callJson(`/api/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl: voiceRefDataUrl, seedF0Condition: false, seedAutoF0Adjust: false, seedInferenceSteps: 42 });
+  const firstApply = await callJson(`/api/timbre-transform/${previewId}/legacy/apply`, 'POST', { engine: 'rvc', rvcVoice: 'chocola', rvcSemitone: 3 });
   assert.equal(firstApply.status, 200);
   const applyCalls = fakeSpawn.calls.slice(callsBeforeApply);
   assert.ok(!applyCalls.some(c => c.args.includes('mel_band_roformer')), 'expected apply to reuse the STEM split done during prepare, not re-run it');
-  assert.ok(applyCalls.some(c => c.args.includes('seed_vc')), 'expected a --family seed_vc invocation');
-  assert.ok(applyCalls.some(c => c.args.includes('--voice-ref')), 'expected the reference clip to be passed as --voice-ref');
-  const seedCall = applyCalls.find(c => c.args.includes('seed_vc'));
-  assert.ok(seedCall.args.includes('f0_condition=false'));
-  assert.ok(seedCall.args.includes('auto_f0_adjust=false'));
-  assert.ok(seedCall.args.includes('num_inference_steps=42'));
+  const rvcCall = applyCalls.find(c => c.args.includes('rvc'));
+  assert.ok(rvcCall, 'expected a --family rvc invocation');
+  assert.ok(rvcCall.args.includes('voice_id=chocola') && rvcCall.args.includes('semitone_shift=3'));
+  assert.ok(!rvcCall.args.includes('--voice-ref'), 'RVC converts into a packaged voice, so no reference clip is passed');
   assert.ok(!applyCalls.some(c => c.engine === 'ffmpeg' && c.args.some(arg => arg.includes('amix'))), 'remixing now happens client-side (mixBuffers), not via a server-side amix');
 
-  // the silence-gate fix (2026-09-17): both Seed-VC and Vevo2 were found to keep generating audible
-  // content through passages where the source vocal is true digital silence, instead of staying
-  // silent themselves -- a sidechain noise gate keyed off the pre-conversion vocal forces the
-  // converted output silent wherever the source actually is.
+  // the silence gate: a sidechain noise gate keyed off the pre-conversion vocal forces the converted output silent
+  // wherever the source actually is
   const gateCall = applyCalls.find(c => c.engine === 'ffmpeg' && c.args.some(arg => typeof arg === 'string' && arg.includes('sidechaingate')));
   assert.ok(gateCall, 'expected a sidechaingate pass to clean up hallucinated content in silent passages');
   assert.ok(gateCall.args.some(arg => typeof arg === 'string' && arg.includes('vocals-original.wav')), 'expected the pre-conversion vocal to be used as the sidechain reference');
 
-  // the loudness-matching fix: after conversion, both the pre-conversion and converted vocal are
-  // probed with ffmpeg volumedetect, and a clamped gain-correction pass (ffmpeg -af volume=XdB) is
-  // applied before the result becomes the servable vocals.wav -- this is the fix for the real bug
-  // where Seed-VC's raw output measured ~8dB quieter and the vocal was inaudible once mixed in.
+  // the loudness-matching fix: after conversion, both the pre-conversion and converted vocal are probed with ffmpeg
+  // volumedetect, and a clamped gain-correction pass is applied before the result becomes the servable vocals.wav
   const volumeProbeCalls = applyCalls.filter(c => c.engine === 'ffmpeg' && c.args.includes('volumedetect'));
   assert.equal(volumeProbeCalls.length, 2, 'expected the original and converted vocal to each be probed once');
   const gainCall = applyCalls.find(c => c.engine === 'ffmpeg' && c.args.some(arg => typeof arg === 'string' && arg.startsWith('volume=')));
@@ -1212,20 +1211,19 @@ test('음색 변조 - 기존 방식(Seed-VC) 탭: prepare가 원본을 한 번�
   assert.ok(gainDb <= 18, 'expected the gain correction to be clamped');
 
   // the resulting vocals stem (loudness-matched) and the untouched instrumental stem are both still servable
-  const vocalsResponse = await call(`/api/timbre-transform/${previewId}/stems/vocals`);
-  assert.equal(vocalsResponse.status, 200);
+  assert.equal((await call(`/api/timbre-transform/${previewId}/stems/vocals`)).status, 200);
   assert.equal((await call(`/api/timbre-transform/${previewId}/stems/instrumental`)).status, 200);
 
-  // re-apply with a different reference: reconverts from the cached pre-conversion vocals, still no re-separation
+  // re-apply with another voice: reconverts from the cached pre-conversion vocals, still no re-separation
   const callsBeforeReapply = fakeSpawn.calls.length;
-  const secondApply = await callJson(`/api/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl: voiceRefDataUrl });
+  const secondApply = await callJson(`/api/timbre-transform/${previewId}/legacy/apply`, 'POST', { engine: 'rvc', rvcVoice: 'fraise' });
   assert.equal(secondApply.status, 200);
   const reapplyCalls = fakeSpawn.calls.slice(callsBeforeReapply);
   assert.ok(!reapplyCalls.some(c => c.args.includes('mel_band_roformer')), 'expected re-apply to skip STEM separation and reuse the cached pre-conversion vocals');
-  assert.ok(reapplyCalls.some(c => c.args.includes('seed_vc')), 'expected re-apply to still run a fresh seed_vc conversion');
+  assert.ok(reapplyCalls.some(c => c.args.includes('voice_id=fraise')), 'expected re-apply to still run a fresh rvc conversion');
 
-  // "저장": the frontend mixes vocals+instrumental client-side (Web Audio) and uploads the result via
-  // the generic, project-independent /api/audio-save (same route DDSP-SVC/음원비교 already use)
+  // "저장": the frontend mixes vocals+instrumental client-side (Web Audio) and uploads the result via the generic,
+  // project-independent /api/audio-save (same route DDSP-SVC/음원비교 already use)
   const mixedWavDataUrl = `data:audio/wav;base64,${Buffer.from('client-mixed-wav-bytes').toString('base64')}`;
   const saved = await callJson('/api/audio-save', 'POST', { dataUrl: mixedWavDataUrl, title: '음색 변환됨' });
   assert.equal(saved.status, 200);
@@ -1233,135 +1231,19 @@ test('음색 변조 - 기존 방식(Seed-VC) 탭: prepare가 원본을 한 번�
   assert.equal(saved.data.title, '음색 변환됨');
   assert.equal(saved.data.durationMs, 97500, 'saved song must carry a measured duration for card view (2026-09-17 bug)');
 
-  // bad dataUrl / an unknown previewId are clear errors, not crashes
-  assert.equal((await callJson(`/api/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl: 'not-a-data-url' })).status, 400);
-  assert.equal((await callJson('/api/timbre-transform/not-a-real-preview-id/legacy/apply', 'POST', { dataUrl: voiceRefDataUrl })).status, 404);
+  // an unknown previewId, or an engine that is not a song-vocal converter (removed engines included), is a clear error
+  assert.equal((await callJson('/api/timbre-transform/not-a-real-preview-id/legacy/apply', 'POST', { engine: 'rvc' })).status, 404);
+  for (const engine of ['seed_vc', 'vevo2', 'meanvc2', undefined]) {
+    const rejected = await callJson(`/api/timbre-transform/${previewId}/legacy/apply`, 'POST', { engine });
+    assert.equal(rejected.status, 400);
+    assert.match(rejected.data.error, /지원하지 않는 음색 변조 엔진/);
+  }
 
   // missing model is a clear 400 on apply, not a crash
-  await rm(seedVcModel);
-  const noModel = await callJson(`/api/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl: voiceRefDataUrl });
+  await rm(rvcModel);
+  const noModel = await callJson(`/api/timbre-transform/${previewId}/legacy/apply`, 'POST', { engine: 'rvc' });
   assert.equal(noModel.status, 400);
-  assert.match(noModel.data.error, /Seed-VC/);
-});
-
-test('음색 변조 - 참조 보컬: 참조 오디오를 mel_band_roformer로 분리해 vocals dataUrl을 돌려준다 (오디오 없음 400)', async t => {
-  resetEnv();
-  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-timbre-ref-vocal-'));
-  const { enginePath } = await setUpEngine(root);
-  const fakeSpawn = makeFakeSpawn();
-  const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}), spawnImpl: fakeSpawn.spawnImpl });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const base = `http://127.0.0.1:${server.address().port}`;
-  const call = async (route, method = 'GET', payload) => fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) });
-  const callJson = async (route, method, payload) => { const response = await call(route, method, payload); return { status: response.status, data: await response.json() }; };
-  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
-
-  await callJson('/api/settings', 'PUT', { enginePath });
-
-  const missing = await callJson('/api/timbre-transform/reference/separate', 'POST', {});
-  assert.equal(missing.status, 400);
-
-  const referenceDataUrl = `data:audio/wav;base64,${Buffer.from('fake-reference-song').toString('base64')}`;
-  const result = await callJson('/api/timbre-transform/reference/separate', 'POST', { referenceDataUrl });
-  assert.equal(result.status, 200);
-  assert.match(result.data.vocalsDataUrl, /^data:audio\/wav;base64,/);
-  assert.ok(fakeSpawn.calls.some(c => c.args.includes('mel_band_roformer')), 'expected the reference to be STEM-split with mel_band_roformer');
-  assert.ok(!fakeSpawn.calls.some(c => c.args.includes('seed_vc')), 'expected reference separation to never run a Seed-VC conversion');
-});
-
-test('음색 변조 - 기존 방식: engine:\'vevo2\'를 보내면 Seed-VC 대신 Vevo2(style_preserved_svc)로 변환하고, 모델이 없으면 Seed-VC와 무관하게 Vevo2 전용 에러를 준다', async t => {
-  resetEnv();
-  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-vevo2-'));
-  const { enginePath } = await setUpEngine(root);
-  const vevo2Model = path.join(root, 'models', 'audio-cpp', 'audio.cpp-gguf', 'Vevo2-GGUF', 'vevo2-q8_0.gguf');
-  await mkdir(path.dirname(vevo2Model), { recursive: true });
-  await writeFile(vevo2Model, 'stub');
-  const fakeSpawn = makeFakeSpawn();
-  const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}), spawnImpl: fakeSpawn.spawnImpl });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const base = `http://127.0.0.1:${server.address().port}`;
-  const call = async (route, method = 'GET', payload) => fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) });
-  const callJson = async (route, method, payload) => { const response = await call(route, method, payload); return { status: response.status, data: await response.json() }; };
-  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
-
-  await callJson('/api/settings', 'PUT', { enginePath });
-  const sourceDataUrl = `data:audio/wav;base64,${Buffer.from('fake-source-song').toString('base64')}`;
-  const voiceRefDataUrl = `data:audio/wav;base64,${Buffer.from('fake-target-voice').toString('base64')}`;
-  const previewId = (await callJson('/api/timbre-transform/prepare', 'POST', { sourceDataUrl })).data.previewId;
-
-  // note: the Seed-VC model is never written in this test -- if applyVocalTimbreCore() checked for it
-  // regardless of the requested engine, this would fail with a Seed-VC-model-missing 400 instead.
-  const applied = await callJson(`/api/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl: voiceRefDataUrl, engine: 'vevo2' });
-  assert.equal(applied.status, 200);
-  const vevo2Call = fakeSpawn.calls.find(c => c.args.includes('vevo2'));
-  assert.ok(vevo2Call, 'expected a --family vevo2 invocation');
-  assert.ok(vevo2Call.args.includes('style_preserved_svc'), 'expected the style_preserved_svc route (vevo2\'s default svc route)');
-  assert.ok(vevo2Call.args.includes('--source-audio'), 'vevo2 takes the source clip as --source-audio, not --audio like seed_vc');
-  assert.ok(vevo2Call.args.includes('--target-voice'), 'vevo2 takes the reference clip as --target-voice, not --voice-ref like seed_vc');
-  assert.ok(!fakeSpawn.calls.some(c => c.args.includes('seed_vc')), 'expected engine:\'vevo2\' to never invoke seed_vc');
-  // the silence-gate fix applies to both engines, not just the default seed_vc path
-  assert.ok(fakeSpawn.calls.some(c => c.engine === 'ffmpeg' && c.args.some(arg => typeof arg === 'string' && arg.includes('sidechaingate'))), 'expected the silence gate to also run for the vevo2 path');
-
-  const callsBeforeVcRoute = fakeSpawn.calls.length;
-  const vcRoute = await callJson(`/api/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl: voiceRefDataUrl, engine: 'vevo2', vevoRoute: 'style_preserved_vc' });
-  assert.equal(vcRoute.status, 200);
-  const vcCall = fakeSpawn.calls.slice(callsBeforeVcRoute).find(c => c.args.includes('vevo2'));
-  assert.ok(vcCall.args.includes('style_preserved_vc'));
-  assert.equal(vcCall.args[vcCall.args.indexOf('--task') + 1], 'vc');
-
-  // an unrecognized/omitted engine value falls back to seed_vc, not an error
-  const unknownEngine = await callJson(`/api/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl: voiceRefDataUrl, engine: 'not-a-real-engine' });
-  assert.equal(unknownEngine.status, 400);
-  assert.match(unknownEngine.data.error, /Seed-VC/, 'expected an unrecognized engine value to fall back to seed_vc (whose model is missing here), not crash');
-
-  // missing vevo2 model is a clear, vevo2-specific 400 -- independent of whether seed_vc's model exists
-  await rm(vevo2Model);
-  const noModel = await callJson(`/api/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl: voiceRefDataUrl, engine: 'vevo2' });
-  assert.equal(noModel.status, 400);
-  assert.match(noModel.data.error, /Vevo2/);
-});
-
-test('음색 변조 - 기존 방식: 긴 보컬은 Seed-VC도 10초 창(겹침 2초)으로 나눠 같은 참조 목소리로 변환하고 연결한다(와 동일 패턴, 긴 소스 붕괴 회피)', async t => {
-  resetEnv();
-  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-timbre-legacy-chunk-'));
-  const { enginePath } = await setUpEngine(root);
-  const seedVcModel = path.join(root, 'models', 'audio-cpp', 'audio.cpp-gguf', 'SeedVC-MLX-GGUF', 'seed-vc-mlx-q8_0.gguf');
-  await mkdir(path.dirname(seedVcModel), { recursive: true });
-  await writeFile(seedVcModel, 'stub');
-  const fakeSpawn = makeFakeSpawn();
-  const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}), spawnImpl: fakeSpawn.spawnImpl });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const base = `http://127.0.0.1:${server.address().port}`;
-  const call = async (route, method = 'GET', payload) => fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) });
-  const callJson = async (route, method, payload) => { const response = await call(route, method, payload); return { status: response.status, data: await response.json() }; };
-  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
-
-  await callJson('/api/settings', 'PUT', { enginePath });
-  const sourceDataUrl = `data:audio/wav;base64,${Buffer.from('fake-source-song').toString('base64')}`;
-  const voiceRefDataUrl = `data:audio/wav;base64,${Buffer.from('fake-target-voice').toString('base64')}`;
-  const previewId = (await callJson('/api/timbre-transform/prepare', 'POST', { sourceDataUrl })).data.previewId;
-  fakeSpawn.setProbe({ durationSeconds: '26' });
-
-  const callsBeforeApply = fakeSpawn.calls.length;
-  const applied = await callJson(`/api/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl: voiceRefDataUrl });
-  assert.equal(applied.status, 200);
-  assert.equal(applied.data.chunkCount, 3);
-  assert.match(applied.data.warning, /10초 단위.*3개/);
-  const applyCalls = fakeSpawn.calls.slice(callsBeforeApply);
-  const seedCalls = applyCalls.filter(c => c.args.includes('seed_vc'));
-  assert.equal(seedCalls.length, 3, 'expected one Seed-VC run per 10s chunk, never on the whole 26s vocal at once');
-  for (const seedCall of seedCalls) {
-    assert.ok(seedCall.args.some(arg => String(arg).includes('voice-ref-normalized.wav')), 'expected every chunk to reuse the SAME normalized reference clip');
-    assert.ok(!seedCall.args.some(arg => String(arg).includes('vocals-original.wav')), 'a chunk source, not the full vocal, is what goes through Seed-VC');
-  }
-  const chunkArgs = applyCalls.filter(c => c.engine === 'ffmpeg').flatMap(c => c.args).map(String);
-  assert.ok(chunkArgs.some(arg => arg.includes('atrim=start=0.000:duration=10.000')));
-  assert.ok(chunkArgs.some(arg => arg.includes('atrim=start=8.000:duration=10.000')));
-  assert.ok(chunkArgs.some(arg => arg.includes('atrim=start=16.000:duration=10.000')));
-  assert.ok(chunkArgs.some(arg => arg.includes('concat=n=3:v=0:a=1')));
-  // the shared loudness-match + sidechain silence gate still runs on the stitched result
-  assert.ok(applyCalls.some(c => c.engine === 'ffmpeg' && c.args.some(arg => typeof arg === 'string' && arg.includes('sidechaingate'))), 'expected the shared post-processing chain on the concatenated vocal too');
-  assert.ok(applyCalls.some(c => c.engine === 'ffmpeg' && c.args.some(arg => typeof arg === 'string' && arg.startsWith('volume='))), 'expected the shared gain-correction pass on the concatenated vocal');
+  assert.match(noModel.data.error, /RVC.*받기/);
 });
 
 async function setUpDdspSvcRoot(root) {
@@ -1886,7 +1768,7 @@ test('음색 변조 - RVC/MeanVC2: RVC는 참조 없이 내장 목소리로, Mea
   assert.ok(fakeSpawn.calls.slice(previewBefore).some(c => c.args.includes('voice_id=fraise')));
   assert.equal((await callJson(`/api/timbre-transform/${previewId}/rvc-preview`, 'POST', { rvcVoice: 'fraise', rvcSemitone: 0, rvcRetrieval: 0 })).data.cached, true);
 
-  // MeanVC2 is a speech converter now: it is no longer a song timbre-transform engine (falls back to Seed-VC)
+  // MeanVC2 is a speech converter now: it is not a song timbre-transform engine
   assert.equal((await apply({ engine: 'meanvc2', dataUrl: refDataUrl })).status, 400);
 
   // Audio Tools speech voice conversion: needs both clips and the model; runs MeanVC2 once on the whole clip
@@ -2139,4 +2021,30 @@ test('실시간 음색 변조: 세션 시작 -> 오디오 전달 -> 변환 조�
   assert.equal((await callJson(`/api/realtime-vc/${started.data.id}/stop`, 'POST', {})).status, 404);
   // lock released: another job passes the guard again (400 = no adjustment values, not 409)
   assert.equal((await callJson('/api/audio-tools/adjust', 'POST', { audioDataUrl: refDataUrl })).status, 400);
+});
+
+test('모델 목록: 다운로드 기록에 있어도 디스크에서 지워진 파일은 목록과 합계에서 빠진다', async t => {
+  resetEnv();
+  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-inventory-'));
+  const repoDir = path.join(root, 'models', 'audio-cpp', 'Yue2-3B-GGUF');
+  await mkdir(repoDir, { recursive: true });
+  await writeFile(path.join(repoDir, 'yue2-3b-q8_0.gguf'), 'x'.repeat(40));
+  // yue2-3b-q4_0.gguf is in the manifest but was deleted from disk
+  await writeFile(path.join(root, 'model-download-status.json'), JSON.stringify({
+    schemaVersion: 1, updatedAt: null, state: 'complete', totalBytes: 100, completedBytes: 100,
+    repositories: [{ id: 'audio-cpp/Yue2-3B-GGUF', state: 'complete', totalBytes: 100, completedBytes: 100, files: [
+      { path: 'yue2-3b-q8_0.gguf', state: 'complete', size: 40 },
+      { path: 'yue2-3b-q4_0.gguf', state: 'complete', size: 60 },
+    ] }],
+  }));
+  const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}), spawnImpl: makeFakeSpawn().spawnImpl });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+  const inventory = await (await fetch(`http://127.0.0.1:${server.address().port}/api/models`)).json();
+  const repo = inventory.repositories.find(item => item.id === 'audio-cpp/Yue2-3B-GGUF');
+  assert.deepEqual(repo.files.map(file => file.path), ['yue2-3b-q8_0.gguf']);
+  assert.equal(repo.completedBytes, 40);
+  assert.equal(repo.totalBytes, 40);
+  assert.equal(inventory.totalBytes, 40);
+  assert.equal(inventory.completedBytes, 40);
 });

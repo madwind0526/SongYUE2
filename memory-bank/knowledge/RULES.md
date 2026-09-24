@@ -103,6 +103,8 @@
 
 ## RVC보다 Seed-VC를 우선 고려할 것 (audio.cpp의 두 음색 변환 패밀리)
 
+> **대체됨 (2026-09-25)**: Seed-VC와 Vevo2는 결과가 좋지 않아 앱에서 제거했고, 곡 보컬 변환은 RVC(와 DDSP-SVC)로 바뀌었습니다. 아래 내용은 당시의 판단 기록입니다.
+
 **규칙:** audio.cpp에는 보컬 음색 변환 모델이 둘 있다 — RVC(`model_specs/rvc.json`, `"status": "experimental"`, 패키지에 내장된 음색 4개(default/manthos/chocola/fraise) 중에서만 고르거나 사용자가 직접 `.pth` 체크포인트를 학습해 넣어야 함)와 Seed-VC(`model_specs/seed_vc.json`, `"status": "supported"`, 임의의 짧은 참조 오디오로 제로샷 변환이 가능한 `speaker_reference` capability + 노래 전용 `svc`(Singing Voice Conversion) 태스크가 따로 있음). SongYUE2의 "보컬 음색 변환"은 AudioSR/MuScriptor 때와 같은 기준(`status` 필드)으로 Seed-VC를 선택했다 — 사용자가 곡마다 원하는 목소리를 즉석에서 참조 오디오로 지정하는 유스케이스에 RVC의 "미리 학습된 음색 4개"보다 훨씬 잘 맞는다.
 **이유:** 이름만 보면 RVC가 더 유명해서 먼저 시도하기 쉽지만, 실제 요구사항(사용자가 원하는 임의의 목소리로 바꾸기)에는 제로샷인 Seed-VC가 구조적으로 맞다. `"status": "experimental"`/`"supported"` 필드를 항상 먼저 확인하는 습관은 AudioSR 클릭 잡음 사고 이후 이 프로젝트의 고정 관례가 됨.
 **적용 시점:** audio.cpp의 새 모델 패밀리를 추가할 때 같은 카테고리(`category` 필드)에 후보가 여럿이면 `model_specs/*.json`을 전부 비교해서 `status`와 실제 유스케이스 적합성으로 고를 것.

@@ -129,3 +129,10 @@ DDSP-SVC 탭은 실제 GPU로 목표 스텝을 작게 잡아(`targetStep: 300`) 
 - **RVC** (`rvc.json`, `status: experimental`): Seed-VC 도입 당시 "내장 음색 4개 중 선택만 가능"이라 후순위로 미뤘는데, 실제 spec 설명을 다시 보니 **사용자가 직접 만든 RVC 체크포인트(`.pth`/`.pt`)도 지정해서 쓸 수 있다고 되어 있음**(패키지 음색 4개로 제한된다는 건 재확인 필요) — Seed-VC/Vevo2/DDSP-SVC와 나란히 4번째 SVC 후보로 재평가해볼 가치가 있음.
 
 이 셋은 아직 아무도 실제로 받아서 검증한 적 없는 "발견만 된" 후보 목록 — 실제로 쓸지는 다운로드/실측 후 판단 필요.
+
+## 정리 (2026-09-25)
+- [x] 음색 변조에서 Seed-VC/Vevo 제거(코드·테스트·문서·모델 파일). 곡 보컬 변환 엔진은 RVC와 DDSP-SVC.
+- [x] STT는 Qwen3-ASR, Nemotron 남기고 VibeVoice-ASR 삭제, TTS는 Qwen3-TTS/VoxCPM2 남기고 OmniVoice/Fish/Chatterbox 삭제. 지운 모델의 버튼은 남기고 선택하면 "모델 받기" 안내. STT 실측(합성 한국어 9클립): Nemotron CER 0.000 · Qwen3 1.7B 0.003 · Qwen3 0.6B 0.018 · VibeVoice 0.097(7~17배 느림).
+- [x] YuE2 Q4/BF16(+F32 VAE) 삭제, 기본 모델을 Q8로 변경, 모델 목록은 디스크 실재 기준.
+- [ ] 결정 대기: 원본 Python 모델(7.3GB)은 "악기만"/ABC 기능에 필요 — 그 기능을 안 쓰면 삭제 가능.
+- [ ] 결정 대기: `C:\Claude\AudioAUK`(42GB, 소스 미커밋·library 오디오 605개) 삭제, `test/ACE-Step-1.5`(19GB, `lora-data/` 포함) 삭제.
