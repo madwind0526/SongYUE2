@@ -1874,6 +1874,10 @@ test('음색 변조 - RVC/MeanVC2: RVC는 참조 없이 내장 목소리로, Mea
   const rvcCall = fakeSpawn.calls.find(c => c.args.includes('rvc'));
   assert.ok(rvcCall.args.includes('voice_id=chocola') && rvcCall.args.includes('semitone_shift=3') && rvcCall.args.includes('retrieval_blend=0.5'));
   assert.ok(!rvcCall.args.includes('--voice-ref'));
+  // the default voice has no retrieval index (blend > 0 crashes the engine), so the blend is forced to 0 for it
+  const beforeDefault = fakeSpawn.calls.length;
+  assert.equal((await apply({ engine: 'rvc', rvcVoice: 'default', rvcRetrieval: 0.5 })).status, 200);
+  assert.ok(fakeSpawn.calls.slice(beforeDefault).find(c => c.args.includes('rvc')).args.includes('retrieval_blend=0'));
 
   // voice preview: first 8 s of the source vocal through RVC, cached per voice/semitone/blend
   const previewBefore = fakeSpawn.calls.length;

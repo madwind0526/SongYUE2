@@ -737,7 +737,8 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const voices = VC_FAMILIES.find((item) => item.id === 'rvc').voices;
     const voice = voices.some((item) => item.id === options.rvcVoice) ? options.rvcVoice : 'default';
     const semitone = Math.max(-24, Math.min(24, Math.round(Number(options.rvcSemitone)) || 0));
-    const blend = Math.max(0, Math.min(1, Number(options.rvcRetrieval) || 0));
+    // The packaged "default" voice has no retrieval index: retrieval_blend > 0 crashes audiocpp_cli (access violation, exit 3221225477).
+    const blend = voice === 'default' ? 0 : Math.max(0, Math.min(1, Number(options.rvcRetrieval) || 0));
     await runSvcCli(['--task', 'vc', '--family', 'rvc', '--model', await vcModelPath('rvc', '기본', 'f16'), '--backend', 'cuda', '--audio', vocalsWav, '--out', outputWav, '--request-option', `voice_id=${voice}`, '--request-option', `semitone_shift=${semitone}`, '--request-option', `retrieval_blend=${blend}`], 'RVC 엔진을 실행할 수 없습니다.');
   }
   async function runMeanVc2Svc(vocalsWav, voiceRefWav, outputWav, options = {}) {

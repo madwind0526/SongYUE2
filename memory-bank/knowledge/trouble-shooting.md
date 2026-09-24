@@ -556,3 +556,5 @@ const patched = template
 - **증상**: Typecast Ref-T2S에서 "입력 내용이 너무 깁니다". **원인**: 요청 본문 한도 1MB에 참조 오디오가 걸림. **해결**: 50MB로 상향. Typecast 복제는 무료 플랜(`custom_voice_slot: 0`)에서 `CLONING_NOT_AVAILABLE`.
 - **증상**: Git Bash `curl -d`로 한글 JSON이 깨짐. **해결**: node fetch 스크립트 사용.
 - **증상**: 테스트 실행 후 `scripts/start-studio.mjs`가 더미 텍스트로 덮어써짐. **원인**: fake spawn이 `--out` 없을 때 args[0]에 기록. **해결**: 복구 + 실제 프로세스 기동 경로 차단.
+
+- **증상**: RVC 변환이 "종료 코드 3221225477"(0xC0000005, 접근 위반)로 실패. **원인**: 내장 목소리 `default`에서 `retrieval_blend>0`이면 audiocpp_cli가 죽음(검색 인덱스 없음). manthos/chocola/fraise는 0.5에서도 정상, 음높이(semitone)는 무관. **해결**: `default`는 블렌딩을 0으로 강제하고 UI에서 입력 비활성화.
