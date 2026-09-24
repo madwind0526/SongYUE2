@@ -2663,8 +2663,8 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
           </div>
           {renderModelStatus(editPrecisionInfo, 'dotsedit', 'edit', '기본', editPrecision)}
           <span className="field-hint">녹음된 말소리에서 일부 단어만 바꾸거나 지우거나 넣습니다(나머지 목소리·억양은 유지). 노래에는 쓸 수 없습니다. 언어를 직접 지정하면 결과가 달라질 수 있으니 두 가지를 모두 들어 보세요. 지우기·넣기는 안정적이고, 바꾸기는 한 글자짜리 짧은 단어에서 발음이 어긋날 수 있습니다. 정밀도가 높을수록 정확하지만 더 큽니다.</span>
-          <div className="at-section-head" style={{ marginTop: 18 }}>원문 (말한 내용)</div>
-          <Textarea rows={3} className="at-textarea" value={editSourceText} onChange={event => setEditSourceText(event.target.value)} placeholder="원본 오디오가 말하는 문장을 정확히 적어 주세요. 비워 두면 실행할 때 음성 인식(STT)으로 자동 입력합니다." disabled={running}/>
+          <div className="at-section-head" style={{ marginTop: 18 }}>원문 (말한 내용) <span style={{ fontWeight: 400, opacity: 0.7 }}>(선택 사항)</span></div>
+          <Textarea rows={3} className="at-textarea" value={editSourceText} onChange={event => setEditSourceText(event.target.value)} placeholder="원본 오디오가 말하는 문장을 정확히 적어 주세요. 비워 두면 실행할 때 음성 인식(STT)으로 자동 입력합니다. 직접 적으면 인식 오류 없이 더 정확하게 편집됩니다." disabled={running}/>
           <div className="voice-convert-topbar" style={{ justifyContent: 'flex-start' }}><Button variant="outline" size="sm" onClick={() => void transcribeSource()} disabled={running || transcribing || !audioName}>{transcribing ? <LoaderCircle className="spin" size={13}/> : <Sparkles size={13}/>}받아쓰기 (STT)</Button><span className="field-hint">STT 탭에서 고른 음성 인식 모델을 씁니다.</span></div>
           <div className="at-section-head" style={{ marginTop: 18 }}>편집 내용</div>
           {editItems.map((item, index) => <div key={index} className="voice-convert-topbar" style={{ justifyContent: 'flex-start', gap: 6, flexWrap: 'nowrap' }}>
