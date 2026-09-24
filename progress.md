@@ -48,14 +48,17 @@
 - 절차: (a) 후보 3~4개 빌드 목록 추가·재빌드, 모델 다운로드 (b) `test/tts-model-comparison/bench.mjs`에 설정 추가(전사는 Qwen3-ASR로 교체 후) 동일 4개 문장으로 CER 비교 (c) 상위 모델을 `backend/tts.mjs`의 `TTS_FAMILIES`에 variants로 추가하고 `buildTtsArgs`에 분기 (d) 프론트는 `ttsModels`에서 버튼이 자동으로 늘어남(`ttsVariantsFor`의 non-qwen 규칙 확인) — Design 지원 모델은 `mode:'design'` 변형으로 등록.
 - 기본 선택은 Qwen3-TTS 유지.
 
-### 5. P3 — 대사 편집 탭
+### 5. P3 — 대사 편집 탭 (**완료** 2026-09-24. 구현: `backend/speechedit.mjs`(문장 분할·단어 창 계획·스플라이스), `tts.mjs` `EDIT_FAMILIES/ALIGN_FAMILIES/buildEditText/applyEditText`, `server.mjs` `editSpeech/alignWords`, 프론트 `대사 편집` 탭. DotTTS Edit(Q8/BF16)만 채택: Vevo2 편집은 en/zh, FireRedTTS3는 한국어 편집 불가로 제외. 한국어 실측·정밀 편집(단어 정렬 + 문맥 2단어) 결과는 `docs/audiocpp-setup.md` '대사 편집' 절. 아래는 원래 계획 기록)
 - 후보를 한국어로 실측: Vevo2 `--task s2s --task-route editing --source-audio A.wav --target-voice ref.wav --target-text "새 문장"`(빌드 포함됨, `docs/models/vevo2.md` "Speech Editing"), DotTTS Edit(`template_name=edit`, `source_text` 필요), FireRedTTS3 edit.
 - UX: 오디오 선택 → 음성 인식으로 전사해 텍스트 표시(`/api/audio-tools/asr` 재사용) → 바꿀 문장 입력 → 새 라우트 `/api/audio-tools/edit` → 처리본 비교/저장. 과거 AuK Function UI(교체/삽입(앞)/삽입(뒤)/삭제)는 `git show HEAD:app/app/studio.tsx`의 `EDIT_FUNCTIONS` 참고.
 - 실측 결과가 나쁘면 탭을 만들지 않고 pending으로 남긴다.
 
-### 6. P4 — 효과음 생성 탭
+### 6. P4 — 효과음 생성 탭 (**완료** 2026-09-24. Stable Audio 3 Small SFX, `SFX_FAMILIES`, `generateSfx`, `/api/audio-tools/sfx`. ControlFoley는 미채택. 아래는 원래 계획 기록)
 - `stable_audio`(SFX 변형) 또는 `controlfoley`(44kHz). `docs/audio_tools.md` ControlFoley 절: `--task gen --family controlfoley --model .../controlfoley-large-44k-f32.gguf --text "..."`. 모델 크기·VRAM·길이 지정 가능 여부 확인 후 선택.
 - UI: 텍스트 프롬프트 + 길이 + 모델/정밀도 선택, 결과 비교창 재사용, 저장은 `AudioToolsPage`의 `saveBlob`.
+
+### 6-b. P5 — 실시간 음색 변조 (**완료** 2026-09-24)
+- `audiocpp_cli` 스트리밍(stdin PCM) + 엔진 패치(`docs/patches/audiocpp-cli-stream-audio-chunks.patch`, 환경변수 `AUDIOCPP_STREAM_AUDIO_CHUNKS`)로 변환 조각을 즉시 받는다. 서버 `backend/realtimevc.mjs` + `/api/realtime-vc/{start,:id/audio,:id/events(SSE),:id/stop}`, 프론트 음색 변조 탭의 '실시간 변환'(AudioWorklet 마이크 → 16 kHz 조각 전송 → 도착 즉시 재생, 정지하면 원본·처리본이 남음). 지연 약 0.3~0.4 s. 남은 것: 실제 마이크·헤드폰 체감 확인.
 
 ### 7. Pending 판단 기준
 - 강제 정렬: 가사 싱크/LRC가 필요해지면 `qwen3_asr`의 `--words-out words.json`(+forced aligner 모델 경로, `docs/models/qwen3.md`) 또는 `qwen3_forced_aligner` 단독. 모델 `Qwen3-ForcedAligner-0.6B-GGUF`(q8 1130MB).
