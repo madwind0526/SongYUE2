@@ -3470,7 +3470,7 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
         // (or only one of its many files was installed from elsewhere) is just marked with how many files were received
         const installed = repoInstalled(item);
         return <article key={item.id} className={`adapter-card catalog hub-card${installed ? ' installed' : ''}`} onClick={() => void openDetail(item.id)}>
-          <div className="adapter-card-head"><strong>{item.title}</strong><span className="adapter-card-tools"><span className="adapter-badge">♥ {item.likes}</span>
+          <div className="adapter-card-head"><strong>{item.title}</strong><span className="adapter-card-tools"><span className="adapter-badge" title={`허깅페이스에서 이 저장소에 눌린 좋아요 ${item.likes}개`}>♥ {item.likes}</span>
             {installed
               ? (deleting === item.id
                 ? <button type="button" className="adapter-icon-btn danger confirm" aria-label={`${item.title} 삭제 확인`} onClick={event => { event.stopPropagation(); void removeRepo(item); }}><Trash2 size={14}/>삭제?</button>
@@ -3496,7 +3496,7 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
                 const done = entry.paths.every(path => installedKeys.has(`${detail.id}::${path}`));
                 const key = `entry:${entry.id}`;
                 return <div key={entry.id} className={`adapter-unit${done ? ' done' : ''}`}>
-                  <div><strong>{entry.label}{entry.version && <span className="adapter-chip version">{entry.version}</span>}</strong><small>{STAGE_LABEL[entry.stage] || entry.stage}{entry.size ? ` · ${formatSize(entry.size)}` : ''} · {entry.detail}</small></div>
+                  <div><strong>{entry.label}{entry.version && <span className="adapter-chip version" title="버전 (파일 이름에서 읽은 숫자)">{entry.version}</span>}</strong><small>{STAGE_LABEL[entry.stage] || entry.stage}{entry.size ? ` · ${formatSize(entry.size)}` : ''} · {entry.detail}</small></div>
                   {done
                     ? (deleting === key
                       ? <button type="button" className="adapter-icon-btn danger confirm" aria-label={`${entry.label} 삭제 확인`} onClick={() => void removeEntry(detail.id, entry)}><Trash2 size={14}/>삭제?</button>
