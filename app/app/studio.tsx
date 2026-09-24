@@ -2675,7 +2675,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
             <Button variant="outline" size="sm" aria-label="편집 항목 삭제" title="삭제" onClick={() => setEditItems(items => (items.length > 1 ? items.filter((_, position) => position !== index) : [{ op: 'sub', find: '', text: '', all: false }]))} disabled={running}><X size={13}/></Button>
           </div>)}
           <div className="voice-convert-topbar" style={{ justifyContent: 'flex-start' }}><Button variant="outline" size="sm" onClick={() => setEditItems(items => [...items, { op: 'sub', find: '', text: '', all: false }])} disabled={running || editItems.length >= 20}>+ 편집 항목 추가</Button></div>
-          <span className="field-hint">"찾을 말"은 원문에 있는 그대로 적어야 하고, 같은 말이 여러 번 나오면 기본은 첫 번째만 편집하고, "모두"를 체크하면 전부 편집합니다.</span>
+          <span className="field-hint">"찾을 말"은 원문에 있는 그대로 적어야 하고, 같은 말이 여러 번 나오면 기본은 첫 번째만 편집하고, "모두"를 체크하면 전부 편집합니다. "모두"를 체크하면 주변의 단어나 문장이 깨질 수 있습니다.</span>
         </>}
         {categoryId === 'adjust' && <>
           <div className="at-section-head">조절 값</div>
