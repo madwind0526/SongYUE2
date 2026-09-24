@@ -112,8 +112,25 @@ export const ASR_FAMILIES = [
   },
 ];
 
+// Voice conversion engines used by the timbre-transform window (same catalog/download plumbing).
+export const VC_FAMILIES = [
+  {
+    // Retrieval-based VC: converts the source vocal into one of the packaged voices (no reference clip).
+    id: 'rvc', label: 'RVC', cliFamily: 'rvc',
+    voices: [{ id: 'default', label: 'default' }, { id: 'manthos', label: 'manthos' }, { id: 'chocola', label: 'chocola' }, { id: 'fraise', label: 'fraise' }],
+    variants: [{ mode: 'vc', size: '기본', files: { f16: ['RVC-GGUF', 'rvc-f16.gguf', 1260] } }],
+  },
+  {
+    // Zero-shot VC: converts the source into the voice of a reference clip.
+    id: 'meanvc2', label: 'MeanVC2', cliFamily: 'meanvc2',
+    variants: [{ mode: 'vc', size: '120ms/40ms', files: {
+      q4_k: ['MeanVC2-GGUF', 'meanvc2-120ms-40ms-q4_k.gguf', 342],
+      fp32: ['MeanVC2-GGUF', 'meanvc2-120ms-40ms-fp32.gguf', 1629] } }],
+  },
+];
+
 export function findTtsModel(familyId, mode, size, precision) {
-  const family = [...TTS_FAMILIES, ...ASR_FAMILIES].find((item) => item.id === familyId);
+  const family = [...TTS_FAMILIES, ...ASR_FAMILIES, ...VC_FAMILIES].find((item) => item.id === familyId);
   const variant = family?.variants.find((item) => item.mode === mode && item.size === size);
   const file = variant?.files[precision];
   if (!family || !variant || !file) return null;

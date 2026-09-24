@@ -3,7 +3,7 @@
 ## Current Focus
 
 - **Wave 49 정리 완료(2026-09-24)**: AuK 제거 + Audio Tools 재구성(audio.cpp). 상세 계획과 인수인계는 `todo.md` 최상단 "진행 중 계획"과 `progress.md` "다음 에이전트용 상세 계획".
-- **다음 작업 P1**: 음색 변조에 RVC·MeanVC2 추가 → P3 대사 편집 탭(Vevo2 editing 등 한국어 실측) → P4 효과음 생성 탭. Pending: 강제 정렬, 화자 분리, ACE-Step 편집.
+- **P1 완료(RVC·MeanVC2)**. **다음 작업**: P3 대사 편집 탭(Vevo2 editing 등 한국어 실측) → P4 효과음 생성 탭. Pending: 강제 정렬, 화자 분리, ACE-Step 편집.
 
 ## Pending
 

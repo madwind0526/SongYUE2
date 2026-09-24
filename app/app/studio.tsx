@@ -2537,10 +2537,12 @@ const DDSP_STATUS_LABEL: Record<string, string> = {
 };
 
 
-type TimbreEngine = 'seed_vc' | 'vevo2' | 'ddsp';
+type TimbreEngine = 'seed_vc' | 'vevo2' | 'meanvc2' | 'rvc' | 'ddsp';
 const TIMBRE_ENGINES: { id: TimbreEngine; label: string }[] = [
   { id: 'seed_vc', label: 'Seed-VC' },
   { id: 'vevo2', label: 'Vevo' },
+  { id: 'meanvc2', label: 'MeanVC2' },
+  { id: 'rvc', label: 'RVC' },
   { id: 'ddsp', label: 'DDSP-SVC' },
 ];
 function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onDdspJobStarted, onDdspJobCleared }: {
@@ -2559,6 +2561,11 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
   const [seedF0Condition, setSeedF0Condition] = useState(true);
   const [seedAutoF0Adjust, setSeedAutoF0Adjust] = useState(true);
   const [seedInferenceSteps, setSeedInferenceSteps] = useState(80);
+  const [vcModels, setVcModels] = useState<TtsFamilyInfo[]>([]);
+  const [rvcVoice, setRvcVoice] = useState('default');
+  const [rvcSemitone, setRvcSemitone] = useState(0);
+  const [rvcRetrieval, setRvcRetrieval] = useState(0);
+  const [meanvcPrecision, setMeanvcPrecision] = useState<'q4_k' | 'fp32'>('q4_k');
   const [vevoRoute, setVevoRoute] = useState<'style_preserved_svc' | 'style_preserved_vc'>('style_preserved_svc');
   const [ddspReferencePaths, setDdspReferencePaths] = useState<string[]>([]);
   const [ddspTargetStep, setDdspTargetStep] = useState(40000);
@@ -2716,15 +2723,32 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
     return run().finally(() => { window.clearInterval(poll); setApplyProgress(100); });
   }
 
+  async function refreshVcModels() {
+    try { setVcModels((await api<{ vc: TtsFamilyInfo[] }>('/audio-tools/tts/models')).vc || []); } catch { /* backend may be restarting */ }
+  }
+  async function downloadVcModel() {
+    if (!vcFamilyId) return;
+    try {
+      await api('/audio-tools/tts/download', 'POST', { family: vcFamilyId, mode: 'vc', size: vcFamilyId === 'rvc' ? '기본' : '120ms/40ms', precision: engine === 'rvc' ? 'f16' : meanvcPrecision });
+      await refreshVcModels();
+    } catch (error) { setErrorText((error as Error).message); }
+  }
+  useEffect(() => { void refreshVcModels(); }, []);
+  const vcDownloading = vcModels.some(family => family.variants.some(variant => variant.precisions.some(item => item.download?.state === 'running')));
+  useEffect(() => {
+    if (!vcDownloading) return;
+    const timer = window.setInterval(() => void refreshVcModels(), 2000);
+    return () => window.clearInterval(timer);
+  }, [vcDownloading]);
   async function applyLegacy() {
-    if (!previewId || !referenceBlobRef.current) return;
+    if (!previewId || (engine !== 'rvc' && !referenceBlobRef.current)) return;
     setApplying(true);
     setErrorText('');
     setWarningText('');
     try {
       await withEstimatedProgress(async () => {
-        const dataUrl = await readFileAsDataUrl(referenceBlobRef.current as Blob);
-        const result = await api<{ ok: boolean; warning: string | null }>(`/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl, engine, seedF0Condition, seedAutoF0Adjust, seedInferenceSteps, vevoRoute, chunkSeconds, overlapSeconds });
+        const dataUrl = referenceBlobRef.current ? await readFileAsDataUrl(referenceBlobRef.current) : undefined;
+        const result = await api<{ ok: boolean; warning: string | null }>(`/timbre-transform/${previewId}/legacy/apply`, 'POST', { dataUrl, engine, seedF0Condition, seedAutoF0Adjust, seedInferenceSteps, vevoRoute, rvcVoice, rvcSemitone, rvcRetrieval, meanvcPrecision, chunkSeconds, overlapSeconds });
         setWarningText(result.warning || '');
         const ctx = t.ensureAudioContext();
         const [vocalsResponse, instrumentalResponse] = await Promise.all([
@@ -2783,11 +2807,16 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
     finally { setSaving(false); }
   }
 
-  const isLegacy = engine === 'seed_vc' || engine === 'vevo2';
+  const isLegacy = engine !== 'ddsp';
+  const vcFamilyId = engine === 'rvc' || engine === 'meanvc2' ? engine : null;
+  const vcFamily = vcModels.find(family => family.id === vcFamilyId);
+  const vcPrecisionInfo = vcFamily?.variants[0]?.precisions.find(item => item.precision === (engine === 'rvc' ? 'f16' : meanvcPrecision));
+  const vcModelReady = !vcFamilyId || !!vcPrecisionInfo?.installed;
   const isTraining = !!ddspJob && !['completed', 'failed', 'cancelled'].includes(ddspJob.status);
   const busy = preparing || applying || starting;
   const canApply = engine === 'ddsp' ? !!ddspReferencePaths.length && !!previewId && !isTraining
-    : !!previewId && !!referenceName;
+    : engine === 'rvc' ? !!previewId && vcModelReady
+    : !!previewId && !!referenceName && vcModelReady;
   const resultBuffer = t.bufferForKey('result');
   const ddspProgress = ddspJob?.targetStep ? Math.min(100, Math.round(ddspJob.currentStep / ddspJob.targetStep * 100)) : 0;
   // 레거시 목록은 원곡/참고곡/변환곡을 색으로 구분하므로, 재생 중 글로우도 그 가족 색을 따르게 한다.
@@ -2806,7 +2835,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
           <Button variant="outline" className="voice-convert-file-btn" onClick={() => setSourcePickerOpen(true)} disabled={busy} title={sourceName || undefined}>
             <Upload size={14}/><span className="voice-convert-file-name">{sourceName || '원본 audio 선택'}</span>
           </Button>
-          <Button variant="outline" className="voice-convert-file-btn" onClick={() => setReferencePickerOpen(true)} disabled={busy} title={referenceName || undefined}>
+          <Button variant="outline" className={`voice-convert-file-btn${engine === 'rvc' ? ' disabled' : ''}`} onClick={() => setReferencePickerOpen(true)} disabled={busy || engine === 'rvc'} title={engine === 'rvc' ? 'RVC는 참조 audio 없이 내장 목소리를 씁니다.' : referenceName || undefined}>
             <Upload size={14}/><span className="voice-convert-file-name">{referenceName || '참조 audio 선택'}</span>
           </Button>
 
@@ -2827,6 +2856,25 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
             <label className="timbre-option-check"><input type="checkbox" checked={seedAutoF0Adjust} onChange={event => setSeedAutoF0Adjust(event.target.checked)} disabled={busy}/>참조 목소리에 맞춰 음정 자동 조절</label>
             <div className="runtime-options"><label>추론 스텝<Input type="number" min={1} max={200} value={seedInferenceSteps} onChange={event => setSeedInferenceSteps(Math.max(1, Math.min(200, Number(event.target.value) || 80)))} disabled={busy}/></label></div>
             <p className="field-hint">기본값은 노래 변환용으로 확인한 F0 사용 · 자동 음정 조절 · 80스텝입니다.</p>
+          </div>}
+
+          {vcFamilyId && <div className="timbre-engine-options">
+            <div className="timbre-option-head" style={{ marginTop: 18 }}>{engine === 'rvc' ? 'RVC 목소리' : 'MeanVC2 모델'}</div>
+            {engine === 'rvc' && <>
+              <div className="runtime-options"><label>내장 목소리<select value={rvcVoice} onChange={event => setRvcVoice(event.target.value)} disabled={busy}>{(vcFamily?.voices || [{ id: 'default', label: 'default' }]).map(voice => <option key={voice.id} value={voice.id}>{voice.label}</option>)}</select></label>
+                <label>음높이(반음)<Input type="number" min={-24} max={24} value={rvcSemitone} onChange={event => setRvcSemitone(Math.max(-24, Math.min(24, Number(event.target.value) || 0)))} disabled={busy}/></label></div>
+              <div className="runtime-options"><label>검색 블렌딩(0~1)<Input type="number" min={0} max={1} step={0.1} value={rvcRetrieval} onChange={event => setRvcRetrieval(Math.max(0, Math.min(1, Number(event.target.value) || 0)))} disabled={busy}/></label></div>
+              <p className="field-hint">RVC는 참조 audio가 아니라 내장 목소리 4개 중 하나로 바꿉니다. 원곡과 음역이 다르면 음높이(반음)로 맞추세요.</p>
+            </>}
+            {engine === 'meanvc2' && <>
+              <div className="runtime-options"><label>정밀도<select value={meanvcPrecision} onChange={event => setMeanvcPrecision(event.target.value as 'q4_k' | 'fp32')} disabled={busy}><option value="q4_k">Q4 (342MB)</option><option value="fp32">FP32 (1.6GB)</option></select></label></div>
+              <p className="field-hint">참조 audio의 목소리로 바꾸는 제로샷 변환입니다. 말소리용 모델이라 노래에서는 음정이 손상될 수 있습니다.</p>
+            </>}
+            {vcPrecisionInfo && (vcPrecisionInfo.installed
+              ? <span className="field-hint">모델 설치됨 · 사용 준비 완료</span>
+              : vcPrecisionInfo.download?.state === 'running'
+                ? <span className="field-hint">내려받는 중… {vcPrecisionInfo.download.totalBytes ? Math.round(vcPrecisionInfo.download.receivedBytes / vcPrecisionInfo.download.totalBytes * 100) : 0}%</span>
+                : <div className="voice-convert-topbar"><Button variant="outline" size="sm" onClick={() => void downloadVcModel()} disabled={busy}><Download size={13}/>모델 받기 (약 {vcPrecisionInfo.sizeMb} MB)</Button>{vcPrecisionInfo.download?.error && <span className="field-hint warning">{vcPrecisionInfo.download.error}</span>}</div>)}
           </div>}
 
           {engine === 'vevo2' && <div className="timbre-engine-options">

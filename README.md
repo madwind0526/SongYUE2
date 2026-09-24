@@ -188,6 +188,10 @@ npm run build   # 프론트엔드 빌드
 
 YuE2 모델 가중치(GGUF/원본 모두)는 CC BY-NC 4.0을 따릅니다. 비상업적 용도로만 사용하세요.
 
+## 음색 변조 엔진 (audio.cpp)
+
+Seed-VC, Vevo, **MeanVC2**(참조 audio 제로샷, 말소리용), **RVC**(내장 목소리 4개 선택, 참조 audio 불필요), DDSP-SVC(학습형). RVC·MeanVC2 모델은 창에서 "모델 받기"로 내려받습니다.
+
 ## Audio Tools (audio.cpp 기반)
 
 - **TTS 생성**: T2S(음색 설명) / Ref-T2S(참조 목소리 복제) / 프리셋 목소리 3가지. 모델·크기·정밀도를 화면에서 고르고 미설치 조합은 "모델 받기"로 내려받습니다(`models/audio-cpp/audio.cpp-gguf/`).
@@ -197,7 +201,7 @@ YuE2 모델 가중치(GGUF/원본 모두)는 CC BY-NC 4.0을 따릅니다. 비�
   - 스타일 지시(선택): VoxCPM2, Qwen3 CustomVoice
 - **음성 인식**: Qwen3-ASR(0.6B/1.7B), Nemotron 3.5 ASR, VibeVoice-ASR. 결과는 텍스트로 저장할 수 있습니다.
 - **음성 조절**: ffmpeg(rubberband)로 피치·속도·음량, 노이즈 줄이기.
-- 엔진 빌드에는 `run-build.ps1`의 `-Models` 목록(`yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc,vevo2,qwen3_tts,chatterbox,qwen3_asr,qwen3_forced_aligner,nemotron_asr,vibevoice_asr,voxcpm2,omnivoice,supertonic,fish_audio,magpie_tts`)이 필요합니다. 모델 비교 결과는 `test/tts-model-comparison/README.md`.
+- 엔진 빌드에는 `run-build.ps1`의 `-Models` 목록(`yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc,vevo2,qwen3_tts,chatterbox,qwen3_asr,qwen3_forced_aligner,nemotron_asr,vibevoice_asr,voxcpm2,omnivoice,supertonic,fish_audio,magpie_tts,rvc,meanvc2`)이 필요합니다. 모델 비교 결과는 `test/tts-model-comparison/README.md`.
 
 ### Typecast (클라우드 TTS, 선택)
 

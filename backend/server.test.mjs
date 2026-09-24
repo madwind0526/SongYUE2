@@ -1839,3 +1839,47 @@ test('Tools 메뉴 - Typecast 클라우드 TTS: 키 없으면 안내, 키는 .en
   fakeSpawn.setProbe({ durationSeconds: '2' });
   assert.equal((await callJson('/api/audio-tools/typecast', 'POST', { mode: 'ref', referenceDataUrl: refAudio, text: '안녕하세요.' })).status, 400, 'expected a too-short reference to be rejected');
 });
+
+test('음색 변조 - RVC/MeanVC2: RVC는 참조 없이 내장 목소리로, MeanVC2는 참조 음성으로 변환하고 모델이 없으면 받기 안내 400', async t => {
+  resetEnv();
+  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-vc-'));
+  const { enginePath } = await setUpEngine(root);
+  const fakeSpawn = makeFakeSpawn();
+  const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}), spawnImpl: fakeSpawn.spawnImpl });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const callJson = async (route, method = 'GET', payload) => { const response = await fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) }); return { status: response.status, data: await response.json() }; };
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+  await callJson('/api/settings', 'PUT', { enginePath });
+  const sourceDataUrl = `data:audio/wav;base64,${Buffer.from('fake-source-song').toString('base64')}`;
+  const refDataUrl = `data:audio/wav;base64,${Buffer.from('fake-target-voice').toString('base64')}`;
+  const previewId = (await callJson('/api/timbre-transform/prepare', 'POST', { sourceDataUrl })).data.previewId;
+  const apply = (payload) => callJson(`/api/timbre-transform/${previewId}/legacy/apply`, 'POST', payload);
+  const models = await callJson('/api/audio-tools/tts/models');
+  assert.deepEqual(models.data.vc.map(f => f.id), ['rvc', 'meanvc2']);
+
+  // not installed -> 400 with the "받기" guidance, engine never spawned
+  const missingRvc = await apply({ engine: 'rvc' });
+  assert.equal(missingRvc.status, 400);
+  assert.match(missingRvc.data.error, /RVC.*받기/);
+  assert.equal((await apply({ engine: 'meanvc2', dataUrl: refDataUrl })).status, 400);
+
+  const gguf = async (dir, file) => { await mkdir(path.join(root, 'models', 'audio-cpp', 'audio.cpp-gguf', dir), { recursive: true }); await writeFile(path.join(root, 'models', 'audio-cpp', 'audio.cpp-gguf', dir, file), 'stub'); };
+  await gguf('RVC-GGUF', 'rvc-f16.gguf');
+  await gguf('MeanVC2-GGUF', 'meanvc2-120ms-40ms-q4_k.gguf');
+
+  // RVC needs no reference clip; voice / semitone / retrieval are passed as request options
+  const rvc = await apply({ engine: 'rvc', rvcVoice: 'chocola', rvcSemitone: 3, rvcRetrieval: 0.5 });
+  assert.equal(rvc.status, 200);
+  const rvcCall = fakeSpawn.calls.find(c => c.args.includes('rvc'));
+  assert.ok(rvcCall.args.includes('voice_id=chocola') && rvcCall.args.includes('semitone_shift=3') && rvcCall.args.includes('retrieval_blend=0.5'));
+  assert.ok(!rvcCall.args.includes('--voice-ref'));
+
+  // MeanVC2 is zero-shot from the reference clip and requires it
+  assert.equal((await apply({ engine: 'meanvc2' })).status, 400);
+  const mean = await apply({ engine: 'meanvc2', dataUrl: refDataUrl });
+  assert.equal(mean.status, 200);
+  const meanCall = fakeSpawn.calls.find(c => c.args.includes('meanvc2'));
+  assert.ok(meanCall.args.includes('--voice-ref') && meanCall.args.includes('--audio'));
+  assert.ok(fakeSpawn.calls.some(c => c.engine === 'ffmpeg' && c.args.some(arg => typeof arg === 'string' && arg.includes('sidechaingate'))), 'expected the shared silence gate for the new engines too');
+});

@@ -36,7 +36,7 @@
 - 절차: ① `run-build.ps1` `-Models`에 채택 후보 패밀리 추가·재빌드 ② 모델 다운로드 후 같은 한국어 샘플(`test/tts-model-comparison/audio/*.wav`)로 CER 비교 ③ `ASR_FAMILIES`에 패밀리별 `variants`(크기/정밀도)와 `cliFamily`, 언어 옵션 매핑을 추가 ④ `transcribeWav`가 선택된 패밀리의 `cliFamily`와 언어 인자를 쓰도록 일반화(`/api/audio-tools/asr` 요청에 `family` 추가) ⑤ 프론트에 모델(패밀리) 버튼 + 크기 + 정밀도 + "모델 받기" 표시(TTS 모델 선택 UI와 동일 컴포넌트 패턴, `renderModelStatus` 재사용) ⑥ 백엔드 테스트에 패밀리별 인자 검증 추가.
 - 미설치 모델은 409 + "받기" 안내(이미 구현된 패턴). 자동 참조 텍스트(TTS)는 설치된 ASR 중 가장 좋은 것 사용(`resolveAsrModel` 우선순위 목록 갱신).
 
-### 3. P1 — 음성 변환에 RVC·MeanVC2 추가 (진행 중, 2026-09-24 시작)
+### 3. P1 — 음성 변환에 RVC·MeanVC2 추가 (**완료** 2026-09-24. 구현: `backend/tts.mjs` `VC_FAMILIES`, `server.mjs` `runRvcSvc/runMeanVc2Svc/convertOne`, 프론트 `TIMBRE_ENGINES`. 아래는 원래 계획 기록)
 - 문서: `engine/audio.cpp/docs/audio_tools.md`의 "RVC", "MeanVC2" 절과 `docs/models/meanvc2.md`에서 CLI 확인 (RVC: `--family rvc --task vc`, 포장된 v1/v2 음성 + retrieval blending 옵션; MeanVC2: `--task vc`, zero-shot).
 - 모델: HF `RVC-GGUF/`, MeanVC2 디렉터리 이름은 `.../tree/main`에서 `MeanVC` 검색. `run-build.ps1`의 `-Models`에 `rvc,meanvc2` 추가 후 재빌드.
 - 백엔드: `runSeedVcSvc`/`runVevo2Svc`(server.mjs)와 같은 위치에 `runRvcSvc`/`runMeanVc2Svc` 추가(둘 다 `runSvcCli` 재사용). `applyVocalTimbreCore`의 엔진 분기(`engine: 'seed_vc'|'vevo2'`)에 새 값 추가, 긴 보컬은 기존 10초 창 청크 로직(`buildChunkPlan`) 공유. 결과는 `postProcessConvertedVocal` 통과.
