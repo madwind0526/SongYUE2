@@ -113,6 +113,19 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 | POST `/api/postprocess-settings` | `{name,params:{...}}` → 저장된 프리셋(같은 이름이면 덮어씀). `params`가 객체가 아니면 400 |
 | DELETE `/api/postprocess-settings?name=` | 프리셋 삭제 → `{ok:true}`. 없으면 404 |
 
+## AI 곡 다듬기 (노이즈 제거 · Spectral Lifter · 보컬 자연화 · 기준곡 마스터링)
+
+완성곡의 메뉴 "AI 곡 다듬기"가 쓰는 후처리 체인이다. 알고리듬은 YuE2 Studio(MIT)의 `audio-post` 크레이트를 Node로 옮긴 것이며(`backend/postfx/`), 순수 DSP라 같은 입력·설정이면 결과가 같다. 무거운 계산은 워커 스레드(`postfx/worker.mjs`)에서 돌려 API 서버가 멈추지 않는다. 처리 순서는 고정: 노이즈 제거 → Spectral Lifter → 보컬 자연화 → 기준곡 마스터링. 사용자가 단계를 켜고 시작해야 하며(자동 적용 아님), 결과는 미리듣기로만 만들어지고 사용자가 저장해야 라이브러리에 추가된다.
+
+| 엔드포인트 | 설명 |
+|---|---|
+| POST `/api/projects/:id/polish` | `{settings:{denoise:{enabled,strength},lifter:{enabled,gate,shimmerDb,hfMix,punch},naturalize:{enabled,amount},master:{enabled}}, referencePath?}` → 임시 미리듣기를 만들어 `{previewId, stages, durationMs}`. `referencePath`는 `library/` 기준 상대경로(마스터링일 때 필수, 경로 이탈은 400). 진행률은 `GET /api/generate/status`(`progress`, `detail`). 켠 단계가 없으면 400, 다른 작업 중이면 409 |
+| GET `/api/polish/:previewId/audio` | 다듬은 미리듣기(24비트 FLAC) |
+| POST `/api/polish/:previewId/save` | `{title?}` → 새 곡(기본 제목 `<원제> (다듬기)`, 원곡의 가사·스타일·커버 유지, `polishedStages` 기록)을 라이브러리에 저장하고 201 |
+| DELETE `/api/polish/:previewId` | 미리듣기 삭제. 서버가 종료되거나 다시 시작할 때도 `runs/polish-*`를 지운다 |
+
+설정값은 서버가 범위로 잘라 낸다(노이즈 세기 0.05~1, 리프터 게이트 0~1·반짝임 0~12 dB·고음역 복원 0~0.5·타격감 0~1, 자연화 양 0.05~1). 기본값은 Studio와 같다(노이즈 0.4, 게이트 0.3, 반짝임 6 dB, 자연화 0.5). 곡은 원래 샘플레이트 그대로 스테레오로 디코딩해 처리하고, 기준곡은 그 샘플레이트로 맞춰 디코딩한다. 실측(RTX 5070과 무관한 CPU 처리): 124.8초 곡의 전체 체인이 약 6.5초, 최대 메모리 약 390MB.
+
 ## 음악 생성 엔진 (audio.cpp)
 
 `enginePath`가 가리키는 `audiocpp_cli.exe`를 `--family yue2 --task gen`으로 실행합니다. 모델 폴더는 항상 `models/audio-cpp/Yue2-3B-GGUF`(프로젝트 루트 기준) 고정이며, 프론트엔드의 모델 선택(`modelId`)에 따라 본체/VAE 조합이 정해집니다.

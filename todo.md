@@ -137,3 +137,8 @@ DDSP-SVC 탭은 실제 GPU로 목표 스텝을 작게 잡아(`targetStep: 300`) 
 - [x] 원본 Python 모델(`m-a-p/YuE2-3B`, 7.3GB)은 "악기만"/ABC 기능에 필요해 사용자 결정으로 유지(2026-09-25).
 - [x] `C:\Claude\AudioAUK` 프로젝트 전체 삭제(2026-09-25, 42GB). 실행 중이던 서버(5174/4312/8189)를 끄고 지웠으며 포트는 `C:\Claude\PORTS.md`에 반환. 참고: Whisper 가상환경 `.venv-whisperx`는 AudioAuK가 아니라 `C:\Claude\MeetingNote` 소유라 그대로 남아 있음.
 - [x] `test/ACE-Step-1.5`(ACE 저장소 복제, `lora-data/` 포함) 삭제 완료(2026-09-25, 사용하지 않음).
+
+## 개선 계획 (2026-09-25, YuE2 Studio 비교 결과) — 순서 1 → 2 → 3
+- [x] **1. 곡 후처리 확장: AI 곡 다듬기** (완료): `backend/postfx/`(FFT/STFT, 노이즈 제거, Spectral Lifter, 보컬 자연화, 기준곡 마스터링·리미터), 워커 스레드, `/api/projects/:id/polish`·`/api/polish/:previewId/*`, 화면 `AiPolishDialog`(곡 메뉴 "AI 곡 다듬기"). 원본 Rust 테스트의 성질 9개 + API 테스트 통과, 125초 곡 전체 체인 6.5초. **품질은 실제 곡으로 들어 보고 판단 필요**. 남은 것: VST3 단계(선택), 자연화 세부 항목(비브라토 등) 노출 여부.
+- [ ] **2. 가사 싱크(LRC)**: 보컬 분리 + 곡 가사 + Qwen3 Forced Aligner로 단어별 시간 → LRC 저장, 플레이어 가사 표시.
+- [ ] **3. LoRA**: 먼저 Studio의 `yue-server`에 이 앱의 Q8 GGUF가 로드되는지, 공개 LoRA가 실제로 들리는지 시험 → 되면 두 번째 YuE2 엔진으로 통합.

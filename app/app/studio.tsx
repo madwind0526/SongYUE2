@@ -3095,6 +3095,179 @@ const DDSP_STATUS_LABEL: Record<string, string> = {
 };
 
 
+// "AI 곡 다듬기": AI로 만든 곡의 결함(잡음, 반짝임, 기계적인 보컬)을 다듬는 후처리 체인. 사용자가 단계를 켜고
+// 시작하면 서버가 미리듣기를 만들고, 원본과 같은 위치에서 번갈아 들어 본 뒤 새 곡으로 저장하거나 버린다.
+type PolishSettings = {
+  denoise: { enabled: boolean; strength: number };
+  lifter: { enabled: boolean; gate: number; shimmerDb: number; hfMix: number; punch: number };
+  naturalize: { enabled: boolean; amount: number };
+  master: { enabled: boolean };
+};
+const POLISH_DEFAULT: PolishSettings = {
+  denoise: { enabled: true, strength: 0.4 },
+  lifter: { enabled: true, gate: 0.3, shimmerDb: 6, hfMix: 0, punch: 0 },
+  naturalize: { enabled: false, amount: 0.5 },
+  master: { enabled: false },
+};
+function PolishSlider({ label, value, min, max, step, unit, onChange, disabled }: { label: string; value: number; min: number; max: number; step: number; unit?: string; onChange: (next: number) => void; disabled?: boolean }) {
+  return <label className="polish-slider"><span>{label}<b>{Number.isInteger(step) ? value : value.toFixed(2)}{unit || ''}</b></span><input type="range" min={min} max={max} step={step} value={value} disabled={disabled} onChange={event => onChange(Number(event.target.value))} style={{ accentColor: '#7fb069' }}/></label>;
+}
+function AiPolishDialog({ project, onClose, notify, onCreated }: { project: Project; onClose: () => void; notify: (text: string, error?: boolean) => void; onCreated: (project: Project) => void }) {
+  const t = useAudioTransport();
+  const [settings, setSettings] = useState<PolishSettings>(POLISH_DEFAULT);
+  const [referencePath, setReferencePath] = useState<string | null>(null);
+  const [referencePickerOpen, setReferencePickerOpen] = useState(false);
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [detail, setDetail] = useState('');
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const [appliedStages, setAppliedStages] = useState<string[]>([]);
+  const [title, setTitle] = useState(`${project.title} (다듬기)`);
+  const [saving, setSaving] = useState(false);
+  const [errorText, setErrorText] = useState('');
+  const previewRef = useRef<string | null>(null);
+  const sourceBuffer = t.bufferForKey('source');
+  const outputBuffer = t.bufferForKey('output');
+  const anyStage = settings.denoise.enabled || settings.lifter.enabled || settings.naturalize.enabled || settings.master.enabled;
+  const canStart = anyStage && !running && !saving && (!settings.master.enabled || !!referencePath);
+  const stageLabels: Record<string, string> = { denoise: '노이즈 제거', lifter: 'Spectral Lifter', naturalize: '보컬 자연화', master: '기준곡 마스터링' };
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch(`/api/projects/${project.id}/audio`);
+        if (!response.ok) throw new Error('곡 오디오를 불러오지 못했습니다.');
+        const decoded = await t.ensureAudioContext().decodeAudioData(await response.arrayBuffer());
+        if (!cancelled) t.setBuffer('source', decoded);
+      } catch (error) { if (!cancelled) setErrorText((error as Error).message); }
+    })();
+    return () => { cancelled = true; };
+  }, [project.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The preview is temporary: leaving the window (saved or not) removes it from the server.
+  useEffect(() => () => {
+    t.closeContext();
+    const id = previewRef.current;
+    if (id) void fetch(`/api/polish/${id}`, { method: 'DELETE', keepalive: true }).catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function patch<K extends keyof PolishSettings>(key: K, value: Partial<PolishSettings[K]>) { setSettings(previous => ({ ...previous, [key]: { ...previous[key], ...value } })); }
+  async function discardPreview() {
+    const id = previewRef.current;
+    previewRef.current = null;
+    setPreviewId(null);
+    t.setBuffer('output', null);
+    if (id) await fetch(`/api/polish/${id}`, { method: 'DELETE' }).catch(() => {});
+  }
+  async function start() {
+    setRunning(true);
+    setErrorText('');
+    setProgress(0);
+    setDetail('준비 중');
+    t.stopPlayback();
+    await discardPreview();
+    const poll = window.setInterval(() => {
+      api<{ active: boolean; progress?: number; detail?: string }>('/generate/status').then(status => {
+        if (!status.active) return;
+        if (Number.isFinite(status.progress)) setProgress(Math.min(96, Math.max(0, Math.round(status.progress as number))));
+        if (status.detail) setDetail(status.detail);
+      }).catch(() => {});
+    }, 700);
+    try {
+      const result = await api<{ previewId: string; stages: string[] }>(`/projects/${project.id}/polish`, 'POST', { settings, referencePath: settings.master.enabled ? referencePath : undefined });
+      previewRef.current = result.previewId;
+      setPreviewId(result.previewId);
+      setAppliedStages(result.stages);
+      const response = await fetch(`/api/polish/${result.previewId}/audio`);
+      if (!response.ok) throw new Error('다듬은 곡을 불러오지 못했습니다.');
+      t.setBuffer('output', await t.ensureAudioContext().decodeAudioData(await response.arrayBuffer()));
+      setProgress(100);
+      setDetail('완료');
+    } catch (error) { setErrorText((error as Error).message); }
+    finally { window.clearInterval(poll); setRunning(false); }
+  }
+  async function save() {
+    if (!previewId) return;
+    setSaving(true);
+    try {
+      const created = await api<Project>(`/polish/${previewId}/save`, 'POST', { title });
+      onCreated(created);
+      notify('다듬은 곡을 새 곡으로 라이브러리에 저장했습니다.');
+      onClose();
+    } catch (error) { setErrorText((error as Error).message); }
+    finally { setSaving(false); }
+  }
+  const row = (key: 'source' | 'output', label: string, buffer: AudioBuffer | null, processed: boolean, note: string) => <div className={t.rowClass(key, 'stem-row')}>
+    <div className="audio-compare-toolbar">
+      <button type="button" className="pp-waveform-label" aria-label={`${label} 재생/일시정지`} onClick={() => t.handleKeyClick(key)} disabled={!buffer}>{t.activeKey === key && t.isPlaying ? <Pause size={15}/> : <Play size={15}/>}</button>
+      <span className="stem-label audio-compare-label"><strong>{label}</strong><small>{note}</small></span>
+      {buffer && <span className="pp-seek-time audio-compare-duration">{formatSeekTime(buffer.duration)}</span>}
+    </div>
+    <div className="audio-compare-charts">
+      <CompareWaveform peaks={t.peaksForKey(key)} fraction={t.positionSeconds / (buffer?.duration || 1)} processed={processed}/>
+      <CompareSpectrogram buffer={buffer} fraction={t.positionSeconds / (buffer?.duration || 1)}/>
+    </div>
+  </div>;
+
+  return <Dialog open onOpenChange={next => { if (!next && !saving) onClose(); }}>
+    <DialogContent className="studio-dialog audio-compare-dialog timbre-transform-dialog">
+      <DialogTitle>AI 곡 다듬기</DialogTitle>
+      <DialogDescription>{project.title} — 원본은 그대로 두고, 다듬은 결과를 들어 본 뒤 새 곡으로 저장합니다.</DialogDescription>
+      <div className="timbre-transform-body">
+        <div className="timbre-left-panel">
+          <div className="timbre-section-heading">다듬기 단계 (위에서 아래 순서로 적용)</div>
+          <div className="polish-step">
+            <label className="at-function"><input type="checkbox" checked={settings.denoise.enabled} onChange={event => patch('denoise', { enabled: event.target.checked })} disabled={running}/>노이즈 제거</label>
+            <p className="field-hint">음악 밑에 깔린 지속적인 쉬익·지지직 소리를 줄입니다.</p>
+            {settings.denoise.enabled && <PolishSlider label="세기" value={settings.denoise.strength} min={0.05} max={1} step={0.05} onChange={value => patch('denoise', { strength: value })} disabled={running}/>}
+          </div>
+          <div className="polish-step">
+            <label className="at-function"><input type="checkbox" checked={settings.lifter.enabled} onChange={event => patch('lifter', { enabled: event.target.checked })} disabled={running}/>Spectral Lifter</label>
+            <p className="field-hint">AI 음악 특유의 반짝이는 소리와 치찰음을 가라앉히고, 잘려 나간 높은 음역과 드럼의 타격감을 살릴 수 있습니다.</p>
+            {settings.lifter.enabled && <>
+              <PolishSlider label="잡음 게이트" value={settings.lifter.gate} min={0} max={1} step={0.05} onChange={value => patch('lifter', { gate: value })} disabled={running}/>
+              <PolishSlider label="반짝임 줄이기" value={settings.lifter.shimmerDb} min={0} max={12} step={1} unit=" dB" onChange={value => patch('lifter', { shimmerDb: value })} disabled={running}/>
+              <PolishSlider label="고음역 복원" value={settings.lifter.hfMix} min={0} max={0.5} step={0.05} onChange={value => patch('lifter', { hfMix: value })} disabled={running}/>
+              <PolishSlider label="타격감" value={settings.lifter.punch} min={0} max={1} step={0.05} onChange={value => patch('lifter', { punch: value })} disabled={running}/>
+            </>}
+          </div>
+          <div className="polish-step">
+            <label className="at-function"><input type="checkbox" checked={settings.naturalize.enabled} onChange={event => patch('naturalize', { enabled: event.target.checked })} disabled={running}/>보컬 자연화</label>
+            <p className="field-hint">생성된 목소리의 기계적으로 고른 느낌을 풀어 줍니다(보컬을 따로 분리하지 않고 전체 믹스에 적용).</p>
+            {settings.naturalize.enabled && <PolishSlider label="양" value={settings.naturalize.amount} min={0.05} max={1} step={0.05} onChange={value => patch('naturalize', { amount: value })} disabled={running}/>}
+          </div>
+          <div className="polish-step">
+            <label className="at-function"><input type="checkbox" checked={settings.master.enabled} onChange={event => patch('master', { enabled: event.target.checked })} disabled={running}/>기준곡 마스터링</label>
+            <p className="field-hint">좋아하는 곡의 음량과 음색 균형에 맞춥니다(matchering). 마지막 단계로 적용됩니다.</p>
+            {settings.master.enabled && <Button variant="outline" className="voice-convert-file-btn" onClick={() => setReferencePickerOpen(true)} disabled={running} title={referencePath || undefined}><Upload size={14}/><span className="voice-convert-file-name">{referencePath ? referencePath.split('/').pop() : '기준곡 선택 (라이브러리)'}</span></Button>}
+          </div>
+          <div className="timbre-apply-row"><Button onClick={() => void start()} disabled={!canStart}>{running ? <LoaderCircle className="spin"/> : <WandSparkles size={14}/>}{previewId ? '다시 만들기' : '미리듣기 만들기'}</Button></div>
+          {running && <div className="timbre-progress-block"><span>{detail} ({progress}%)</span><Progress value={progress}/></div>}
+          {errorText && <p className="field-hint warning">{errorText}</p>}
+          <p className="field-hint">단계 값은 결과를 들어 보며 조절하세요. 처리는 곡 길이에 따라 수 초~수십 초 걸립니다. 원본 곡은 바뀌지 않고, "새 곡으로 저장"을 눌러야 라이브러리에 추가됩니다.</p>
+        </div>
+        <div className="timbre-main-panel">
+          <div className="stem-list">
+            {row('source', '원본', sourceBuffer, false, project.title)}
+            {row('output', '다듬은 곡', outputBuffer, true, outputBuffer ? appliedStages.map(stage => stageLabels[stage]).join(' → ') : '아직 만들지 않았습니다')}
+          </div>
+          <span className="field-hint">두 줄의 재생 버튼을 번갈아 누르면 같은 재생 위치에서 이어서 들려서 차이만 비교할 수 있습니다.</span>
+          <SeekRow t={t}/>
+          <div className="dialog-actions pp-dialog-actions">
+            <TransportControls t={t} disabled={!sourceBuffer}/>
+            <div className="pp-dialog-actions-right" style={{ gap: 8, alignItems: 'center' }}>
+              <Input value={title} onChange={event => setTitle(event.target.value)} aria-label="저장할 곡 제목" disabled={!previewId || saving} style={{ width: 220 }}/>
+              <Button variant="outline" onClick={onClose} disabled={saving}>닫기</Button>
+              <Button onClick={() => void save()} disabled={!previewId || running || saving}>{saving ? <LoaderCircle className="spin"/> : <Save size={15}/>}새 곡으로 저장</Button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </DialogContent>
+    <MultiFileLibraryPicker open={referencePickerOpen} onClose={() => setReferencePickerOpen(false)} onConfirm={paths => paths[0] && setReferencePath(paths[0])} title="기준곡 선택" description="음량과 음색 균형을 맞출 기준곡을 라이브러리에서 고릅니다."/>
+  </Dialog>;
+}
+
 type TimbreEngine = 'rvc' | 'ddsp';
 const TIMBRE_ENGINES: { id: TimbreEngine; label: string }[] = [
   { id: 'rvc', label: 'RVC' },
@@ -4114,6 +4287,7 @@ export default function Studio() {
   const [stemTarget, setStemTarget] = useState<{ project: Project; mode: StemMode } | null>(null);
   const [midiEditorTarget, setMidiEditorTarget] = useState<Project | null>(null);
   const [timbreTransformOpen, setTimbreTransformOpen] = useState(false);
+  const [polishTarget, setPolishTarget] = useState<Project | null>(null);
   // previewId(음색 변조 팝업이 열릴 때마다 생기는 세션 id, 더 이상 project.id가 아님) -> DDSP-SVC job id.
   // TimbreTransformDialog를 닫아도 학습을 계속 추적하려고 다이얼로그 바깥(App)에 둔다. 마운트 시
   // GET /api/ddsp-jobs로 하이드레이션하고, 완료/실패로 바뀌면 다이얼로그가 닫혀 있어도 토스트를 띄운다.
@@ -4759,7 +4933,7 @@ export default function Studio() {
   const installed = (item: typeof models[number]) => inventory?.repositories?.some(repo => (item.id !== 'yue2-original' || repo.id === 'm-a-p/YuE2-3B') && repo.files?.some(file => file.path.endsWith(item.file) && file.state === 'complete'));
   function projectList() { return <>
     <div className="collection-toolbar"><div className="collection-tabs" aria-label="작업 필터">{([['all', '전체'], ['projects', '프로젝트'], ['audio', '완성된 곡'], ['favorites', '좋아요']] as const).map(([value, label]) => <button key={value} aria-pressed={tab === value} className={tab === value ? 'active' : ''} onClick={() => setTab(value)}>{label}{value === 'all' && <span>{projects.length}</span>}</button>)}</div><div className="collection-actions"><div className="search-field"><Search size={15}/><input aria-label="곡 검색" placeholder="곡 검색" value={query} onChange={event => setQuery(event.target.value)}/></div><select className="sort-select" aria-label="정렬 방식" value={sortOption} onChange={event => setSortOption(event.target.value as typeof sortOption)}><option value="date-desc">최신순</option><option value="date-asc">오래된순</option><option value="title-asc">이름 A-Z</option><option value="title-desc">이름 Z-A</option></select><Button variant="ghost" size="icon" aria-label={settings.viewMode === 'card' ? '목록 보기' : '카드 보기'} onClick={() => void setViewMode(settings.viewMode === 'card' ? 'list' : 'card')}>{settings.viewMode === 'card' ? <ListMusic/> : <LayoutGrid/>}</Button></div></div>
-    {visibleProjects.length ? <div className={`project-list ${settings.viewMode === 'card' ? 'card-view' : ''}`}>{visibleProjects.map(item => <article className={`song-card ${item.status === 'completed' ? 'status-done' : 'status-draft'}${nowPlaying?.id === item.id && isPlaying ? ' now-playing' : ''}`} key={item.id}><button className={`song-symbol ${item.status === 'completed' ? 'status-done' : 'status-draft'}`} aria-label={item.status === 'completed' ? `${item.title} 재생` : `${item.title} 설정 불러오기`} onClick={() => item.status === 'completed' ? playQueue(visibleProjects, visibleProjects.indexOf(item)) : loadProject(item)}>{item.coverPath ? <img className="song-cover" src={coverUrl(item)} alt=""/> : item.status === 'completed' ? <AudioLines size={24}/> : <FileText size={24}/>}</button><button className="song-info" onClick={() => item.status === 'completed' ? (setSelected(item), setNotes(item.notes || '')) : loadProject(item)}><strong>{item.title}</strong><p>{item.style}</p><div><span className="small-badge">{item.status === 'completed' ? '완성' : '초안'}</span><span>{models.find(m => m.id === item.modelId)?.name || item.modelId}</span><span>{new Date(item.createdAt).toLocaleDateString('ko-KR')}</span></div></button><Button variant="ghost" size="icon" aria-label={item.favorite ? `${item.title} 좋아요 취소` : `${item.title} 좋아요`} onClick={() => void favorite(item)} className={item.favorite ? 'hearted' : ''}><Heart fill={item.favorite ? 'currentColor' : 'none'}/></Button><Button variant="ghost" size="icon" aria-label={`${item.title} 설정 불러오기`} onClick={() => loadProject(item)}><ArrowRight/></Button><Popover><PopoverTrigger render={<Button variant="ghost" size="icon" aria-label={`${item.title} 더보기`}/>}><MoreVertical/></PopoverTrigger><PopoverContent className="song-menu" align="end">{item.status === 'completed' ? <><button className="song-menu-item" onClick={() => loadProject(item)}><RefreshCw size={15}/>리믹스(설정 재사용)</button><button className="song-menu-item" onClick={() => coverFromProject(item)}><Disc3 size={15}/>커버</button><button className="song-menu-item" onClick={() => renameProject(item)}><Pencil size={15}/>이름 변경</button><button className="song-menu-item" onClick={() => openDownload(item)}><Download size={15}/>다운로드</button><button className="song-menu-item" onClick={() => setMidiEditorTarget(item)}><Music2 size={15}/>MIDI로 내보내기</button><button className="song-menu-item" onClick={() => setPostProcessTarget(item)}><SlidersHorizontal size={15}/>후처리 / EQ</button><button className="song-menu-item" onClick={() => setStemTarget({ project: item, mode: 'channel' })}><Layers size={15}/><span className="stem-menu-item-text">채널 분리<small>{STEM_MODE_CONFIG.channel.menuSub}</small></span></button><button className="song-menu-item" onClick={() => setStemTarget({ project: item, mode: 'vocal' })}><Layers size={15}/><span className="stem-menu-item-text">STEM 분리<small>{STEM_MODE_CONFIG.vocal.menuSub}</small></span></button><button className="song-menu-item" onClick={() => setStemTarget({ project: item, mode: 'full' })}><Layers size={15}/><span className="stem-menu-item-text">STEM 분리<small>{STEM_MODE_CONFIG.full.menuSub}</small></span></button><button className="song-menu-item" onClick={() => setPlaylistPickerTarget(item)}><ListPlus size={15}/>재생목록에 추가</button><button className="song-menu-item" onClick={() => openCoverPicker(item)}><ImageIcon size={15}/>앨범 표지 {item.coverPath ? '변경' : '등록'}</button>{item.coverPath && <button className="song-menu-item" onClick={() => void deleteCover(item)}><X size={15}/>앨범 표지 삭제</button>}<button className="song-menu-item" onClick={() => { setSelected(item); setNotes(item.notes || ''); }}><CircleHelp size={15}/>상세 정보</button></> : <><button className="song-menu-item" onClick={() => renameProject(item)}><Pencil size={15}/>이름 변경</button><button className="song-menu-item" onClick={() => void addAsExample(item)}><Sparkles size={15}/>예시로 추가하기</button><button className="song-menu-item" onClick={() => openCoverPicker(item)}><ImageIcon size={15}/>앨범 표지 {item.coverPath ? '변경' : '등록'}</button></>}<button className="song-menu-item danger" onClick={() => setDeleteTarget(item)}><Trash2 size={15}/>삭제</button></PopoverContent></Popover>{item.status === 'completed' && item.durationMs ? <span className="song-duration">{formatTime(item.durationMs / 1000)}</span> : null}</article>)}</div> : <div className="empty-library"><div className="empty-icon"><AudioLines size={42} strokeWidth={1.25}/></div><h2>{query ? '검색 결과가 없어요' : tab === 'audio' ? '완성된 노래가 아직 없어요' : page === 'favorites' || tab === 'favorites' ? '마음에 드는 곡을 모아 보세요' : '첫 번째 노래를 기다리고 있어요'}</h2><p>{query ? '다른 제목이나 스타일로 검색해 보세요.' : tab === 'audio' ? '노래 만들기로 곡을 생성하면 이곳에서 결과를 들을 수 있어요.' : page === 'favorites' || tab === 'favorites' ? '저장한 곡의 하트를 누르면 이곳에 나타나요.' : <>가사 한 줄, 떠오르는 분위기에서 시작해 보세요.<br/>저장한 초안과 완성된 곡이 이곳에 모입니다.</>}</p>{!query && tab === 'all' && page !== 'favorites' && <Button variant="outline" className="soft-button" onClick={() => setPresetOpen(true)}><Sparkles/>예시로 시작하기<ArrowRight/></Button>}</div>}
+    {visibleProjects.length ? <div className={`project-list ${settings.viewMode === 'card' ? 'card-view' : ''}`}>{visibleProjects.map(item => <article className={`song-card ${item.status === 'completed' ? 'status-done' : 'status-draft'}${nowPlaying?.id === item.id && isPlaying ? ' now-playing' : ''}`} key={item.id}><button className={`song-symbol ${item.status === 'completed' ? 'status-done' : 'status-draft'}`} aria-label={item.status === 'completed' ? `${item.title} 재생` : `${item.title} 설정 불러오기`} onClick={() => item.status === 'completed' ? playQueue(visibleProjects, visibleProjects.indexOf(item)) : loadProject(item)}>{item.coverPath ? <img className="song-cover" src={coverUrl(item)} alt=""/> : item.status === 'completed' ? <AudioLines size={24}/> : <FileText size={24}/>}</button><button className="song-info" onClick={() => item.status === 'completed' ? (setSelected(item), setNotes(item.notes || '')) : loadProject(item)}><strong>{item.title}</strong><p>{item.style}</p><div><span className="small-badge">{item.status === 'completed' ? '완성' : '초안'}</span><span>{models.find(m => m.id === item.modelId)?.name || item.modelId}</span><span>{new Date(item.createdAt).toLocaleDateString('ko-KR')}</span></div></button><Button variant="ghost" size="icon" aria-label={item.favorite ? `${item.title} 좋아요 취소` : `${item.title} 좋아요`} onClick={() => void favorite(item)} className={item.favorite ? 'hearted' : ''}><Heart fill={item.favorite ? 'currentColor' : 'none'}/></Button><Button variant="ghost" size="icon" aria-label={`${item.title} 설정 불러오기`} onClick={() => loadProject(item)}><ArrowRight/></Button><Popover><PopoverTrigger render={<Button variant="ghost" size="icon" aria-label={`${item.title} 더보기`}/>}><MoreVertical/></PopoverTrigger><PopoverContent className="song-menu" align="end">{item.status === 'completed' ? <><button className="song-menu-item" onClick={() => loadProject(item)}><RefreshCw size={15}/>리믹스(설정 재사용)</button><button className="song-menu-item" onClick={() => coverFromProject(item)}><Disc3 size={15}/>커버</button><button className="song-menu-item" onClick={() => renameProject(item)}><Pencil size={15}/>이름 변경</button><button className="song-menu-item" onClick={() => openDownload(item)}><Download size={15}/>다운로드</button><button className="song-menu-item" onClick={() => setMidiEditorTarget(item)}><Music2 size={15}/>MIDI로 내보내기</button><button className="song-menu-item" onClick={() => setPostProcessTarget(item)}><SlidersHorizontal size={15}/>후처리 / EQ</button><button className="song-menu-item" onClick={() => setPolishTarget(item)}><WandSparkles size={15}/>AI 곡 다듬기</button><button className="song-menu-item" onClick={() => setStemTarget({ project: item, mode: 'channel' })}><Layers size={15}/><span className="stem-menu-item-text">채널 분리<small>{STEM_MODE_CONFIG.channel.menuSub}</small></span></button><button className="song-menu-item" onClick={() => setStemTarget({ project: item, mode: 'vocal' })}><Layers size={15}/><span className="stem-menu-item-text">STEM 분리<small>{STEM_MODE_CONFIG.vocal.menuSub}</small></span></button><button className="song-menu-item" onClick={() => setStemTarget({ project: item, mode: 'full' })}><Layers size={15}/><span className="stem-menu-item-text">STEM 분리<small>{STEM_MODE_CONFIG.full.menuSub}</small></span></button><button className="song-menu-item" onClick={() => setPlaylistPickerTarget(item)}><ListPlus size={15}/>재생목록에 추가</button><button className="song-menu-item" onClick={() => openCoverPicker(item)}><ImageIcon size={15}/>앨범 표지 {item.coverPath ? '변경' : '등록'}</button>{item.coverPath && <button className="song-menu-item" onClick={() => void deleteCover(item)}><X size={15}/>앨범 표지 삭제</button>}<button className="song-menu-item" onClick={() => { setSelected(item); setNotes(item.notes || ''); }}><CircleHelp size={15}/>상세 정보</button></> : <><button className="song-menu-item" onClick={() => renameProject(item)}><Pencil size={15}/>이름 변경</button><button className="song-menu-item" onClick={() => void addAsExample(item)}><Sparkles size={15}/>예시로 추가하기</button><button className="song-menu-item" onClick={() => openCoverPicker(item)}><ImageIcon size={15}/>앨범 표지 {item.coverPath ? '변경' : '등록'}</button></>}<button className="song-menu-item danger" onClick={() => setDeleteTarget(item)}><Trash2 size={15}/>삭제</button></PopoverContent></Popover>{item.status === 'completed' && item.durationMs ? <span className="song-duration">{formatTime(item.durationMs / 1000)}</span> : null}</article>)}</div> : <div className="empty-library"><div className="empty-icon"><AudioLines size={42} strokeWidth={1.25}/></div><h2>{query ? '검색 결과가 없어요' : tab === 'audio' ? '완성된 노래가 아직 없어요' : page === 'favorites' || tab === 'favorites' ? '마음에 드는 곡을 모아 보세요' : '첫 번째 노래를 기다리고 있어요'}</h2><p>{query ? '다른 제목이나 스타일로 검색해 보세요.' : tab === 'audio' ? '노래 만들기로 곡을 생성하면 이곳에서 결과를 들을 수 있어요.' : page === 'favorites' || tab === 'favorites' ? '저장한 곡의 하트를 누르면 이곳에 나타나요.' : <>가사 한 줄, 떠오르는 분위기에서 시작해 보세요.<br/>저장한 초안과 완성된 곡이 이곳에 모입니다.</>}</p>{!query && tab === 'all' && page !== 'favorites' && <Button variant="outline" className="soft-button" onClick={() => setPresetOpen(true)}><Sparkles/>예시로 시작하기<ArrowRight/></Button>}</div>}
   </>; }
   function playlistPage() {
     if (activePlaylist) return <section className="library-page page-scroll"><div className="page-heading library-heading"><div><button className="playlist-back" onClick={() => setActivePlaylistId(null)}><ChevronLeft size={15}/>재생목록</button><h1>{activePlaylist.name}</h1><p>{playlistSongs.length}곡</p></div><div className="playlist-detail-actions"><Button variant="ghost" size="icon" aria-label={settings.viewMode === 'card' ? '목록 보기' : '카드 보기'} onClick={() => void setViewMode(settings.viewMode === 'card' ? 'list' : 'card')}>{settings.viewMode === 'card' ? <ListMusic/> : <LayoutGrid/>}</Button><Button onClick={() => playQueue(playlistSongs, 0)} disabled={!playlistSongs.some(item => item.status === 'completed')}><Play/>전체 재생</Button></div></div>{playlistSongs.length ? <div className={`project-list ${settings.viewMode === 'card' ? 'card-view' : ''}`}>{playlistSongs.map(item => <article className={`song-card ${item.status === 'completed' ? 'status-done' : 'status-draft'}${nowPlaying?.id === item.id && isPlaying ? ' now-playing' : ''}`} key={item.id}><button className={`song-symbol ${item.status === 'completed' ? 'status-done' : 'status-draft'}`} aria-label={`${item.title} 재생`} onClick={() => playQueue(playlistSongs, playlistSongs.indexOf(item))}>{item.coverPath ? <img className="song-cover" src={coverUrl(item)} alt=""/> : item.status === 'completed' ? <AudioLines size={24}/> : <FileText size={24}/>}</button><button className="song-info" onClick={() => { setSelected(item); setNotes(item.notes || ''); }}><strong>{item.title}</strong><p>{item.style}</p></button><Button variant="ghost" size="icon" aria-label={`${item.title} 재생목록에서 제거`} onClick={() => void removeFromPlaylist(activePlaylist, item.id)}><X/></Button></article>)}</div> : <div className="empty-library"><div className="empty-icon"><ListPlus size={42} strokeWidth={1.25}/></div><h2>아직 곡이 없어요</h2><p>노래의 &quot;...&quot; 메뉴에서 이 재생목록에 곡을 추가해 보세요.</p></div>}</section>;
@@ -4813,6 +4987,7 @@ export default function Studio() {
     {postProcessTarget && <PostProcessDialog project={postProcessTarget} onClose={() => setPostProcessTarget(null)} notify={notify} visualizerEnabled={settings.visualizerEnabled} visualizerRingCount={settings.visualizerRingCount} visualizerHue={settings.visualizerHue} visualizerLineWidth={settings.visualizerLineWidth} visualizerTrail={settings.visualizerTrail} visualizerSpiral={settings.visualizerSpiral} visualizerRingMode={settings.visualizerRingMode} visualizerTimeStep={settings.visualizerTimeStep} visualizerTimeSkew={settings.visualizerTimeSkew} visualizerRingStep={settings.visualizerRingStep} visualizerAmplitude={settings.visualizerAmplitude}/>}
     {stemTarget && <StemDialog project={stemTarget.project} mode={stemTarget.mode} onClose={() => setStemTarget(null)} notify={notify} visualizerEnabled={settings.visualizerEnabled} visualizerRingCount={settings.visualizerRingCount} visualizerHue={settings.visualizerHue} visualizerLineWidth={settings.visualizerLineWidth} visualizerTrail={settings.visualizerTrail} visualizerSpiral={settings.visualizerSpiral} visualizerRingMode={settings.visualizerRingMode} visualizerTimeStep={settings.visualizerTimeStep} visualizerTimeSkew={settings.visualizerTimeSkew} visualizerRingStep={settings.visualizerRingStep} visualizerAmplitude={settings.visualizerAmplitude}/>}
     {midiEditorTarget && <MidiEditorDialog project={midiEditorTarget} onClose={() => setMidiEditorTarget(null)} notify={notify}/>}
+    {polishTarget && <AiPolishDialog project={polishTarget} onClose={() => setPolishTarget(null)} notify={notify} onCreated={item => setProjects(previous => [item, ...previous])}/>}
     {timbreTransformOpen && <TimbreTransformDialog onClose={() => setTimbreTransformOpen(false)} notify={notify} onCreated={item => setProjects(previous => [item, ...previous])} ddspActiveJobs={ddspActiveJobs} onDdspJobStarted={(previewId, jobId) => setDdspActiveJobs(previous => ({ ...previous, [previewId]: jobId }))} onDdspJobCleared={previewId => setDdspActiveJobs(previous => { const next = { ...previous }; delete next[previewId]; return next; })}/>}
     {restoreFile && <AudioRestoreDialog file={restoreFile} onClose={() => setRestoreFile(null)} notify={notify} onCreated={item => setProjects(previous => [item, ...previous])}/>}
     {compareOpen && <AudioCompareDialog onClose={() => setCompareOpen(false)} notify={notify} onCreated={item => setProjects(previous => [item, ...previous])}/>}

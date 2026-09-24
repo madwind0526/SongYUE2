@@ -259,3 +259,11 @@
     margin-left: 0;
   }
 }
+
+/* AI 곡 다듬기 */
+.polish-step { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; margin-top: 8px; border: 1px solid #3b493d; border-radius: 10px; background: #1d251d; }
+.polish-step .at-function { align-self: flex-start; }
+.polish-step .field-hint { margin: 0; }
+.polish-slider { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: #a9b8a4; }
+.polish-slider > span { display: flex; justify-content: space-between; }
+.polish-slider b { color: #e4ece0; font-weight: 600; }
