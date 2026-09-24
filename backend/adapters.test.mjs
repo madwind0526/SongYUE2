@@ -16,6 +16,8 @@ test('hub repos: only YuE2 adapters are kept and they are classified from their 
   assert.equal(isYueAdapterRepo(repoModel({ tags: ['lora', 'base_model:Qwen/Qwen-Image-Edit'], cardData: {} })), false, 'adapters of other models are dropped');
   assert.equal(isYueAdapterRepo({ id: 'x/YuE2-3B-MLX', tags: ['mlx'], siblings: [{ rfilename: 'model.safetensors' }] }), false, 'converted copies of the whole model are not adapters');
   assert.equal(isYueAdapterRepo({ id: 'x/yue2-lora', tags: ['lora'], siblings: [{ rfilename: 'README.md' }] }), false, 'no weights');
+  assert.equal(isYueAdapterRepo({ id: 'atomtanstudio/lora-library', tags: ['lora', 'yue2', 'base_model:m-a-p/YuE2-3B'], siblings: [{ rfilename: 'yue2/dreampop/a.safetensors' }] }), true, 'tags count as well as the name');
+  assert.equal(isYueAdapterRepo({ id: 'someone/lora-library', tags: ['lora'], siblings: [{ rfilename: 'a.safetensors' }] }), false, 'a LoRA of some other model');
   const info = classifyRepo(repoModel());
   assert.equal(info.title, 'rock');
   assert.deepEqual(info.categories, ['록/메탈']);

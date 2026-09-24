@@ -43,7 +43,8 @@ export function isYueAdapterRepo(model) {
   const name = model.id.toLowerCase();
   const tags = (model.tags || []).map((tag) => tag.toLowerCase());
   // Converted or quantized copies of the whole model (MLX, FP8, GGUF, ...) are not adapters: an adapter says so itself.
-  return name.includes('yue2') && (tags.includes('lora') || /lora|adapter|slider/.test(name) || files.some((file) => /(^|[/_-])(lora|adapter)/i.test(file)));
+  const yue2 = name.includes('yue2') || tags.includes('yue2');
+  return yue2 && (tags.includes('lora') || /lora|adapter|slider/.test(name) || files.some((file) => /(^|[/_-])(lora|adapter)/i.test(file)));
 }
 
 const stageOfName = (name) => (/(^|[-_/. ])nar([-_/. 0-9]|$)/i.test(name) ? 'nar' : /(^|[-_/. ])ar([-_/. 0-9]|$)/i.test(name) ? 'ar' : 'unknown');
@@ -144,8 +145,12 @@ async function hfJson(fetchImpl, url) {
 export async function searchHub({ fetchImpl = fetch, query = '' } = {}) {
   const models = await cached('search', 10 * 60 * 1000, async () => {
     const found = new Map();
-    for (const term of ['yue2', 'yue2 lora']) {
-      const list = await hfJson(fetchImpl, `${HF}/api/models?search=${encodeURIComponent(term)}&full=true&limit=100&sort=likes&direction=-1`).catch(() => []);
+    const queries = [
+      `search=${encodeURIComponent('yue2')}`, `search=${encodeURIComponent('yue2 lora')}`,
+      `filter=${encodeURIComponent('base_model:adapter:m-a-p/YuE2-3B')}`, `filter=${encodeURIComponent('base_model:adapter:Comfy-Org/YuE2')}`,
+    ];
+    for (const query of queries) {
+      const list = await hfJson(fetchImpl, `${HF}/api/models?${query}&full=true&limit=100&sort=likes&direction=-1`).catch(() => []);
       for (const model of list) if (model?.id && !found.has(model.id)) found.set(model.id, model);
     }
     if (!found.size) throw new Error('허깅페이스에서 LoRA 목록을 가져오지 못했습니다. 인터넷 연결을 확인해 주세요.');
