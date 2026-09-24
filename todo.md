@@ -134,6 +134,6 @@ DDSP-SVC 탭은 실제 GPU로 목표 스텝을 작게 잡아(`targetStep: 300`) 
 - [x] 음색 변조에서 Seed-VC/Vevo 제거(코드·테스트·문서·모델 파일). 곡 보컬 변환 엔진은 RVC와 DDSP-SVC.
 - [x] STT는 Qwen3-ASR, Nemotron 남기고 VibeVoice-ASR 삭제, TTS는 Qwen3-TTS/VoxCPM2 남기고 OmniVoice/Fish/Chatterbox 삭제. 지운 모델의 버튼은 남기고 선택하면 "모델 받기" 안내. STT 실측(합성 한국어 9클립): Nemotron CER 0.000 · Qwen3 1.7B 0.003 · Qwen3 0.6B 0.018 · VibeVoice 0.097(7~17배 느림).
 - [x] YuE2 Q4/BF16(+F32 VAE) 삭제, 기본 모델을 Q8로 변경, 모델 목록은 디스크 실재 기준.
-- [ ] 결정 대기: 원본 Python 모델(7.3GB)은 "악기만"/ABC 기능에 필요 — 그 기능을 안 쓰면 삭제 가능.
+- [x] 원본 Python 모델(`m-a-p/YuE2-3B`, 7.3GB)은 "악기만"/ABC 기능에 필요해 사용자 결정으로 유지(2026-09-25).
 - [x] `C:\Claude\AudioAUK` 프로젝트 전체 삭제(2026-09-25, 42GB). 실행 중이던 서버(5174/4312/8189)를 끄고 지웠으며 포트는 `C:\Claude\PORTS.md`에 반환. 참고: Whisper 가상환경 `.venv-whisperx`는 AudioAuK가 아니라 `C:\Claude\MeetingNote` 소유라 그대로 남아 있음.
 - [x] `test/ACE-Step-1.5`(ACE 저장소 복제, `lora-data/` 포함) 삭제 완료(2026-09-25, 사용하지 않음).
