@@ -3394,13 +3394,16 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
 
     {tab === 'mine' && <>
       <div className="adapter-import"><strong><FolderOpen size={15}/> 파일 가져오기</strong>
+        <div className="adapter-import-main">
         <label className={`adapter-dropzone${dragging ? ' over' : ''}`} onDragOver={event => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={event => { event.preventDefault(); setDragging(false); pickImportFiles(event.dataTransfer.files); }}>
           <input type="file" multiple accept=".safetensors,.json" hidden disabled={Boolean(importing)} onChange={event => { pickImportFiles(event.target.files); event.target.value = ''; }}/>
           <Upload size={18}/><span>.safetensors 파일을 여기에 끌어다 놓거나, 눌러서 선택하세요</span>
         </label>
         {importPicked.length > 0 && <ul className="adapter-import-files">{importPicked.map(file => <li key={file.name}><span>{file.name}</span><small>{formatSize(file.size)}</small><button type="button" aria-label={`${file.name} 빼기`} onClick={() => setImportPicked(importPicked.filter(item => item !== file))} disabled={Boolean(importing)}><X size={12}/></button></li>)}</ul>}
-        <div className="adapter-import-row"><Input value={importName} placeholder="이름 (비워 두면 파일 이름)" maxLength={120} aria-label="가져올 LoRA 이름" disabled={Boolean(importing)} onChange={event => setImportName(event.target.value)}/><Button variant="outline" disabled={!importPicked.some(file => /\.safetensors$/i.test(file.name)) || Boolean(importing)} onClick={() => void importFiles()}>{importing ? <LoaderCircle className="spin" size={14}/> : <Upload size={14}/>}가져오기</Button></div>
+          <Input value={importName} placeholder="이름 (비워 두면 파일 이름)" maxLength={120} aria-label="가져올 LoRA 이름" disabled={Boolean(importing)} onChange={event => setImportName(event.target.value)}/>
         <span className="adapter-sub">{importing || '작곡용과 사운드용이 따로 있으면 두 파일을 함께 선택하세요. adapter_config.json이 있으면 같이 선택하면 됩니다.'}</span>
+        </div>
+        <Button variant="outline" className="adapter-import-go" disabled={!importPicked.some(file => /\.safetensors$/i.test(file.name)) || Boolean(importing)} onClick={() => void importFiles()}>{importing ? <LoaderCircle className="spin" size={22}/> : <Upload size={22}/>}가져오기</Button>
       </div>
       {mine ? (mine.adapters.length ? <div className="adapter-grid">{mine.adapters.map(item => <AdapterCard key={item.name} item={item} onChanged={() => void reload()} notify={notify} running={running} setRunning={setRunning}/>)}</div>
         : <div className="empty-library"><h2>받은 LoRA가 아직 없어요</h2><p>Preset에서 마음에 드는 것을 받거나, 가지고 있는 파일을 가져오세요.</p><Button variant="outline" className="soft-button" onClick={() => setTab('catalog')}><Search/>Preset 보기</Button></div>)

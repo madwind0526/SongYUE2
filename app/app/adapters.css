@@ -112,3 +112,9 @@ button.adapter-card, label.adapter-card { cursor: pointer; }
 .adapter-import-files li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .adapter-import-files li small { color: #7f917a; }
 .adapter-import-files li button { background: transparent; border: 0; color: #8fa280; cursor: pointer; }
+
+/* import box: one column (drop zone, file list, name, hint) with the same right edge, and a big import button beside it */
+.adapter-import { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 10px 14px; }
+.adapter-import > strong { grid-column: 1 / -1; }
+.adapter-import-main { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.adapter-import .adapter-import-go { align-self: stretch; height: auto; min-height: 96px; flex-direction: column; gap: 8px; font-size: 15px; font-weight: 600; }
