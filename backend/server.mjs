@@ -2370,7 +2370,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         const input = await body(req, 16 * 1024);
         const repo = text(input.repo, 200).trim();
         if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || repo.split('/').some((part) => /^\.+$/.test(part))) throw fail(400, '올바른 저장소 이름(예: 사용자/모델)이 아닙니다.');
-        void downloadRvcVoice({ fetchImpl, root, repo, license: text(input.license, 40), downloads: rvcDownloads });
+        void downloadRvcVoice({ fetchImpl, spawnImpl, root, repo, license: text(input.license, 40), downloads: rvcDownloads });
         return send(202, { ok: true });
       }
       if (req.method === 'POST' && pathname === '/api/rvc-voices/delete') {

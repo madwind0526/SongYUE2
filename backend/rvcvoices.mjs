@@ -1,8 +1,9 @@
 // Community RVC voice models from HuggingFace: search (license shown for information), download into
 // models/rvc-voices/<slug>/ and list/delete installed ones. Installed voices show up in the RVC
 // voice list as "user:<slug>" and are passed to audiocpp_cli via voice_model_path (+ retrieval index).
+import { spawn } from 'node:child_process';
 import { createWriteStream } from 'node:fs';
-import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -40,8 +41,47 @@ export async function pickRvcFiles(fetchImpl, repo) {
   pth.sort((a, b) => (/_e\d+|_s\d+|epoch|step/i.test(a.path) ? 1 : 0) - (/_e\d+|_s\d+|epoch|step/i.test(b.path) ? 1 : 0) || a.path.length - b.path.length);
   // "trained" indexes are unusable (no full IVF list sizes); the "added" index works.
   const index = files.filter((file) => /\.index$/i.test(file.path) && file.size <= MAX_MODEL_BYTES && !/trained/i.test(file.path)).sort((a, b) => b.size - a.size)[0] || null;
-  if (!pth.length) throw new Error('이 저장소에서 RVC 목소리 파일(.pth)을 찾지 못했습니다(압축 파일만 있거나 너무 큼).');
-  return { pth: pth[0], index };
+  if (pth.length) return { pth: pth[0], index };
+  // Many repos only ship the voice as a .zip (pth + index inside); take the newest-looking archive
+  // (highest epoch number in the name, else the largest).
+  const zips = files.filter((file) => /\.zip$/i.test(file.path) && file.size > 1e6 && file.size <= MAX_MODEL_BYTES);
+  const epoch = (file) => Math.max(0, ...(path.basename(file.path).match(/\d+/g) || []).map(Number));
+  zips.sort((a, b) => epoch(b) - epoch(a) || b.size - a.size);
+  if (!zips.length) throw new Error('이 저장소에서 RVC 목소리 파일(.pth 또는 .zip)을 찾지 못했습니다(너무 크거나 다른 형식).');
+  return { pth: null, index: null, zip: zips[0] };
+}
+
+async function walk(dir) {
+  const out = [];
+  for (const entry of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...await walk(full));
+    else out.push(full);
+  }
+  return out;
+}
+
+// Extracts a downloaded archive with the OS tar (bsdtar reads .zip on Windows 10+) and moves the best
+// .pth (largest non-D_/G_ training checkpoint) and non-"trained" .index next to it as voice.pth / voice.index.
+async function unpackVoiceZip(zipFile, dir, spawnImpl) {
+  const extractDir = path.join(dir, 'extract');
+  await mkdir(extractDir, { recursive: true });
+  const code = await new Promise((resolve) => {
+    const child = spawnImpl('tar', ['-xf', zipFile, '-C', extractDir], { windowsHide: true });
+    child.once('error', () => resolve(-1));
+    child.once('close', (exit) => resolve(exit));
+  });
+  if (code !== 0) throw new Error('압축 파일을 풀지 못했습니다(tar 실행 실패).');
+  const all = await walk(extractDir);
+  const sizes = new Map(await Promise.all(all.map(async (file) => [file, (await stat(file)).size])));
+  const pth = all.filter((file) => /\.pth$/i.test(file) && sizes.get(file) > 1e6 && !/^(d|g)_?\d|discriminator/i.test(path.basename(file))).sort((a, b) => sizes.get(a) - sizes.get(b))[0];
+  const index = all.filter((file) => /\.index$/i.test(file) && !/trained/i.test(file)).sort((a, b) => sizes.get(b) - sizes.get(a))[0];
+  if (!pth) throw new Error('압축 파일 안에서 RVC 목소리 파일(.pth)을 찾지 못했습니다.');
+  await copyFile(pth, path.join(dir, 'voice.pth'));
+  if (index) await copyFile(index, path.join(dir, 'voice.index'));
+  await rm(extractDir, { recursive: true, force: true });
+  await rm(zipFile, { force: true });
+  return { hasIndex: !!index };
 }
 
 async function fetchToFile(fetchImpl, url, target, state) {
@@ -56,7 +96,7 @@ async function fetchToFile(fetchImpl, url, target, state) {
   await rename(partial, target);
 }
 
-export async function downloadRvcVoice({ fetchImpl, root, repo, license, downloads }) {
+export async function downloadRvcVoice({ fetchImpl, spawnImpl = spawn, root, repo, license, downloads }) {
   const slug = rvcSlug(repo);
   if (downloads.get(slug)?.state === 'running') return;
   const state = { state: 'running', receivedBytes: 0, totalBytes: 0, error: null, repo };
@@ -65,9 +105,16 @@ export async function downloadRvcVoice({ fetchImpl, root, repo, license, downloa
   try {
     const files = await pickRvcFiles(fetchImpl, repo);
     await mkdir(dir, { recursive: true });
-    await fetchToFile(fetchImpl, `${HF}/${repo}/resolve/main/${files.pth.path}`, path.join(dir, 'voice.pth'), state);
-    if (files.index) await fetchToFile(fetchImpl, `${HF}/${repo}/resolve/main/${files.index.path}`, path.join(dir, 'voice.index'), state);
-    await writeFile(path.join(dir, 'meta.json'), JSON.stringify({ repo, license: license || '', name: repo.split('/').pop(), hasIndex: !!files.index, source: `${HF}/${repo}` }, null, 1));
+    let hasIndex = !!files.index;
+    if (files.zip) {
+      const zipFile = path.join(dir, 'pack.zip');
+      await fetchToFile(fetchImpl, `${HF}/${repo}/resolve/main/${files.zip.path}`, zipFile, state);
+      hasIndex = (await unpackVoiceZip(zipFile, dir, spawnImpl)).hasIndex;
+    } else {
+      await fetchToFile(fetchImpl, `${HF}/${repo}/resolve/main/${files.pth.path}`, path.join(dir, 'voice.pth'), state);
+      if (files.index) await fetchToFile(fetchImpl, `${HF}/${repo}/resolve/main/${files.index.path}`, path.join(dir, 'voice.index'), state);
+    }
+    await writeFile(path.join(dir, 'meta.json'), JSON.stringify({ repo, license: license || '', name: repo.split('/').pop(), hasIndex, source: `${HF}/${repo}` }, null, 1));
     downloads.delete(slug);
   } catch (error) {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
