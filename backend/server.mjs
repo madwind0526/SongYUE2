@@ -8,6 +8,7 @@ import os from 'node:os';
 import { comfyUiAlive, execute as executeComfyUi } from './comfyui.mjs';
 import { parseNoteEvents, encodeMidiFile } from './midi.mjs';
 import { startDdspJob, killDdspJob } from './ddsp-svc.mjs';
+import { searchRvcVoices, downloadRvcVoice, listInstalledRvcVoices, resolveUserRvcVoice, deleteRvcVoice } from './rvcvoices.mjs';
 import { TYPECAST_LANGUAGES, typecastSubscription, listTypecastVoices, typecastSpeak, recommendTypecastVoice, cloneTypecastVoice, deleteTypecastVoice, TypecastError } from './typecast.mjs';
 import { ASR_FAMILIES, VC_FAMILIES, TTS_FAMILIES, STYLE_FAMILIES, presetVoice, findTtsModel, isTtsModelInstalled, listTtsModels, splitTtsText, splitTtsByScript, buildTtsArgs, downloadTtsModel } from './tts.mjs';
 
@@ -735,11 +736,17 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   }
   async function runRvcSvc(vocalsWav, outputWav, options = {}) {
     const voices = VC_FAMILIES.find((item) => item.id === 'rvc').voices;
-    const voice = voices.some((item) => item.id === options.rvcVoice) ? options.rvcVoice : 'default';
+    const userVoice = typeof options.rvcVoice === 'string' && options.rvcVoice.startsWith('user:') ? await resolveUserRvcVoice(root, options.rvcVoice) : null;
+    if (typeof options.rvcVoice === 'string' && options.rvcVoice.startsWith('user:') && !userVoice) throw fail(400, '선택한 RVC 목소리가 설치되어 있지 않습니다. 다시 받아 주세요.');
+    const voice = userVoice ? options.rvcVoice : voices.some((item) => item.id === options.rvcVoice) ? options.rvcVoice : 'default';
     const semitone = Math.max(-24, Math.min(24, Math.round(Number(options.rvcSemitone)) || 0));
     // The packaged "default" voice has no retrieval index: retrieval_blend > 0 crashes audiocpp_cli (access violation, exit 3221225477).
-    const blend = voice === 'default' ? 0 : Math.max(0, Math.min(1, Number(options.rvcRetrieval) || 0));
-    await runSvcCli(['--task', 'vc', '--family', 'rvc', '--model', await vcModelPath('rvc', '기본', 'f16'), '--backend', 'cuda', '--audio', vocalsWav, '--out', outputWav, '--request-option', `voice_id=${voice}`, '--request-option', `semitone_shift=${semitone}`, '--request-option', `retrieval_blend=${blend}`], 'RVC 엔진을 실행할 수 없습니다.');
+    // Downloaded voices only support blending when a compatible retrieval index came with them.
+    const blend = voice === 'default' || (userVoice && !userVoice.index) ? 0 : Math.max(0, Math.min(1, Number(options.rvcRetrieval) || 0));
+    const voiceOptions = userVoice
+      ? ['--request-option', `voice_model_path=${userVoice.pth}`, ...(userVoice.index && blend > 0 ? ['--request-option', `retrieval_index_path=${userVoice.index}`] : [])]
+      : ['--request-option', `voice_id=${voice}`];
+    await runSvcCli(['--task', 'vc', '--family', 'rvc', '--model', await vcModelPath('rvc', '기본', 'f16'), '--backend', 'cuda', '--audio', vocalsWav, '--out', outputWav, ...voiceOptions, '--request-option', `semitone_shift=${semitone}`, '--request-option', `retrieval_blend=${blend}`], 'RVC 엔진을 실행할 수 없습니다.');
   }
   async function runMeanVc2Svc(vocalsWav, voiceRefWav, outputWav, options = {}) {
     const precision = options.meanvcPrecision === 'fp32' ? 'fp32' : 'q4_k';
@@ -947,6 +954,12 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   // Audio Tools TTS on audio.cpp (Qwen3-TTS / VoxCPM2 / Chatterbox ...). The text is split into
   // sentence-packed segments, each synthesized by its own audiocpp_cli run, then concatenated.
   const ttsDownloads = new Map();
+  const rvcDownloads = new Map();
+  // Adds downloaded community voices to the RVC voice list of the vc catalog.
+  async function withInstalledRvcVoices(vcFamilies) {
+    const installed = await listInstalledRvcVoices(root);
+    return vcFamilies.map((family) => (family.id === 'rvc' ? { ...family, voices: [...(family.voices || []), ...installed.map((voice) => ({ id: voice.id, label: `${voice.name} · 다운로드${voice.hasIndex ? '' : ' (블렌딩 불가)'}`, hasIndex: voice.hasIndex }))] } : family));
+  }
   async function runTtsCli(args, outputWav = args[args.indexOf('--out') + 1]) {
     const engine = resolveConfigPath(settings.enginePath, DEFAULT_ENGINE_PATH);
     const log = await new Promise((resolve, reject) => {
@@ -2290,7 +2303,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         const dir = timbrePreviewDir(rvcPreviewMatch[1]);
         const vocals = path.join(dir, 'stems', 'vocals-original.wav');
         if (!(await exists(vocals))) throw fail(404, '원본 오디오 준비 정보를 찾을 수 없습니다. 원본을 다시 선택해 주세요.');
-        const voice = text(input.rvcVoice, 20);
+        const voice = text(input.rvcVoice, 100);
         const semitone = Math.max(-24, Math.min(24, Math.round(Number(input.rvcSemitone)) || 0));
         const blend = Math.max(0, Math.min(1, Number(input.rvcRetrieval) || 0));
         const cacheFile = path.join(dir, `rvc-preview-${voice.replace(/[^\w-]+/g, '_')}-${semitone}-${blend}.wav`);
@@ -2346,8 +2359,27 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         try { return send(200, await runTypecastTool(input)); }
         finally { generating = false; generationStatus = null; }
       }
+      if (req.method === 'GET' && pathname === '/api/rvc-voices') {
+        return send(200, { installed: await listInstalledRvcVoices(root), downloads: Object.fromEntries(rvcDownloads) });
+      }
+      if (req.method === 'GET' && pathname === '/api/rvc-voices/search') {
+        try { return send(200, { results: await searchRvcVoices(fetchImpl, requestUrl.searchParams.get('q') || '') }); }
+        catch (error) { throw fail(502, (error && error.message) || 'RVC 목소리 검색에 실패했습니다.'); }
+      }
+      if (req.method === 'POST' && pathname === '/api/rvc-voices/download') {
+        const input = await body(req, 16 * 1024);
+        const repo = text(input.repo, 200).trim();
+        if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || repo.split('/').some((part) => /^\.+$/.test(part))) throw fail(400, '올바른 저장소 이름(예: 사용자/모델)이 아닙니다.');
+        void downloadRvcVoice({ fetchImpl, root, repo, license: text(input.license, 40), downloads: rvcDownloads });
+        return send(202, { ok: true });
+      }
+      if (req.method === 'POST' && pathname === '/api/rvc-voices/delete') {
+        const input = await body(req, 16 * 1024);
+        if (!(await deleteRvcVoice(root, text(input.id, 100)))) throw fail(404, '설치된 목소리를 찾을 수 없습니다.');
+        return send(200, { ok: true });
+      }
       if (req.method === 'GET' && pathname === '/api/audio-tools/tts/models') {
-        return send(200, { families: await listTtsModels(root, ttsDownloads), asr: await listTtsModels(root, ttsDownloads, ASR_FAMILIES), vc: await listTtsModels(root, ttsDownloads, VC_FAMILIES) });
+        return send(200, { families: await listTtsModels(root, ttsDownloads), asr: await listTtsModels(root, ttsDownloads, ASR_FAMILIES), vc: await withInstalledRvcVoices(await listTtsModels(root, ttsDownloads, VC_FAMILIES)) });
       }
       if (req.method === 'POST' && pathname === '/api/audio-tools/tts/download') {
         const input = await body(req, 64 * 1024);

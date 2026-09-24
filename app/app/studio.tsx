@@ -2563,6 +2563,11 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
   const [seedInferenceSteps, setSeedInferenceSteps] = useState(80);
   const [vcModels, setVcModels] = useState<TtsFamilyInfo[]>([]);
   const [rvcPreviewing, setRvcPreviewing] = useState(false);
+  const [rvcSearch, setRvcSearch] = useState('');
+  const [rvcSearching, setRvcSearching] = useState(false);
+  const [rvcResults, setRvcResults] = useState<{ repo: string; downloads: number; license: string }[] | null>(null);
+  const [rvcDownloads, setRvcDownloads] = useState<Record<string, { state: string; receivedBytes: number; totalBytes: number; error: string | null; repo: string }>>({});
+  const [rvcInstalled, setRvcInstalled] = useState<{ id: string; slug: string; name: string; repo: string }[]>([]);
   const rvcPreviewAudioRef = useRef<HTMLAudioElement | null>(null);
   const [rvcVoice, setRvcVoice] = useState('default');
   const [rvcSemitone, setRvcSemitone] = useState('0');
@@ -2737,6 +2742,36 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
     } catch (error) { setErrorText((error as Error).message); }
     finally { setRvcPreviewing(false); }
   }
+  async function refreshRvcVoices() {
+    try {
+      const result = await api<{ installed: typeof rvcInstalled; downloads: typeof rvcDownloads }>('/rvc-voices');
+      setRvcInstalled(result.installed);
+      setRvcDownloads(result.downloads);
+      await refreshVcModels();
+    } catch { /* backend may be restarting */ }
+  }
+  async function searchRvcOnline() {
+    setRvcSearching(true);
+    setErrorText('');
+    try { setRvcResults((await api<{ results: { repo: string; downloads: number; license: string }[] }>(`/rvc-voices/search?q=${encodeURIComponent(rvcSearch)}`)).results); }
+    catch (error) { setErrorText((error as Error).message); }
+    finally { setRvcSearching(false); }
+  }
+  async function downloadRvcOnline(repo: string, license: string) {
+    try { await api('/rvc-voices/download', 'POST', { repo, license }); await refreshRvcVoices(); }
+    catch (error) { setErrorText((error as Error).message); }
+  }
+  async function deleteRvcOnline(id: string) {
+    try { await api('/rvc-voices/delete', 'POST', { id }); if (rvcVoice === id) setRvcVoice('default'); await refreshRvcVoices(); }
+    catch (error) { setErrorText((error as Error).message); }
+  }
+  useEffect(() => { void refreshRvcVoices(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const rvcDownloading = Object.values(rvcDownloads).some(item => item.state === 'running');
+  useEffect(() => {
+    if (!rvcDownloading) return;
+    const timer = window.setInterval(() => void refreshRvcVoices(), 1500);
+    return () => window.clearInterval(timer);
+  }, [rvcDownloading]); // eslint-disable-line react-hooks/exhaustive-deps
   async function refreshVcModels() {
     try { setVcModels((await api<{ vc: TtsFamilyInfo[] }>('/audio-tools/tts/models')).vc || []); } catch { /* backend may be restarting */ }
   }
@@ -2877,7 +2912,37 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
             {engine === 'rvc' && <>
               <div className="runtime-options"><label>내장 목소리<div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 6 }}><select style={{ flex: 1, minWidth: 0 }} value={rvcVoice} onChange={event => setRvcVoice(event.target.value)} disabled={busy}>{(vcFamily?.voices || [{ id: 'default', label: 'default' }]).map(voice => <option key={voice.id} value={voice.id}>{voice.label}</option>)}</select><Button variant="outline" size="sm" aria-label="목소리 듣기" title="원본 보컬 앞 8초를 이 목소리로 바꿔 들어봅니다" disabled={busy || rvcPreviewing || !previewId || !vcModelReady} onClick={() => void previewRvcVoice()}>{rvcPreviewing ? <LoaderCircle className="spin" size={13}/> : <Play size={13}/>}</Button></div></label>
                 <label>음높이(반음)<Input type="text" inputMode="decimal" value={rvcSemitone} onChange={event => setRvcSemitone(event.target.value)} onBlur={() => setRvcSemitone(String(Math.max(-24, Math.min(24, Math.round(Number(rvcSemitone)) || 0))))} disabled={busy}/></label></div>
-              <div className="runtime-options"><label>검색 블렌딩(0~1)<Input type="text" inputMode="decimal" title={rvcVoice === 'default' ? 'default 목소리는 검색 인덱스가 없어 블렌딩을 쓸 수 없습니다(0으로 처리).' : undefined} value={rvcVoice === 'default' ? '0' : rvcRetrieval} onChange={event => setRvcRetrieval(event.target.value)} onBlur={() => setRvcRetrieval(String(Math.max(0, Math.min(1, Number(rvcRetrieval) || 0))))} disabled={busy || rvcVoice === 'default'}/></label></div>
+              <div className="runtime-options"><label>검색 블렌딩(0~1)<Input type="text" inputMode="decimal" title={rvcVoice === 'default' ? 'default 목소리는 검색 인덱스가 없어 블렌딩을 쓸 수 없습니다(0으로 처리).' : undefined} value={(rvcVoice === 'default' || vcFamily?.voices?.find(voice => voice.id === rvcVoice && (voice as { hasIndex?: boolean }).hasIndex === false) !== undefined) ? '0' : rvcRetrieval} onChange={event => setRvcRetrieval(event.target.value)} onBlur={() => setRvcRetrieval(String(Math.max(0, Math.min(1, Number(rvcRetrieval) || 0))))} disabled={busy || (rvcVoice === 'default' || vcFamily?.voices?.find(voice => voice.id === rvcVoice && (voice as { hasIndex?: boolean }).hasIndex === false) !== undefined)}/></label></div>
+              {rvcInstalled.length > 0 && <>
+                <div className="timbre-option-head" style={{ marginTop: 8 }}>받은 목소리 ({rvcInstalled.length})</div>
+                <div style={{ display: 'grid', gap: 4 }}>
+                  {rvcInstalled.map(voice => <div key={voice.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={voice.repo}>{voice.name}<small style={{ opacity: 0.6 }}> · 설치됨</small></span>
+                    <Button variant="outline" size="sm" aria-label="삭제" title="이 목소리 삭제" onClick={() => void deleteRvcOnline(voice.id)} disabled={busy}><Trash2 size={13}/></Button>
+                  </div>)}
+                </div>
+              </>}
+              <div className="timbre-option-head" style={{ marginTop: 8 }}>온라인에서 RVC 목소리 찾기 (HuggingFace)</div>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <Input type="text" placeholder="예) anime, korean, singer (비우면 인기순)" value={rvcSearch} onChange={event => setRvcSearch(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') void searchRvcOnline(); }} disabled={busy}/>
+                <Button variant="outline" size="sm" aria-label="검색" disabled={busy || rvcSearching} onClick={() => void searchRvcOnline()}>{rvcSearching ? <LoaderCircle className="spin" size={13}/> : <Search size={13}/>}</Button>
+              </div>
+              {rvcResults && <div className="timbre-rvc-results" style={{ maxHeight: 220, overflowY: 'auto', display: 'grid', gap: 4 }}>
+                {rvcResults.length === 0 && <span className="field-hint">검색 결과가 없습니다.</span>}
+                {rvcResults.map(item => {
+                  const slug = item.repo.toLowerCase().replace(/[^a-z0-9._-]+/g, '__').slice(0, 80);
+                  const installedItem = rvcInstalled.find(voice => voice.slug === slug);
+                  const download = rvcDownloads[slug];
+                  return <div key={item.repo} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                    <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={`${item.repo} · 라이선스 ${item.license || '표기 없음'} · 다운로드 ${item.downloads}`}>{item.repo}<small style={{ opacity: 0.6 }}> · {item.license || '라이선스 없음'}</small></span>
+                    {installedItem ? <Button variant="outline" size="sm" aria-label="삭제" title="설치됨 · 눌러서 삭제" onClick={() => void deleteRvcOnline(installedItem.id)} disabled={busy}><Trash2 size={13}/></Button>
+                      : download?.state === 'running' ? <span className="field-hint">{download.totalBytes ? Math.round(download.receivedBytes / download.totalBytes * 100) : 0}%</span>
+                      : <Button variant="outline" size="sm" aria-label="받기" onClick={() => void downloadRvcOnline(item.repo, item.license)} disabled={busy}><Download size={13}/></Button>}
+                    {download?.state === 'failed' && <span className="field-hint warning" title={download.error || ''}>실패</span>}
+                  </div>;
+                })}
+              </div>}
+              <p className="field-hint">받은 목소리는 위 "내장 목소리" 목록에 "이름 · 다운로드"로 추가됩니다. 인덱스 파일이 함께 있는 목소리만 검색 블렌딩을 쓸 수 있습니다. 개인 용도로 쓰되, 실존 인물의 목소리로 타인을 속이는 용도에는 쓰지 마세요.</p>
               <p className="field-hint">RVC는 참조 audio가 아니라 내장 목소리 4개 중 하나로 바꿉니다. 원곡과 음역이 다르면 음높이(반음)로 맞추세요. 검색 블렌딩은 default 목소리에서는 쓸 수 없고(엔진이 비정상 종료), manthos·chocola·fraise에서만 동작합니다.</p>
             </>}
             {engine === 'meanvc2' && <>

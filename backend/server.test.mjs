@@ -1895,3 +1895,69 @@ test('음색 변조 - RVC/MeanVC2: RVC는 참조 없이 내장 목소리로, Mea
   assert.ok(meanCall.args.includes('--voice-ref') && meanCall.args.includes('--audio'));
   assert.ok(fakeSpawn.calls.some(c => c.engine === 'ffmpeg' && c.args.some(arg => typeof arg === 'string' && arg.includes('sidechaingate'))), 'expected the shared silence gate for the new engines too');
 });
+
+test('RVC 목소리 검색/다운로드: RVC 모델만 라이선스 표기와 함께 보여주고, 내려받은 목소리는 목록에 나타나 voice_model_path로 변환된다', async t => {
+  resetEnv();
+  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-rvcvoices-'));
+  const { enginePath } = await setUpEngine(root);
+  const fakeSpawn = makeFakeSpawn();
+  const requests = [];
+  const fetchImpl = async (url) => {
+    const text = String(url);
+    requests.push(text);
+    if (text.includes('/api/models?search=')) return Response.json([
+      { id: 'good/voice_rvc', downloads: 50, likes: 1, tags: ['rvc', 'license:mit'] },
+      { id: 'celeb/unlicensed_rvc', downloads: 90, tags: ['rvc'] },
+      { id: 'other/lic-other_rvc', downloads: 70, tags: ['rvc', 'license:other'] },
+      { id: 'good/not-a-voice', downloads: 10, tags: ['license:mit'] },
+    ]);
+    if (text.includes('/api/models/good/voice_rvc/tree/main')) return Response.json([
+      { type: 'file', path: 'voice_rvc_e60_s2400.pth', size: 5e7 }, { type: 'file', path: 'voice_rvc.pth', size: 5e7 },
+      { type: 'file', path: 'voice_rvc_trained.index', size: 2e6 }, { type: 'file', path: 'voice_rvc.index', size: 9e7 },
+    ]);
+    if (text.includes('/resolve/main/')) return new Response(Buffer.from(text.endsWith('.index') ? 'fake-index' : 'fake-pth'));
+    return Response.json({});
+  };
+  const server = await createStudioServer({ root, fetchImpl, spawnImpl: fakeSpawn.spawnImpl });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const callJson = async (route, method = 'GET', payload) => { const response = await fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) }); return { status: response.status, data: await response.json() }; };
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+  await callJson('/api/settings', 'PUT', { enginePath });
+
+  // only RVC models are listed (non-RVC repos are dropped); the license is shown for information
+  const search = await callJson('/api/rvc-voices/search?q=anime');
+  assert.deepEqual(search.data.results.map(r => r.repo).sort(), ['celeb/unlicensed_rvc', 'good/voice_rvc', 'other/lic-other_rvc']);
+  assert.equal(search.data.results.find(r => r.repo === 'good/voice_rvc').license, 'mit');
+  assert.equal((await callJson('/api/rvc-voices/download', 'POST', { repo: '../evil' })).status, 400);
+
+  // download picks the final checkpoint (not the e60 one) and the non-"trained" index
+  await callJson('/api/rvc-voices/download', 'POST', { repo: 'good/voice_rvc', license: 'mit' });
+  let installed = [];
+  for (let i = 0; i < 50 && !installed.length; i += 1) { await new Promise(r => setTimeout(r, 50)); installed = (await callJson('/api/rvc-voices')).data.installed; }
+  assert.equal(installed.length, 1);
+  assert.equal(installed[0].id, 'user:good__voice_rvc');
+  assert.equal(installed[0].hasIndex, true);
+  assert.ok(requests.some(r => r.endsWith('/resolve/main/voice_rvc.pth')) && requests.some(r => r.endsWith('/resolve/main/voice_rvc.index')));
+  assert.ok(!requests.some(r => r.includes('_e60_') || r.includes('trained.index')));
+
+  // it shows up in the RVC voice list and converts through voice_model_path (+ index when blending)
+  const models = await callJson('/api/audio-tools/tts/models');
+  assert.ok(models.data.vc.find(f => f.id === 'rvc').voices.some(v => v.id === 'user:good__voice_rvc'));
+  const gguf = path.join(root, 'models', 'audio-cpp', 'audio.cpp-gguf', 'RVC-GGUF', 'rvc-f16.gguf');
+  await mkdir(path.dirname(gguf), { recursive: true });
+  await writeFile(gguf, 'stub');
+  const sourceDataUrl = `data:audio/wav;base64,${Buffer.from('fake-source-song').toString('base64')}`;
+  const previewId = (await callJson('/api/timbre-transform/prepare', 'POST', { sourceDataUrl })).data.previewId;
+  const applied = await callJson(`/api/timbre-transform/${previewId}/legacy/apply`, 'POST', { engine: 'rvc', rvcVoice: 'user:good__voice_rvc', rvcRetrieval: 0.5 });
+  assert.equal(applied.status, 200);
+  const rvcArgs = fakeSpawn.calls.find(c => c.args.includes('rvc')).args;
+  assert.ok(rvcArgs.some(a => String(a).startsWith('voice_model_path=') && String(a).endsWith('voice.pth')));
+  assert.ok(rvcArgs.some(a => String(a).startsWith('retrieval_index_path=')));
+  assert.ok(!rvcArgs.some(a => String(a).startsWith('voice_id=')));
+
+  // an uninstalled user voice is a clear 400; deleting removes it from the list
+  assert.equal((await callJson(`/api/timbre-transform/${previewId}/legacy/apply`, 'POST', { engine: 'rvc', rvcVoice: 'user:nope' })).status, 400);
+  assert.equal((await callJson('/api/rvc-voices/delete', 'POST', { id: 'user:good__voice_rvc' })).status, 200);
+  assert.equal((await callJson('/api/rvc-voices')).data.installed.length, 0);
+});
