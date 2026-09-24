@@ -10,8 +10,8 @@ import { parseNoteEvents, encodeMidiFile } from './midi.mjs';
 import { startDdspJob, killDdspJob } from './ddsp-svc.mjs';
 import { searchRvcVoices, downloadRvcVoice, listInstalledRvcVoices, resolveUserRvcVoice, deleteRvcVoice } from './rvcvoices.mjs';
 import { TYPECAST_LANGUAGES, typecastSubscription, listTypecastVoices, typecastSpeak, recommendTypecastVoice, cloneTypecastVoice, deleteTypecastVoice, TypecastError } from './typecast.mjs';
-import { readWavPcm16, wavFromPcm16, findSpeechSegments, spliceSegments } from './speechedit.mjs';
-import { ASR_FAMILIES, VC_FAMILIES, EDIT_FAMILIES, buildEditText, TTS_FAMILIES, STYLE_FAMILIES, presetVoice, findTtsModel, isTtsModelInstalled, listTtsModels, splitTtsText, splitTtsByScript, buildTtsArgs, downloadTtsModel } from './tts.mjs';
+import { readWavPcm16, wavFromPcm16, findSpeechSegments, spliceSegments, locateWords, planWindows, snapToQuietPoint } from './speechedit.mjs';
+import { ASR_FAMILIES, VC_FAMILIES, EDIT_FAMILIES, ALIGN_FAMILIES, buildEditText, applyEditText, TTS_FAMILIES, STYLE_FAMILIES, presetVoice, findTtsModel, isTtsModelInstalled, listTtsModels, splitTtsText, splitTtsByScript, buildTtsArgs, downloadTtsModel } from './tts.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const providers = new Set(['none', 'ollama', 'claude', 'chatgpt', 'gemini']);
@@ -986,8 +986,8 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const design = input.mode === 'design';
     const preset = input.mode === 'preset';
     const familyId = text(input.family, 40);
-    if ([...ASR_FAMILIES, ...VC_FAMILIES, ...EDIT_FAMILIES].some((item) => item.id === familyId)) {
-      const asrModel = findTtsModel(familyId, ASR_FAMILIES.some((item) => item.id === familyId) ? 'asr' : EDIT_FAMILIES.some((item) => item.id === familyId) ? 'edit' : 'vc', text(input.size, 20), text(input.precision, 20));
+    if ([...ASR_FAMILIES, ...VC_FAMILIES, ...EDIT_FAMILIES, ...ALIGN_FAMILIES].some((item) => item.id === familyId)) {
+      const asrModel = findTtsModel(familyId, ASR_FAMILIES.some((item) => item.id === familyId) ? 'asr' : EDIT_FAMILIES.some((item) => item.id === familyId) ? 'edit' : ALIGN_FAMILIES.some((item) => item.id === familyId) ? 'align' : 'vc', text(input.size, 20), text(input.precision, 20));
       if (!asrModel) throw fail(400, '지원하지 않는 모델 조합입니다.');
       return { model: asrModel, mode: asrModel.variant.mode, design: false };
     }
@@ -1027,6 +1027,15 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     await runTtsCli(args, textOut);
     return (await readFile(textOut, 'utf8')).trim();
   }
+  // Word timestamps of a transcript on a (short) recording; times are 16 kHz sample indexes.
+  async function alignWords(workDir, wavPath, transcript, languageKey, alignModel) {
+    const wav16 = path.join(workDir, `align-${randomUUID()}.wav`);
+    await runFfmpegCli(['-y', '-i', wavPath, '-ar', '16000', '-ac', '1', wav16], '단어 정렬 입력 변환');
+    const wordsFile = `${wav16}.json`;
+    const language = alignModel.family.languages[languageKey] || (/[가-힣]/.test(transcript) ? 'Korean' : /[ぁ-ヿ]/.test(transcript) ? 'Japanese' : /[一-鿿]/.test(transcript) ? 'Chinese' : 'English');
+    await runTtsCli(['--task', 'align', '--family', alignModel.family.cliFamily, '--model', path.join(root, alignModel.relativePath), '--audio', wav16, '--text', transcript, '--language', language, '--words-out', wordsFile], wordsFile);
+    return JSON.parse(await readFile(wordsFile, 'utf8'));
+  }
   // Speech editing (DotTTS Edit). DotTTS re-synthesizes everything it is given and can garble untouched words in
   // long inputs, so the recording is split at silences into sentences: each sentence is transcribed (STT), only
   // the sentences that contain an edit are re-synthesized, and the rest of the original samples stay untouched.
@@ -1046,6 +1055,10 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       if (!segments.length) throw fail(400, '오디오에서 말소리를 찾지 못했습니다.');
       const languageKey = text(input.language, 8);
       const providedText = text(input.sourceText, 4000).trim();
+      const precise = input.precise === true;
+      const alignModel = precise ? findTtsModel('qwen3align', 'align', '0.6B', 'q8_0') : null;
+      if (precise && !(await isTtsModelInstalled(root, alignModel))) throw fail(409, "정밀 편집에는 단어 정렬 모델(Qwen3 Forced Aligner)이 필요합니다. 대사 편집 탭에서 '모델 받기'를 눌러 내려받아 주세요.");
+      const contextWords = input.contextWords === undefined ? 2 : Math.max(0, Math.min(3, Math.round(Number(input.contextWords)) || 0));
       const segmentFile = async (index) => {
         const file = path.join(workDir, `segment-${index}.wav`);
         await writeFile(file, wavFromPcm16(samples.subarray(segments[index].start, segments[index].end), rate));
@@ -1067,23 +1080,77 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       const languageValue = model.family.languages[languageKey];
       const replacements = [];
       const taggedLines = [];
+      // Runs the editor on samples[start, end) with the tagged text; returns the result at the recording's sample rate.
+      const synthesize = async (start, end, tagged, label) => {
+        const clip = path.join(workDir, `clip-${label}.wav`);
+        await writeFile(clip, wavFromPcm16(samples.subarray(start, end), rate));
+        const editedRaw = path.join(workDir, `edited-${label}.wav`);
+        await runTtsCli(['--task', 'tts', '--family', model.family.cliFamily, '--model', path.join(root, model.relativePath), ...(languageValue ? ['--language', languageValue] : []), '--text', tagged, '--request-option', `source_audio=${clip}`, '--request-option', 'template_name=edit', '--out', editedRaw]);
+        const editedWav = path.join(workDir, `edited-${label}-fit.wav`);
+        await runFfmpegCli(['-y', '-i', editedRaw, '-ar', String(rate), '-ac', '1', editedWav], '편집 결과 변환');
+        return { samples: readWavPcm16(await readFile(editedWav)).samples, wavPath: editedWav };
+      };
+      // Queues the samples to replace samples[start, end); short fades hide the seam with the original.
+      const queueReplacement = (start, end, edited, tagged) => {
+        const copy = Int16Array.from(edited);
+        const fade = Math.min(Math.round(rate * 0.008), Math.floor(copy.length / 2));
+        for (let position = 0; position < fade; position += 1) { copy[position] = Math.round(copy[position] * (position / fade)); copy[copy.length - 1 - position] = Math.round(copy[copy.length - 1 - position] * (position / fade)); }
+        replacements.push({ start, end, samples: copy });
+        taggedLines.push(tagged);
+      };
+      let windowCount = 0;
       for (let index = 0; index < segments.length; index += 1) {
         if (!perSegment[index].length) continue;
+        // Precise mode: align the words, then re-synthesize only the edited words plus a neighbor word on each side.
+        let windows = null;
+        if (precise) {
+          try {
+            const words = locateWords(transcripts[index], await alignWords(workDir, await segmentFile(index), transcripts[index], languageKey, alignModel));
+            windows = words && planWindows(transcripts[index], words, perSegment[index], contextWords);
+          } catch { windows = null; }
+        }
+        if (windows) {
+          const toSample = (aligned) => Math.max(0, Math.min(samples.length, segments[index].start + Math.round((aligned * rate) / 16000)));
+          for (let position = 0; position < windows.length; position += 1) {
+            const window = windows[position];
+            let tagged;
+            try { tagged = buildEditText(window.text, window.edits); } catch (error) { throw fail(400, error.message); }
+            const clipStart = toSample(window.startSample);
+            const clipEnd = toSample(window.endSample);
+            const result = await synthesize(clipStart, clipEnd, tagged, `${index}-${position}`);
+            let [replaceStart, replaceEnd, edited] = [clipStart, clipEnd, result.samples];
+            // The neighbor words only give the editor context: align the result and keep just the edited words' part.
+            if (window.preCount || window.postCount) {
+              try {
+                const targetText = applyEditText(window.text, window.edits);
+                const outWords = await alignWords(workDir, result.wavPath, targetText, languageKey, alignModel);
+                if (outWords.length === targetText.split(' ').length) {
+                  // The editor pads its output with silence; without a context word on a side, trim to the first/last word (+40 ms).
+                  // Boundaries next to context words are snapped to the quietest spot (aligner times are coarse).
+                  const inRate = (aligned) => Math.round((aligned * rate) / 16000);
+                  const outStart = window.preCount ? snapToQuietPoint(result.samples, inRate(outWords[window.preCount - 1].end_sample), rate) : Math.max(0, inRate(outWords[0].start_sample - 640));
+                  const outEnd = window.postCount ? snapToQuietPoint(result.samples, inRate(outWords[outWords.length - window.postCount].start_sample), rate) : Math.min(result.samples.length, inRate(outWords[outWords.length - 1].end_sample + 640));
+                  const cropped = result.samples.subarray(outStart, Math.max(outStart, outEnd));
+                  if (cropped.length > 0) {
+                    replaceStart = window.preCount ? snapToQuietPoint(samples, toSample(window.replaceStart), rate) : toSample(window.replaceStart);
+                    replaceEnd = window.postCount ? snapToQuietPoint(samples, toSample(window.replaceEnd), rate) : toSample(window.replaceEnd);
+                    edited = cropped;
+                  }
+                }
+              } catch { /* keep the whole clip when the result cannot be aligned */ }
+            }
+            queueReplacement(replaceStart, replaceEnd, edited, tagged);
+            windowCount += 1;
+          }
+          continue;
+        }
         let tagged;
         try { tagged = buildEditText(transcripts[index], perSegment[index]); } catch (error) { throw fail(400, error.message); }
-        const editedRaw = path.join(workDir, `edited-${index}.wav`);
-        await runTtsCli(['--task', 'tts', '--family', model.family.cliFamily, '--model', path.join(root, model.relativePath), ...(languageValue ? ['--language', languageValue] : []), '--text', tagged, '--request-option', `source_audio=${await segmentFile(index)}`, '--request-option', 'template_name=edit', '--out', editedRaw]);
-        const editedWav = path.join(workDir, `edited-${index}-fit.wav`);
-        await runFfmpegCli(['-y', '-i', editedRaw, '-ar', String(rate), '-ac', '1', editedWav], '편집 결과 변환');
-        const edited = readWavPcm16(await readFile(editedWav)).samples;
-        // Short fades hide the seam between the original and the re-synthesized sentence.
-        const fade = Math.min(Math.round(rate * 0.005), Math.floor(edited.length / 2));
-        for (let position = 0; position < fade; position += 1) { edited[position] = Math.round(edited[position] * (position / fade)); edited[edited.length - 1 - position] = Math.round(edited[edited.length - 1 - position] * (position / fade)); }
-        replacements.push({ start: segments[index].start, end: segments[index].end, samples: edited });
-        taggedLines.push(tagged);
+        const whole = await synthesize(segments[index].start, segments[index].end, tagged, `${index}`);
+        queueReplacement(segments[index].start, segments[index].end, whole.samples, tagged);
       }
       const merged = spliceSegments(samples, replacements);
-      return { dataUrl: `data:audio/wav;base64,${wavFromPcm16(merged, rate).toString('base64')}`, sourceText: transcripts.join(' '), taggedText: taggedLines.join(' / '), segmentCount: segments.length, editedCount: replacements.length };
+      return { dataUrl: `data:audio/wav;base64,${wavFromPcm16(merged, rate).toString('base64')}`, sourceText: transcripts.join(' '), taggedText: taggedLines.join(' / '), segmentCount: segments.length, editedCount: replacements.length, precise: windowCount > 0 };
     } finally {
       await rm(workDir, { recursive: true, force: true }).catch(() => {});
     }
@@ -2446,7 +2513,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         return send(200, { ok: true });
       }
       if (req.method === 'GET' && pathname === '/api/audio-tools/tts/models') {
-        return send(200, { families: await listTtsModels(root, ttsDownloads), asr: await listTtsModels(root, ttsDownloads, ASR_FAMILIES), vc: await withInstalledRvcVoices(await listTtsModels(root, ttsDownloads, VC_FAMILIES)), edit: await listTtsModels(root, ttsDownloads, EDIT_FAMILIES) });
+        return send(200, { families: await listTtsModels(root, ttsDownloads), asr: await listTtsModels(root, ttsDownloads, ASR_FAMILIES), vc: await withInstalledRvcVoices(await listTtsModels(root, ttsDownloads, VC_FAMILIES)), edit: await listTtsModels(root, ttsDownloads, EDIT_FAMILIES), align: await listTtsModels(root, ttsDownloads, ALIGN_FAMILIES) });
       }
       if (req.method === 'POST' && pathname === '/api/audio-tools/tts/download') {
         const input = await body(req, 64 * 1024);

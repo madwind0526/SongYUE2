@@ -32,7 +32,7 @@
 - [x] **Typecast(클라우드 TTS) 추가** (2026-09-24): TTS 모델 버튼 "Typecast (클라우드)". T2S=추천 API로 목소리 자동 선택(실측 정확), Ref-T2S=즉시 복제(현재 요금제는 복제 불가: CLONING_NOT_AVAILABLE, 유료 플랜에서 재확인 필요). 키는 `.env`의 TYPECAST_API_KEY.
 - [x] **MeanVC2를 Audio Tools "음색 변조" 카테고리로 이동** (2026-09-24): MeanVC2는 말소리용(노래는 깨짐)이라 음색 변조(곡) 창에서 제거하고, Audio Tools에 새 카테고리 "음색 변조" 추가(`POST /api/audio-tools/vc`). 원본은 파일/라이브러리/**마이크 녹음**(입력 장치 선택, 녹음·일시정지·정지, 정지하면 원본 파형으로), 참조 음성(목표 목소리)은 파일/라이브러리, 실행하면 결과 파형·재생·저장. 보컬 전체를 조각 없이 한 번에 변환(조각 방식이 오류율 0.134 vs 통째 0.071로 더 나빴음).
 - [ ] **P5. 실시간(스트리밍) 음색 변조** — 마이크로 말하는 동안 변환된 소리가 바로 나오는 방식. MeanVC2는 스트리밍 모드(160ms 입력 청크)를 지원하고 CLI도 `--mode streaming --audio -`(stdin PCM)를 받지만, CLI는 최종 합쳐진 결과만 내놓아 실시간 출력이 안 됨. 필요: `audiocpp_server`(CMake 타깃 존재, 미빌드)의 스트리밍 API 확인/빌드 → 백엔드가 브라우저 마이크 PCM을 WebSocket 등으로 받아 서버에 중계 → 변환 청크를 브라우저에서 즉시 재생. 지연·GPU 점유·에코(스피커→마이크) 처리 고려. 다음 단계 후보.
-- [x] **P3. 대사 편집 탭** (완료 2026-09-24): DotTTS Edit(Q8/BF16) 탭 구현 — 원문(STT 자동), 바꾸기/지우기/앞·뒤 넣기, '모두', 언어 선택. Vevo2 편집(en/zh만)·FireRedTTS3(한국어 편집 불가, 영어만 정확)는 제외. **남은 개선**: 긴 문장에서 이웃 단어가 깨지는 한계 → 문장 단위 자동 분할 편집(무음 기준 분할 후 편집 구간만 재합성) 검토
+- [x] **P3. 대사 편집 탭** (완료 2026-09-24): DotTTS Edit(Q8/BF16) 탭 구현 — 원문(STT 자동), 바꾸기/지우기/앞·뒤 넣기, '모두', 언어 선택. Vevo2 편집(en/zh만)·FireRedTTS3(한국어 편집 불가, 영어만 정확)는 제외. **개선 완료**: 무음 기준 문장 분할 편집 + 단어 단위 정밀 편집(Qwen3 Forced Aligner, 편집 단어 구간만 교체)
 - [ ] **P4. 효과음 생성 탭** (Stable Audio SFX / ControlFoley)
 - [ ] **Pending(필요성 판단 후)**: 단어별 시간 정렬(Qwen3-ForcedAligner: 가사 싱크·LRC/SRT·편집 앵커), 화자 분리(Sortformer, 영어 4인 한정), 무음 검출(Silero VAD), ACE-Step 편집(repaint/lego/extract/complete), 음성 인식 결과의 SRT/LRC 저장
 

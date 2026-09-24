@@ -143,12 +143,13 @@ export const EDIT_FAMILIES = [
 export function buildEditText(source, edits) {
   const spans = [];
   for (const edit of edits) {
-    let start = source.indexOf(edit.find);
+    // An explicit `at` pins the edit to one position (used for word-level windows).
+    let start = edit.at !== undefined ? (source.startsWith(edit.find, edit.at) ? edit.at : -1) : source.indexOf(edit.find);
     if (start < 0) throw new Error(`원문에서 "${edit.find}"을(를) 찾지 못했습니다.`);
     // `all` applies the edit to every occurrence instead of only the first one.
     while (start >= 0) {
       spans.push({ start, end: start + edit.find.length, edit });
-      start = edit.all ? source.indexOf(edit.find, start + edit.find.length) : -1;
+      start = edit.all && edit.at === undefined ? source.indexOf(edit.find, start + edit.find.length) : -1;
     }
   }
   spans.sort((a, b) => a.start - b.start);
@@ -168,8 +169,27 @@ export function buildEditText(source, edits) {
   return out + source.slice(cursor);
 }
 
+// The plain text a speech edit should produce (same rules as buildEditText, without tags), used to align the result.
+export function applyEditText(source, edits) {
+  const tagged = buildEditText(source, edits);
+  return tagged
+    .replace(/<sub targ="([^"]*)">[^<]*<\/sub>/g, '$1')
+    .replace(/<del>[^<]*<\/del>/g, '')
+    .replace(/<ins>([^<]*)<\/ins>/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Word-level forced alignment (transcript + audio -> word timestamps), used to cut speech edits tightly around the edited words.
+export const ALIGN_FAMILIES = [
+  {
+    id: 'qwen3align', label: 'Qwen3 Forced Aligner', cliFamily: 'qwen3_forced_aligner', languages: { ko: 'Korean', en: 'English', ja: 'Japanese', zh: 'Chinese' },
+    variants: [{ mode: 'align', size: '0.6B', files: { q8_0: ['Qwen3-ForcedAligner-0.6B-GGUF', 'qwen3-forced-aligner-0.6b-q8_0.gguf', 1130] } }],
+  },
+];
+
 export function findTtsModel(familyId, mode, size, precision) {
-  const family = [...TTS_FAMILIES, ...ASR_FAMILIES, ...VC_FAMILIES, ...EDIT_FAMILIES].find((item) => item.id === familyId);
+  const family = [...TTS_FAMILIES, ...ASR_FAMILIES, ...VC_FAMILIES, ...EDIT_FAMILIES, ...ALIGN_FAMILIES].find((item) => item.id === familyId);
   const variant = family?.variants.find((item) => item.mode === mode && item.size === size);
   const file = variant?.files[precision];
   if (!family || !variant || !file) return null;

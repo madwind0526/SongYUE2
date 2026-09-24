@@ -97,3 +97,93 @@ export function spliceSegments(samples, replacements) {
   for (const part of parts) { out.set(part, position); position += part.length; }
   return out;
 }
+
+// ---- word-level (aligner based) editing ----
+
+// Adds charStart/charEnd (positions inside the transcript) to aligner words, or returns null when a word
+// cannot be found in order (then the caller falls back to sentence-level editing).
+export function locateWords(transcript, words) {
+  const located = [];
+  let cursor = 0;
+  for (const word of words) {
+    const at = transcript.indexOf(word.word, cursor);
+    if (at < 0) return null;
+    located.push({ ...word, charStart: at, charEnd: at + word.word.length });
+    cursor = at + word.word.length;
+  }
+  return located;
+}
+
+// Plans the small windows to re-synthesize. Every edit occurrence is mapped to the aligned words it touches
+// (editFirst..editLast); the clip sent to the editor is widened by `contextWords` neighbors on each side so the
+// edited words are pronounced naturally, but only the edited words' span is replaced afterwards (the context words
+// stay original). Occurrences on adjacent words share one window. Each window carries the clip text (its words
+// joined by spaces) and the edits re-positioned inside it (`at`). Returns null when an edit cannot be mapped exactly
+// (e.g. it spans punctuation), so the caller can fall back to the whole sentence.
+export function planWindows(transcript, words, edits, contextWords = 1) {
+  const occurrences = [];
+  for (const edit of edits) {
+    let start = transcript.indexOf(edit.find);
+    while (start >= 0) {
+      occurrences.push({ edit, start, end: start + edit.find.length });
+      start = edit.all ? transcript.indexOf(edit.find, start + edit.find.length) : -1;
+    }
+  }
+  if (!occurrences.length) return null;
+  occurrences.sort((a, b) => a.start - b.start);
+  const windows = [];
+  for (const occurrence of occurrences) {
+    const first = words.findIndex((word) => word.charEnd > occurrence.start);
+    let last = -1;
+    words.forEach((word, index) => { if (word.charStart < occurrence.end) last = index; });
+    if (first < 0 || last < first) return null;
+    const previous = windows[windows.length - 1];
+    if (previous && first <= previous.editLast + 1) { previous.editLast = Math.max(previous.editLast, last); previous.occurrences.push(occurrence); }
+    else windows.push({ editFirst: first, editLast: last, occurrences: [occurrence] });
+  }
+  for (const window of windows) {
+    // A side without enough words (sentence start/end) lends its share of context to the other side: the editor
+    // garbles words at the very start of a tiny clip.
+    const before = Math.min(contextWords, window.editFirst);
+    const after = Math.min(contextWords, words.length - 1 - window.editLast);
+    window.first = Math.max(0, window.editFirst - contextWords - (contextWords - after));
+    window.last = Math.min(words.length - 1, window.editLast + contextWords + (contextWords - before));
+    window.preCount = window.editFirst - window.first;
+    window.postCount = window.last - window.editLast;
+    const parts = words.slice(window.first, window.last + 1);
+    window.text = parts.map((word) => word.word).join(' ');
+    const offsets = [];
+    let position = 0;
+    for (const word of parts) { offsets.push(position); position += word.word.length + 1; }
+    window.edits = [];
+    for (const { edit, start, end } of window.occurrences) {
+      const firstWord = words.findIndex((word) => word.charEnd > start);
+      const at = offsets[firstWord - window.first] + (start - words[firstWord].charStart);
+      if (window.text.slice(at, at + (end - start)) !== edit.find) return null;
+      window.edits.push({ ...edit, at });
+    }
+    // Sample span (aligner time base) of the whole clip and of the part that gets replaced.
+    window.startSample = parts[0].start_sample;
+    window.endSample = parts[parts.length - 1].end_sample;
+    window.replaceStart = window.preCount ? words[window.editFirst - 1].end_sample : window.startSample;
+    window.replaceEnd = window.postCount ? words[window.editLast + 1].start_sample : window.endSample;
+  }
+  return windows;
+}
+
+// Aligner word boundaries have a coarse time grid, so cut points are snapped to the quietest spot (5 ms RMS frames)
+// within +-radius of the estimated boundary; ties keep the position closest to the estimate.
+export function snapToQuietPoint(samples, center, rate, radiusSeconds = 0.08) {
+  const frame = Math.max(1, Math.round(rate * 0.005));
+  const from = Math.max(0, center - Math.round(radiusSeconds * rate));
+  const to = Math.min(samples.length - frame, center + Math.round(radiusSeconds * rate));
+  let best = Math.min(Math.max(center, 0), samples.length);
+  let bestEnergy = Number.POSITIVE_INFINITY;
+  for (let start = from; start <= to; start += frame) {
+    let sum = 0;
+    for (let offset = 0; offset < frame; offset += 1) { const value = samples[start + offset]; sum += value * value; }
+    const distance = Math.abs(start + frame / 2 - center);
+    if (sum < bestEnergy || (sum === bestEnergy && distance < Math.abs(best - center))) { bestEnergy = sum; best = start + Math.round(frame / 2); }
+  }
+  return best;
+}

@@ -2132,6 +2132,8 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
   const [transcript, setTranscript] = useState<string | null>(null);
   // Speech editing (DotTTS Edit): transcript of the source + a list of word edits
   const [editModels, setEditModels] = useState<TtsFamilyInfo[]>([]);
+  const [alignModels, setAlignModels] = useState<TtsFamilyInfo[]>([]);
+  const [editPrecise, setEditPrecise] = useState(true);
   const [editPrecision, setEditPrecision] = useState('q8_0');
   const [editLanguage, setEditLanguage] = useState<'auto' | 'ko' | 'en' | 'ja' | 'zh'>('ko');
   const [editSourceText, setEditSourceText] = useState('');
@@ -2193,6 +2195,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
   const audioLabel = isTts ? '참조 목소리' : isAsr ? '인식할 오디오' : isEdit ? '편집할 오디오' : isVc ? '원본 오디오' : '조절할 오디오';
   const editVariant = editModels.find(family => family.id === 'dotsedit')?.variants[0];
   const editPrecisionInfo = editVariant?.precisions.find(item => item.precision === editPrecision);
+  const alignInfo = alignModels.find(family => family.id === 'qwen3align')?.variants[0]?.precisions[0];
   const meanvcInfo = vcModels.find(family => family.id === 'meanvc2')?.variants[0]?.precisions.find(item => item.precision === meanvcPrecision);
   const ttsVariant = ttsVariantsFor(ttsModels, ttsFamily, ttsMode).find(variant => variant.size === ttsSize);
   const ttsVariantMode = ttsVariant?.mode || 'ref';
@@ -2201,14 +2204,15 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
   const asrFamilyInfo = asrModels.find(family => family.id === asrFamily) || asrModels[0];
   const asrVariant = asrFamilyInfo?.variants.find(variant => variant.size === asrSize);
   const asrPrecisionInfo = asrVariant?.precisions.find(item => item.precision === asrPrecision);
-  const anyDownloading = [...ttsModels, ...asrModels, ...editModels].some(family => family.variants.some(variant => variant.precisions.some(item => item.download?.state === 'running')));
+  const anyDownloading = [...ttsModels, ...asrModels, ...editModels, ...alignModels].some(family => family.variants.some(variant => variant.precisions.some(item => item.download?.state === 'running')));
   async function refreshModels() {
     try {
-      const result = await api<{ families: TtsFamilyInfo[]; asr: TtsFamilyInfo[]; vc?: TtsFamilyInfo[]; edit?: TtsFamilyInfo[] }>('/audio-tools/tts/models');
+      const result = await api<{ families: TtsFamilyInfo[]; asr: TtsFamilyInfo[]; vc?: TtsFamilyInfo[]; edit?: TtsFamilyInfo[]; align?: TtsFamilyInfo[] }>('/audio-tools/tts/models');
       setTtsModels(result.families);
       setAsrModels(result.asr || []);
       setVcModels(result.vc || []);
       setEditModels(result.edit || []);
+      setAlignModels(result.align || []);
     } catch { /* backend may be restarting */ }
   }
   useEffect(() => { void refreshModels(); }, []);
@@ -2516,7 +2520,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
     try {
       const audioDataUrl = audioBlobRef.current ? await readFileAsDataUrl(audioBlobRef.current) : undefined;
       if (isEdit) {
-        const result = await api<{ dataUrl: string; sourceText: string }>('/audio-tools/edit', 'POST', { audioDataUrl, sourceText: editSourceText, language: editLanguage === 'auto' ? '' : editLanguage, precision: editPrecision, asrFamily, asrSize, asrPrecision, edits: editItems.filter(item => item.find.trim()) });
+        const result = await api<{ dataUrl: string; sourceText: string }>('/audio-tools/edit', 'POST', { audioDataUrl, sourceText: editSourceText, language: editLanguage === 'auto' ? '' : editLanguage, precision: editPrecision, precise: editPrecise && !!alignInfo?.installed, asrFamily, asrSize, asrPrecision, edits: editItems.filter(item => item.find.trim()) });
         setEditSourceText(result.sourceText);
         await showResult(result.dataUrl);
       } else if (isVc) {
@@ -2663,6 +2667,9 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
           </div>
           {renderModelStatus(editPrecisionInfo, 'dotsedit', 'edit', '기본', editPrecision)}
           <span className="field-hint">녹음된 말소리에서 일부 단어만 바꾸거나 지우거나 넣습니다(나머지 목소리·억양은 유지). 노래에는 쓸 수 없습니다. 긴 녹음은 무음 기준으로 문장을 나눠 편집할 문장만 다시 만들기 때문에 다른 문장은 원본 그대로 유지됩니다. 언어를 직접 지정하면 결과가 달라질 수 있으니 두 가지를 모두 들어 보세요. 지우기·넣기는 안정적이고, 바꾸기는 한 글자짜리 짧은 단어에서 발음이 어긋날 수 있습니다. 정밀도가 높을수록 정확하지만 더 큽니다.</span>
+          <label className="at-function" style={{ alignSelf: 'flex-start' }}><input type="checkbox" checked={editPrecise} onChange={event => setEditPrecise(event.target.checked)} disabled={running}/>단어 단위 정밀 편집 (권장)</label>
+          {editPrecise && renderModelStatus(alignInfo, 'qwen3align', 'align', '0.6B', 'q8_0')}
+          <span className="field-hint">단어별 시간 정렬 모델(Qwen3 Forced Aligner, 약 1.1GB)로 바꿀 단어와 앞뒤 단어만 잘라 다시 만들고 나머지는 원본 그대로 둡니다. 체크를 끄거나 모델이 없으면 문장 단위로 편집하며, 이때는 문장 안의 다른 단어가 깨질 수 있습니다. 시간이 조금 더 걸립니다.</span>
           <div className="at-section-head" style={{ marginTop: 18 }}>원문 (말한 내용) <span style={{ fontWeight: 400, opacity: 0.7 }}>(선택 사항)</span></div>
           <Textarea rows={3} className="at-textarea" value={editSourceText} onChange={event => setEditSourceText(event.target.value)} placeholder="원본 오디오가 말하는 문장을 정확히 적어 주세요. 비워 두면 실행할 때 음성 인식(STT)으로 자동 입력합니다. 쉬는 구간이 있는 긴 녹음은 문장별로 나눠 각각 받아쓰고, 편집이 필요한 문장만 다시 만들어 붙이니 원문을 적지 않아도 됩니다(문장이 하나뿐일 때만 여기에 적은 원문을 씁니다)." disabled={running}/>
           <div className="voice-convert-topbar" style={{ justifyContent: 'flex-start' }}><Button variant="outline" size="sm" onClick={() => void transcribeSource()} disabled={running || transcribing || !audioName}>{transcribing ? <LoaderCircle className="spin" size={13}/> : <Sparkles size={13}/>}받아쓰기 (STT)</Button><span className="field-hint">STT 탭에서 고른 음성 인식 모델을 씁니다.</span></div>

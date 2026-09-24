@@ -2012,3 +2012,33 @@ test('speech edit splits a recording at silences and splices re-synthesized sent
   assert.equal(roundTrip.rate, rate);
   assert.deepEqual([...roundTrip.samples], [...samples.subarray(0, 2000)]);
 });
+
+test('speech edit word windows: context words are kept out of the replaced span and short sides borrow context', async () => {
+  const { locateWords, planWindows, snapToQuietPoint } = await import('./speechedit.mjs');
+  const { applyEditText } = await import('./tts.mjs');
+  const transcript = '음성 인식과 음성 합성은 음성 처리의 기본입니다.';
+  const words = ['음성', '인식과', '음성', '합성은', '음성', '처리의', '기본입니다'].map((word, index) => ({ word, start_sample: index * 1000, end_sample: (index + 1) * 1000 }));
+  const located = locateWords(transcript, words);
+  assert.equal(located[3].charStart, transcript.indexOf('합성은'));
+  assert.equal(locateWords('전혀 다른 문장', words), null);
+  const windows = planWindows(transcript, located, [{ op: 'sub', find: '음성', text: '영상', all: true }], 2);
+  assert.equal(windows.length, 3);
+  // sentence start: no words before, so the window borrows two extra words after
+  assert.equal(windows[0].preCount, 0);
+  assert.equal(windows[0].postCount, 4);
+  assert.equal(windows[0].text, '음성 인식과 음성 합성은 음성');
+  assert.deepEqual([windows[0].replaceStart, windows[0].replaceEnd], [0, 1000]);
+  // middle occurrence: the replaced span is only the edited word (samples 2000-3000)
+  assert.deepEqual([windows[1].preCount, windows[1].postCount, windows[1].replaceStart, windows[1].replaceEnd], [2, 2, 2000, 3000]);
+  assert.equal(windows[1].edits[0].at, windows[1].text.indexOf('음성', 4));
+  // adjacent edited words share one window
+  const adjacent = planWindows(transcript, located, [{ op: 'del', find: '음성 인식과' }], 1);
+  assert.equal(adjacent.length, 1);
+  assert.equal(applyEditText('오늘 회의는 오후 세 시에', [{ op: 'sub', find: '세 시', text: '여섯 시' }]), '오늘 회의는 오후 여섯 시에');
+  // the quietest spot near the estimate wins
+  const rate = 16000;
+  const wave = new Int16Array(rate).fill(8000);
+  wave.fill(0, 8200, 8400);
+  const snapped = snapToQuietPoint(wave, 8000, rate);
+  assert.ok(snapped >= 8200 && snapped <= 8400);
+});
