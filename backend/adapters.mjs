@@ -54,6 +54,17 @@ function categoriesOf(words) {
   return [...found];
 }
 
+// The files a single click on a repo card downloads: the only weight file, or exactly one composition (AR) + one sound (NAR) file
+// (variants such as bf16 / ComfyUI copies do not count). null = the repo offers a choice the user has to make.
+export function defaultPaths(model) {
+  const all = listUnits(model);
+  const units = all.filter((unit) => !unit.variant).length ? all.filter((unit) => !unit.variant) : all;
+  if (units.length === 1) return [units[0].path];
+  const stages = units.map((unit) => unit.stage);
+  if (units.length === 2 && stages.includes('ar') && stages.includes('nar')) return units.map((unit) => unit.path);
+  return null;
+}
+
 // What a repo tells about itself, reduced to the fields the UI filters and shows.
 export function classifyRepo(model) {
   const files = (model.siblings || []).map((item) => item.rfilename);
@@ -80,6 +91,7 @@ export function classifyRepo(model) {
     weightCount: weights.length,
     sampleCount: files.filter((file) => /\.(flac|mp3|wav|ogg)$/i.test(file)).length,
     comfyui: (model.tags || []).includes('comfyui') || weights.some((file) => /comfyui/i.test(file)),
+    defaultPaths: defaultPaths(model),
   };
 }
 

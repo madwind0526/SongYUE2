@@ -3204,6 +3204,7 @@ type CatalogEntry = { id: string; stage: string; kind: string; kindLabel: string
 type HubRepo = {
   id: string; url: string; author: string; title: string; likes: number; downloads: number; updatedAt: string; license: string;
   commercialUse: boolean | null; categories: string[]; tags: string[]; languages: string[]; stage: string; weightCount: number; sampleCount: number; comfyui: boolean;
+  defaultPaths: string[] | null;
 };
 type HubUnit = { path: string; config: string | null; label: string; size: number; stage: string; variant: string | null };
 type HubDetail = HubRepo & { summary: string; units: HubUnit[]; samples: { name: string; url: string }[] };
@@ -3346,6 +3347,18 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
     const first = wanted.find(file => /\.safetensors$/i.test(file.name));
     if (first && !importName.trim()) setImportName(first.name.replace(/\.safetensors$/i, ''));
   }
+  // One click on a repo card: download its default files, or open the detail when the repo offers a choice (many files).
+  function installRepo(repo: HubRepo) {
+    if (repo.defaultPaths) void runInstall('/adapters/hub/install', { repo: repo.id, paths: repo.defaultPaths });
+    else void openDetail(repo.id);
+  }
+  async function removeRepo(repo: HubRepo) {
+    const installedItems = (mine?.adapters || []).filter(item => item.source?.repo === repo.id);
+    try {
+      for (const item of installedItems) await api(`/adapters/${encodeURIComponent(item.name)}`, 'DELETE');
+      notify(`"${repo.title}"에서 받은 LoRA ${installedItems.length}개를 삭제했습니다.`); setDeleting(''); await reload();
+    } catch (error) { notify((error as Error).message, true); }
+  }
   async function importFiles() {
     const weights = importPicked.filter(file => /\.safetensors$/i.test(file.name));
     if (weights.length < 1 || weights.length > 2) { notify('.safetensors 파일을 1~2개 선택해 주세요. (작곡용과 사운드용이 따로 있으면 2개)', true); return; }
@@ -3429,7 +3442,7 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
     </>}
 
     {tab === 'hub' && <>
-      <p className="field-hint">허깅페이스에서 YuE2용 LoRA를 찾습니다. 저장소를 열어 받을 파일을 고르세요. 주소를 붙여 넣어도 됩니다.</p>
+      <p className="field-hint">허깅페이스에서 YuE2용 LoRA를 찾습니다. 카드의 다운로드 아이콘으로 바로 받고, 카드를 누르면 샘플을 듣고 받을 파일을 고를 수 있습니다. 주소를 붙여 넣어도 됩니다.</p>
       <div className="adapter-filters">
         <Input value={query} placeholder="이름, 장르, 언어로 찾기 또는 허깅페이스 주소 붙여넣기" aria-label="LoRA 검색" onChange={event => setQuery(event.target.value)}/>
         <select value={sort} aria-label="정렬" onChange={event => setSort(event.target.value as 'likes' | 'updated' | 'samples')}><option value="likes">좋아요 순</option><option value="updated">최근 갱신 순</option><option value="samples">샘플 많은 순</option></select>
@@ -3440,16 +3453,28 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
       {languages.length > 0 && <div className="adapter-chiprow"><span>언어</span><button className={!language ? 'active' : ''} onClick={() => setLanguage('')}>전체</button>{languages.map(label => <button key={label} className={language === label ? 'active' : ''} onClick={() => setLanguage(language === label ? '' : label)}>{label}</button>)}</div>}
       {hubLoading && <p className="field-hint"><LoaderCircle className="spin" size={14}/> 허깅페이스에서 목록을 읽는 중…</p>}
       {hubError && <p className="field-hint warning">{hubError}</p>}
-      <div className="adapter-hub-layout">
-        <div className="adapter-grid hub">{shown.map(item => <button key={item.id} className={`adapter-card hub${detail?.id === item.id ? ' selected' : ''}`} onClick={() => void openDetail(item.id)}>
-          <div className="adapter-card-head"><strong>{item.title}</strong><span className="adapter-badge">♥ {item.likes}</span></div>
-          <div className="adapter-meta">{item.categories.map(label => <span key={label} className="adapter-chip">{label}</span>)}{item.languages.map(label => <span key={label} className="adapter-chip lang">{label}</span>)}{item.categories.length === 0 && item.languages.length === 0 && <span className="adapter-chip">분류 정보 없음</span>}</div>
-          <p className="adapter-sub">{item.author} · {STAGE_LABEL[item.stage]} · 파일 {item.weightCount}개 · 샘플 {item.sampleCount}개{item.commercialUse === false ? ' · 비상업용' : ''}{item.comfyui ? ' · ComfyUI 형식 포함' : ''}</p>
+      <div className="adapter-grid catalog">{shown.map(item => {
+        const got = (mine?.adapters || []).filter(adapter => adapter.source?.repo === item.id);
+        // blue / trash only when everything this card's download icon fetches is already installed; a repo where you choose files
+        // (or only one of its many files was installed from elsewhere) is just marked with how many files were received
+        const installed = Boolean(item.defaultPaths) && item.defaultPaths!.every(path => installedKeys.has(`${item.id}::${path}`));
+        return <article key={item.id} className={`adapter-card catalog hub-card${installed ? ' installed' : ''}`} onClick={() => void openDetail(item.id)}>
+          <div className="adapter-card-head"><strong>{item.title}</strong><span className="adapter-card-tools"><span className="adapter-badge">♥ {item.likes}</span>
+            {installed
+              ? (deleting === item.id
+                ? <button type="button" className="adapter-icon-btn danger confirm" aria-label={`${item.title} 삭제 확인`} onClick={event => { event.stopPropagation(); void removeRepo(item); }}><Trash2 size={14}/>삭제?</button>
+                : <button type="button" className="adapter-icon-btn danger" aria-label={`${item.title} 삭제`} title="받은 LoRA 삭제" onClick={event => { event.stopPropagation(); setDeleting(item.id); }}><Trash2 size={15}/></button>)
+              : <button type="button" className="adapter-icon-btn" aria-label={`${item.title} ${item.defaultPaths ? '다운로드' : '파일 고르기'}`} title={item.defaultPaths ? '다운로드' : '받을 파일 고르기'} disabled={Boolean(job)} onClick={event => { event.stopPropagation(); installRepo(item); }}><Download size={15}/></button>}</span></div>
+          <div className="adapter-meta">{item.stage !== 'unknown' && <span className={`adapter-chip stage-${item.stage}`}>{STAGE_LABEL[item.stage]}</span>}{item.categories.map(label => <span key={label} className="adapter-chip">{label}</span>)}{item.languages.map(label => <span key={label} className="adapter-chip lang">{label}</span>)}<span className="adapter-sub">{item.author}</span></div>
+          <p className="adapter-desc adapter-desc-clamp">{item.tags.length ? item.tags.join(' · ') : `태그가 없는 저장소입니다. 카드를 눌러 설명과 샘플을 확인하세요.`}</p>
+          <div className="adapter-foot"><a href={item.url} target="_blank" rel="noreferrer" onClick={event => event.stopPropagation()}><span title={item.license ? `허깅페이스에 적힌 라이선스: ${item.license}` : '저장소에 라이선스가 적혀 있지 않습니다'}>{licenseLabel(item.license)}</span> · 원본 페이지</a><span>{installed ? <b className="adapter-done"><Check size={13}/>받음</b> : `파일 ${item.weightCount}개${item.sampleCount ? ` · 샘플 ${item.sampleCount}` : ''}`}{!installed && got.length > 0 && <b className="adapter-done partial"> · {got.length}개 받음</b>}</span></div>
           {detailLoading === item.id && <span className="field-hint"><LoaderCircle className="spin" size={12}/> 여는 중…</span>}
-        </button>)}{hub && !shown.length && <p className="field-hint">조건에 맞는 LoRA가 없습니다.</p>}</div>
-        {detail && <aside className="adapter-detail">
-          <div className="adapter-card-head"><strong>{detail.title}</strong><button className="adapter-close" aria-label="닫기" onClick={() => setDetail(null)}><X size={14}/></button></div>
-          <p className="adapter-sub"><a href={detail.url} target="_blank" rel="noreferrer">{detail.id}</a> · {licenseLabel(detail.license)} · 다운로드 {detail.downloads}</p>
+        </article>;
+      })}{hub && !shown.length && <p className="field-hint">조건에 맞는 LoRA가 없습니다.</p>}</div>
+      {detail && <Dialog open onOpenChange={next => { if (!next) setDetail(null); }}>
+        <DialogContent className="studio-dialog adapter-detail-dialog">
+          <DialogTitle>{detail.title}</DialogTitle>
+          <DialogDescription><a href={detail.url} target="_blank" rel="noreferrer">{detail.id}</a> · {licenseLabel(detail.license)} · 다운로드 {detail.downloads}</DialogDescription>
           {detail.summary && <p className="adapter-desc">{detail.summary}</p>}
           {detail.tags.length > 0 && <div className="adapter-meta">{detail.tags.map(tag => <span key={tag} className="adapter-chip">{tag}</span>)}</div>}
           {detail.samples.length > 0 && <div className="adapter-samples"><span className="adapter-sub">샘플 듣기</span>{detail.samples.slice(0, 4).map(sample => <label key={sample.url} className="adapter-sample"><span>{sample.name.split('/').pop()}</span><audio controls preload="none" src={sample.url}/></label>)}</div>}
@@ -3458,10 +3483,13 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
               const done = installedKeys.has(`${detail.id}::${unit.path}`);
               return <label key={unit.path} className={`adapter-unit${done ? ' done' : ''}`}><input type="checkbox" disabled={done || Boolean(job)} checked={unitsPicked.includes(unit.path)} onChange={event => setUnitsPicked(event.target.checked ? [...unitsPicked, unit.path] : unitsPicked.filter(path => path !== unit.path))}/><div><strong>{unit.label}</strong><small>{STAGE_LABEL[unit.stage] || unit.stage}{unit.size ? ` · ${formatSize(unit.size)}` : ''}{unit.variant ? ' · 변형본' : ''}</small></div>{done && <b className="adapter-done"><Check size={13}/>받음</b>}</label>;
             })}
-            {unitsPicked.length > 0 && <div className="adapter-pickbar"><Button disabled={Boolean(job)} onClick={() => void runInstall('/adapters/hub/install', { repo: detail.id, paths: unitsPicked })}><Download size={14}/>선택한 {unitsPicked.length}개 받기 · {formatSize(unitsBytes)}</Button></div>}
           </div>
-        </aside>}
-      </div>
+          <div className="dialog-actions">
+            {unitsPicked.length > 0 && <Button disabled={Boolean(job)} onClick={() => { void runInstall('/adapters/hub/install', { repo: detail.id, paths: unitsPicked }); setDetail(null); }}><Download size={14}/>선택한 {unitsPicked.length}개 받기 · {formatSize(unitsBytes)}</Button>}
+            <Button variant="outline" onClick={() => setDetail(null)}>닫기</Button>
+          </div>
+        </DialogContent>
+      </Dialog>}
     </>}
   </section>;
 }

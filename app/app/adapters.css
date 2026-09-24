@@ -131,3 +131,10 @@ button.adapter-card, label.adapter-card { cursor: pointer; }
 
 /* the name field text (and its placeholder) is centered */
 .adapter-import-namerow [data-slot=input] { text-align: center; }
+
+/* Hugging Face cards look like the Preset cards; a longer description is cut after three lines */
+.adapter-card.hub-card { cursor: pointer; }
+.adapter-desc-clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.adapter-detail-dialog { max-width: 620px; max-height: 88vh; overflow: auto; }
+
+.adapter-done.partial { color: #8fc4f0; font-weight: 500; }
