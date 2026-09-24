@@ -3212,6 +3212,9 @@ type AdapterChoice = { name: string; arScale: number; narScale: number };
 const STAGE_LABEL: Record<string, string> = { ar: '작곡 (AR)', nar: '사운드 (NAR)', both: '작곡+사운드', unknown: '종류 확인 필요' };
 const KIND_LABEL: Record<string, string> = { style: '스타일', artist: '아티스트', composition: '작곡', sound: '사운드', slider: '슬라이더' };
 const formatSize = (bytes: number) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : bytes > 0 ? `${Math.max(1, Math.round(bytes / 1e6))} MB` : '');
+// "cc-by-nc-4.0" is the Creative Commons Attribution-NonCommercial 4.0 license: free to use and share with credit, but not for commercial use.
+const LICENSE_NAMES: Record<string, string> = { 'cc-by-nc-4.0': 'CC BY-NC 4.0 · 비상업 전용', 'cc-by-4.0': 'CC BY 4.0', 'cc-by-sa-4.0': 'CC BY-SA 4.0', 'cc0-1.0': 'CC0 (공개)', 'apache-2.0': 'Apache 2.0', mit: 'MIT', 'openrail': 'OpenRAIL', other: '기타 조건' };
+const licenseLabel = (license: string) => (license ? LICENSE_NAMES[license.toLowerCase()] || license : '라이선스 표기 없음');
 const REPO_LINK = /huggingface\.co\/([\w.-]+\/[\w.-]+)/i;
 
 function AdapterCard({ item, onChanged, notify, running, setRunning }: { item: AdapterItem; onChanged: () => void; notify: (text: string, error?: boolean) => void; running: boolean; setRunning: (value: boolean) => void }) {
@@ -3252,7 +3255,7 @@ function AdapterCard({ item, onChanged, notify, running, setRunning }: { item: A
     </div>
     {item.description && <p className="adapter-desc">{item.description}</p>}
     {item.tip && <p className="adapter-tip">{item.tip}</p>}
-    <p className="adapter-sub">{item.name} · {formatSize(item.bytes)}{item.stage === 'both' || item.stage === 'ar' ? ` · 추천 작곡 ${item.scales.ar}` : ''}{item.stage === 'both' || item.stage === 'nar' ? ` · 추천 사운드 ${item.scales.nar}` : ''}{item.license ? ` · ${item.license}` : ''}{item.source ? <> · <a href={item.source.url} target="_blank" rel="noreferrer">{item.source.repo}</a></> : ' · 직접 가져온 파일'}</p>
+    <p className="adapter-sub">{item.name} · {formatSize(item.bytes)}{item.stage === 'both' || item.stage === 'ar' ? ` · 추천 작곡 ${item.scales.ar}` : ''}{item.stage === 'both' || item.stage === 'nar' ? ` · 추천 사운드 ${item.scales.nar}` : ''}{item.license ? ` · ${licenseLabel(item.license)}` : ''}{item.source ? <> · <a href={item.source.url} target="_blank" rel="noreferrer">{item.source.repo}</a></> : ' · 직접 가져온 파일'}</p>
     {item.samples.length > 0 && <div className="adapter-samples">{item.samples.slice(0, 2).map(sample => <audio key={sample.url} controls preload="none" src={sample.url}/>)}</div>}
     {editing ? <Textarea value={note} maxLength={2000} placeholder="메모 (예: 어떤 곡에 잘 맞았는지)" onChange={event => setNote(event.target.value)}/> : item.note && <p className="adapter-note">{item.note}</p>}
     <div className="adapter-actions">
@@ -3377,7 +3380,7 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
         <div className="adapter-card-head"><span className="adapter-check"><input type="checkbox" disabled={entry.installed || Boolean(job)} checked={picked.includes(entry.id)} onChange={event => setPicked(event.target.checked ? [...picked, entry.id] : picked.filter(id => id !== entry.id))}/><strong>{entry.name}</strong></span><span className="adapter-badge kind">{entry.kindLabel}</span></div>
         <div className="adapter-meta"><span className={`adapter-chip stage-${entry.stage}`}>{STAGE_LABEL[entry.stage] || entry.stage}</span>{entry.trigger && <span className="adapter-chip trigger">트리거 {entry.trigger}</span>}<span className="adapter-sub">{entry.author}</span></div>
         <p className="adapter-desc">{entry.description}</p>
-        <div className="adapter-foot"><a href={entry.page} target="_blank" rel="noreferrer" onClick={event => event.stopPropagation()}>{entry.license || '라이선스 표기 없음'} · 원본 페이지</a><span>{entry.installed ? <b className="adapter-done"><Check size={13}/>받음</b> : formatSize(entry.bytes)}</span></div>
+        <div className="adapter-foot"><a href={entry.page} target="_blank" rel="noreferrer" onClick={event => event.stopPropagation()}><span title={entry.license ? `허깅페이스에 적힌 라이선스: ${entry.license}` : '저장소에 라이선스가 적혀 있지 않습니다'}>{licenseLabel(entry.license)}</span> · 원본 페이지</a><span>{entry.installed ? <b className="adapter-done"><Check size={13}/>받음</b> : formatSize(entry.bytes)}</span></div>
       </label>)}</div>
       {picked.length > 0 && <div className="adapter-pickbar"><Button disabled={Boolean(job)} onClick={() => void runInstall('/adapters/catalog/install', { ids: picked })}><Download size={14}/>선택한 {picked.length}개 받기 · {formatSize(pickedBytes)}</Button><Button variant="outline" onClick={() => setPicked([])}>선택 해제</Button></div>}
     </>}
@@ -3403,7 +3406,7 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
         </button>)}{hub && !shown.length && <p className="field-hint">조건에 맞는 LoRA가 없습니다.</p>}</div>
         {detail && <aside className="adapter-detail">
           <div className="adapter-card-head"><strong>{detail.title}</strong><button className="adapter-close" aria-label="닫기" onClick={() => setDetail(null)}><X size={14}/></button></div>
-          <p className="adapter-sub"><a href={detail.url} target="_blank" rel="noreferrer">{detail.id}</a> · {detail.license || '라이선스 표기 없음'}{detail.commercialUse === false ? ' (상업적 이용 제한)' : ''} · 다운로드 {detail.downloads}</p>
+          <p className="adapter-sub"><a href={detail.url} target="_blank" rel="noreferrer">{detail.id}</a> · {licenseLabel(detail.license)} · 다운로드 {detail.downloads}</p>
           {detail.summary && <p className="adapter-desc">{detail.summary}</p>}
           {detail.tags.length > 0 && <div className="adapter-meta">{detail.tags.map(tag => <span key={tag} className="adapter-chip">{tag}</span>)}</div>}
           {detail.samples.length > 0 && <div className="adapter-samples"><span className="adapter-sub">샘플 듣기</span>{detail.samples.slice(0, 4).map(sample => <label key={sample.url} className="adapter-sample"><span>{sample.name.split('/').pop()}</span><audio controls preload="none" src={sample.url}/></label>)}</div>}

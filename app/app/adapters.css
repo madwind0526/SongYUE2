@@ -83,3 +83,8 @@ button.adapter-card, label.adapter-card { cursor: pointer; }
 .adapter-picker .adapter-scale { flex-direction: row; }
 .adapter-picker .adapter-scales { align-items: stretch; text-align: left; }
 .adapter-picker .adapter-scales .vocal-gender-hint, .adapter-picker .adapter-scales .link-button { text-align: left; }
+
+/* every card of the installed / catalog grids has the same size (the tallest one), its footer sits at the bottom */
+.adapter-grid:not(.hub) { grid-auto-rows: 1fr; align-items: stretch; }
+.adapter-grid:not(.hub) > .adapter-card { height: 100%; }
+.adapter-card .adapter-foot, .adapter-card .adapter-actions { margin-top: auto; }
