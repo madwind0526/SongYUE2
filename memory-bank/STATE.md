@@ -2,9 +2,10 @@
 
 ## Current Wave
 
-- **Wave:** 46
+- **Wave:** 49
 - **Status:** Done
 - **Cache Status:** CLEAN
+- **Last Checkpoint:** 2026-09-24 Wave 47~49 — 포트 정리(PORTS.md), AuK 전면 제거, Audio Tools를 audio.cpp 기반으로 재구성(TTS 7모델+Typecast, 음성 인식 3모델, 음성 조절), 상세는 todo.md/progress.md.
 - **Last Checkpoint:** 2026-09-22 코드 리뷰(에러/성능/보안 관점) 후 확정된 항목 3개 수정. (E1) ffmpeg 실행부 전부에 하드 타임아웃 추가 — `runBufferedProcess`(timer+kill+clearTimeout, 로그 512KB 캡)+`runFfmpegCli`(라벨별 한국어 에러 메시지, signal이면 "제한 시간 초과") 신설하고, SVC/AuK/Seed-VC/Vevo2/Tools의 모든 ffmpeg 인라인 promise(참조 정규화, 조각 자르기/정리/연결, 입력 정규화, 최종 변환)를 대체. (E2) AuK fetch 전부에 per-request 타임아웃 — `aukFetchJson`에 `signal: AbortSignal.timeout`(설정/작업 등록 5분, 폴 10초·남은시간에 비례, 결과 3분), 20분 폴 deadline은 fetch 간에만 적용되는 함정 해소. (P1) 청크/멀티잡 시 동일 설정 반복 PUT 건너뛰기 — `selectAukConfiguration`에 instance-scoped(`createStudioServer` 소유) `configCache` 도입, AudioAuK 모델 재로드 절약. 테스트 23개·tsc 통과. 지식 `PATTERNS.md`(프로세스 deadline/cache 패턴)·`trouble-shooting.md`(E1/E2 기록)에 flush.
 - **Last Checkpoint:** 2026-09-22 AuK 노래 음색 변조의 기본 프롬프트를 `Keep the lyrics, melody, phrasing and rhythm unchanged and change the timbre to: "${textDescription}".`로 확정하고, 기본 목표 음색을 `a deep adult male with a warm, resonant baritone voice`로 설정. 백엔드 테스트 23개와 TypeScript 검사 통과.
 - **Last Checkpoint:** 2026-09-22 Seed-VC/Vevo2도 AuK와 동일한 10초 청크(2초 겹침·테두리 1초 트림)로 긴 보컬을 변환하도록 확장 — 길이 의존 붕괴(10초 OK/2분 노이즈, 원곡=ref여도 붕괴)를 사용자 실험으로 확정 후 `applyVocalTimbreCore`에 통합(모든 조각에 동일 참조 클립 재사용, `onProgress`, `{ok, warning, chunkCount}` 반환). Tools는 `runAukTool`에 `chunk` 플래그 신설(위치/길이 무관 지시문 전용)하고 TTS는 `splitSpeechText`+`concatBuffers`로 긴 텍스트를 자동 분할 생성. 테스트 2건 추가(legacy 26초→3조각·같은 ref·atrim/concat·게인/게이트 유지, audio-tools chunk:true→3잡/3업로드·동일 instruction·warning, chunk 해제→단일 경로) — 23개 전부 통과, tsc 통과. DDSP-SVC는 프레임 기반이라 청크 불필요 확인.
@@ -78,4 +79,4 @@
 - **MuScriptor(오디오→MIDI)는 audio.cpp에서 `"status": "supported"`로 AudioSR(experimental)과 다름 — 실제로도 매우 안정적/빠름**(RTF≈0.024). `backend/server.mjs`의 `exportMidi()`가 `<곡 파일명>.mid`를 원본 오디오와 같은 폴더에 캐시하므로(mtime 비교), 재다운로드는 즉시 응답한다. 진행률 폴링 UI 없이 단순 `<a href>` 다운로드 링크로 구현되어 있음(음원 복원/ComfyUI처럼 느린 작업엔 이 패턴을 쓰면 안 됨).
 - `.abc` 형식 라이브러리 노트는 파일명 기반 id(`abcfile-<base64(파일명)>`)를 쓰므로, 제목을 바꾸면(rename) id도 바뀐다 — JSON 형식 노트(안정적 UUID id)와 다른 특성이니 새 UI를 짤 때 유의할 것.
 - `data/settings.json`은 백엔드가 메모리에 캐싱하므로, 프로세스가 떠 있는 동안 파일을 직접 고쳐도 다음 저장 시 덮어써진다 — 반드시 파일 수정 후 프로세스 재시작.
-- `C:\Claude\Club`의 Vite 개발서버가 5173 포트를 먼저 점유하고 있으면 SongYUE2가 뜨지 않을 수 있으니, SongYUE2 프런트엔드는 5173에 떠 있는지 확인할 것.
+- `C:\Claude\Club`의 Vite 개발서버가 5176 포트를 먼저 점유하고 있으면 SongYUE2가 뜨지 않을 수 있으니, SongYUE2 프런트엔드는 5176에 떠 있는지 확인할 것.

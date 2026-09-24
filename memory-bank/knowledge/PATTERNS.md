@@ -1,5 +1,8 @@
 # Patterns
 
+> **2026-09-24: AuK(AudioAuK) 연동은 SongYUE2에서 제거되었다.** 이 문서의 AuK 관련 항목은 과거 이력이며 현재 코드에는 해당 기능이 없다(음성 인식은 audio.cpp Qwen3-ASR 등, Audio Tools는 audio.cpp/ffmpeg 기반).
+
+
 > 검증된 코드 패턴. 복붙 바로 가능한 형태로 유지.
 
 ## 로컬 전용 Node HTTP API 보안
@@ -9,7 +12,7 @@
 ```js
 const validHosts = new Set([`127.0.0.1:${ownPort}`, `localhost:${ownPort}`]);
 if (!validHosts.has(req.headers.host)) throw fail(403, ...);
-const allowedOrigins = new Set([`http://127.0.0.1:${ownPort}`, `http://localhost:${ownPort}`, 'http://localhost:5173', 'http://127.0.0.1:5173']);
+const allowedOrigins = new Set([`http://127.0.0.1:${ownPort}`, `http://localhost:${ownPort}`, 'http://localhost:5176', 'http://127.0.0.1:5176']);
 if (req.headers.origin && !allowedOrigins.has(req.headers.origin)) throw fail(403, ...);
 if (req.headers['sec-fetch-site'] === 'cross-site') throw fail(403, ...);
 ```
@@ -254,3 +257,9 @@ if (configCache) configCache.lastSettingsKey = settingsKey;
 
 - **모듈 전역이 아니라 인스턴스 스코프**로 해야 테스트 간 간섭이 없다(`createStudioServer`가 생성하는 객체를 넘긴다).
 - 같은 잡 시퀀스 안에서만 불변인 설정이므로, 캐시 덕에 청크 N개가 PUT 몇 회로 줄어든다.
+
+## Wave 49 (2026-09-24): audio.cpp 모델 카탈로그 패턴
+
+- `backend/tts.mjs`가 모델 카탈로그(`TTS_FAMILIES`, `ASR_FAMILIES`), CLI 인자 조립(`buildTtsArgs`), 문장 분할(`splitTtsText`, `splitTtsByScript`), 이어받기 다운로드(`downloadTtsModel`)를 한 곳에서 관리한다. 새 모델은 (1) `run-build.ps1`의 `-Models`에 패밀리 추가 후 재빌드 (2) 카탈로그에 파일/크기/정밀도 등록 (3) `buildTtsArgs`에 분기 추가 (4) `bench2.mjs`류 스크립트로 한국어 CER 실측 순서로 넣는다. 프론트는 `/api/audio-tools/tts/models` 응답으로 버튼/크기/정밀도를 자동 구성한다.
+- 변형 `mode`: `design`(음색 설명), `ref`(참조 복제), `preset`(내장 목소리), `asr`. 네이티브 design이 없는 모델은 Qwen3 VoiceDesign이 만든 참조 음성을 대신 쓴다.
+- 클라우드(Typecast)는 `backend/typecast.mjs`(직접 HTTP, 키는 `.env`의 TYPECAST_API_KEY, 백엔드에서만 사용).

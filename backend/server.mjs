@@ -7,8 +7,9 @@ import { spawn } from 'node:child_process';
 import os from 'node:os';
 import { comfyUiAlive, execute as executeComfyUi } from './comfyui.mjs';
 import { parseNoteEvents, encodeMidiFile } from './midi.mjs';
-import { submitAukJob, submitAukToolJob, transcribeAukAudio } from './auk.mjs';
 import { startDdspJob, killDdspJob } from './ddsp-svc.mjs';
+import { TYPECAST_LANGUAGES, typecastSubscription, listTypecastVoices, typecastSpeak, recommendTypecastVoice, cloneTypecastVoice, deleteTypecastVoice, TypecastError } from './typecast.mjs';
+import { ASR_FAMILIES, TTS_FAMILIES, STYLE_FAMILIES, presetVoice, findTtsModel, isTtsModelInstalled, listTtsModels, splitTtsText, splitTtsByScript, buildTtsArgs, downloadTtsModel } from './tts.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const providers = new Set(['none', 'ollama', 'claude', 'chatgpt', 'gemini']);
@@ -71,15 +72,10 @@ const FFMPEG_ARGS = {
 const VIEW_MODES = new Set(['list', 'card']);
 const DEFAULT_ENGINE_PATH = path.join('engine', 'audio.cpp', 'build', 'windows-cuda-release', 'bin', 'audiocpp_cli.exe');
 const DEFAULT_COMFYUI_ENDPOINT = 'http://127.0.0.1:8190';
-// Own install under engine/ (gitignored, same as engine/audio.cpp) -- kept on a different port
-// than the sibling AudioAuK project's ComfyUI (8189) so both can run independently/concurrently.
+// Own install under engine/ (gitignored, same as engine/audio.cpp).
 const DEFAULT_COMFYUI_ENGINE_PATH = path.join('engine', 'ComfyUI');
-// AudioAuK is a sibling project, not a subfolder of this repo (unlike engine/ComfyUI above), so
-// its default path is absolute rather than root-relative.
-const DEFAULT_AUDIO_AUK_ENDPOINT = 'http://127.0.0.1:4312';
-const DEFAULT_AUDIO_AUK_PATH = 'C:\\Claude\\AudioAuK';
-const AUK_CHUNK_SECONDS = 10;
-const AUK_OVERLAP_SECONDS = 2;
+const CHUNK_SECONDS = 10;
+const CHUNK_OVERLAP_SECONDS = 2;
 const DEFAULT_DDSP_SVC_PATH = path.join('test', 'DDSP-SVC');
 const COMFYUI_GENERATE_DEADLINE_MS = GENERATE_TIMEOUT_MS;
 const COMFYUI_MAX_DURATION_SECONDS = 240;
@@ -103,12 +99,12 @@ const vocalHint = (gender) => VOCAL_HINTS[gender] || '';
 // Chunk/overlap come from the API as {chunkSeconds, overlapSeconds} (UI defaults 10s/2s). Overlap
 // is clamped to at most half the chunk so the plan always strides forward.
 function resolveChunkParams(chunkSeconds, overlapSeconds) {
-  const chunk = Number.isFinite(chunkSeconds) && chunkSeconds >= 1 ? Math.min(120, Math.round(chunkSeconds)) : AUK_CHUNK_SECONDS;
+  const chunk = Number.isFinite(chunkSeconds) && chunkSeconds >= 1 ? Math.min(120, Math.round(chunkSeconds)) : CHUNK_SECONDS;
   const maxOverlap = Math.floor(chunk / 2);
-  const overlap = Number.isFinite(overlapSeconds) && overlapSeconds >= 0 ? Math.min(maxOverlap, Math.round(overlapSeconds)) : Math.min(maxOverlap, AUK_OVERLAP_SECONDS);
+  const overlap = Number.isFinite(overlapSeconds) && overlapSeconds >= 0 ? Math.min(maxOverlap, Math.round(overlapSeconds)) : Math.min(maxOverlap, CHUNK_OVERLAP_SECONDS);
   return { chunkSeconds: chunk, overlapSeconds: overlap, edgeTrimSeconds: overlap / 2 };
 }
-function buildAukChunkPlan(durationSeconds, chunkSeconds = AUK_CHUNK_SECONDS, overlapSeconds = AUK_OVERLAP_SECONDS) {
+function buildChunkPlan(durationSeconds, chunkSeconds = CHUNK_SECONDS, overlapSeconds = CHUNK_OVERLAP_SECONDS) {
   const chunks = [];
   const stride = Math.max(1, chunkSeconds - overlapSeconds);
   for (let start = 0; start < durationSeconds - 0.001;) {
@@ -230,8 +226,6 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     sheetSagePythonPath: text(stored.sheetSagePythonPath, 2048) || text(process.env.SHEETSAGE_PYTHON_PATH, 2048),
     comfyUiEndpoint: text(stored.comfyUiEndpoint, 2048) || text(process.env.COMFYUI_ENDPOINT, 2048),
     comfyUiEnginePath: text(stored.comfyUiEnginePath, 2048) || text(process.env.COMFYUI_ENGINE_PATH, 2048),
-    audioAukEndpoint: text(stored.audioAukEndpoint, 2048) || text(process.env.AUDIO_AUK_ENDPOINT, 2048),
-    audioAukPath: text(stored.audioAukPath, 2048) || text(process.env.AUDIO_AUK_PATH, 2048),
     ddspSvcPath: text(stored.ddspSvcPath, 2048) || text(process.env.DDSP_SVC_PATH, 2048),
     settingPath: text(stored.settingPath, 2048) || text(process.env.SETTING_PATH, 2048),
     musicPath: text(stored.musicPath, 2048) || text(process.env.MUSIC_PATH, 2048),
@@ -255,11 +249,6 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     viewMode: VIEW_MODES.has(stored.viewMode) ? stored.viewMode : 'list',
     outputDirectory,
   };
-  // Per-server cache of the AudioAuK engine settings last PUT to /api/settings. A chunked job
-  // submits several AuK jobs back-to-back with identical {model, encoder, vae, precision}, and
-  // AudioAuK re-loads weights on every settings PUT -- keying the skip on this instance-scoped
-  // object (not module state) avoids reloading per chunk without leaking state across servers/tests.
-  const audioAukConfigCache = { lastSettingsKey: null };
   // Shared child-runner with a hard deadline + output cap. The older inline spawn promises resolved
   // only on close/error, so a hung ffmpeg (file held open by another process, corrupt stream) held
   // the HTTP request open forever; this mirrors runSvcCli()'s timer+kill guard so the caller
@@ -788,10 +777,10 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       return null;
     }
   }
-  // Shared by every SVC-style engine (Seed-VC, Vevo2, and later AuK/DDSP-SVC): matches the
+  // Shared by every SVC-style engine (Seed-VC, Vevo2, and later DDSP-SVC): matches the
   // converted vocal's loudness to the pre-conversion vocal, then gates it silent wherever the
   // source vocal is true digital silence, since none of these models pass true silence through
-  // on their own (confirmed for Seed-VC/Vevo2 in real testing 2026-09-17; DDSP-SVC/AuK are the
+  // on their own (confirmed for Seed-VC/Vevo2 in real testing 2026-09-17; DDSP-SVC is the
   // same class of frame-aligned SVC artifact, so the fix applies unchanged). Returns the path of
   // the final gated WAV inside workDir -- caller decides where that result gets copied to.
   async function postProcessConvertedVocal(convertedVocalWav, originalVocalWav, workDir) {
@@ -865,16 +854,16 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       const voiceRefWav = path.join(workDir, 'voice-ref-normalized.wav');
       await runFfmpegCli(['-y', '-i', voiceRefSource, '-ar', '44100', '-ac', '1', voiceRefWav], '참조 오디오 변환');
 
-      // 긴 보컬은 AuK와 같은 방식으로 겹치는 10초 창으로 나눠 처리한다. Seed-VC/Vevo2는 소스
+      // 긴 보컬은 겹치는 10초 창으로 나눠 처리한다. Seed-VC/Vevo2는 소스
       // 전체를 한 번에 변환할 때 길어질수록 점점 노이즈/변형으로 무너지는 것이 실제 테스트로
       // 확인됐다(10초는 들을 만한데 2분이 되면 이상한 소리만 나오는 증상, 2026-09-22). 참조
       // 목소리(voiceRefWav)는 조각과 무관해 모든 조각에 같은 것을 사용하며, 겹친 양 끝을 1초씩
-      // 잘라 이어붙인다 -- AuK text-only 분기와 완전히 같은 패턴을 SVC CLI 경로에 적용한 것.
+      // 잘라 이어붙인다.
       const durationMs = await measureDurationMs(originalVocalsWav);
       const durationSeconds = durationMs ? durationMs / 1000 : 0;
       const chunkParams = resolveChunkParams(options.chunkSeconds, options.overlapSeconds);
       const useChunking = durationSeconds > chunkParams.chunkSeconds;
-      const chunkPlan = useChunking ? buildAukChunkPlan(durationSeconds, chunkParams.chunkSeconds, chunkParams.overlapSeconds) : [];
+      const chunkPlan = useChunking ? buildChunkPlan(durationSeconds, chunkParams.chunkSeconds, chunkParams.overlapSeconds) : [];
       const warning = useChunking
         ? `긴 보컬을 ${chunkParams.chunkSeconds}초 단위(겹침 ${chunkParams.overlapSeconds}초)로 ${chunkPlan.length}개로 나눠 같은 참조 목소리로 변환한 뒤 연결했습니다. 조각 경계 부근에서 음색 전환이 어색할 수 있습니다.`
         : null;
@@ -916,129 +905,8 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       await rm(workDir, { recursive: true, force: true }).catch(() => {});
     }
   }
-  // "음색 변조" AuK 탭: referenceDataUrl과 textDescription 중 적어도 하나가 필요하다(둘 다 있으면
-  // 레퍼런스를 음색 정체성으로, 텍스트를 스타일 수식어로 함께 사용). 상세 분기 로직은 auk.mjs의
-  // submitAukJob() 주석 참고 -- 이 함수는 SongYUE2 쪽 준비(보컬 스템 확보, 참조 오디오 정규화,
-  // 결과 후처리/저장)만 담당한다.
-  // stems: prepareTimbrePreview()가 이미 채워둔 스템 캐시 디렉터리(project 무관, applyVocalTimbreCore와 같은 계약).
-  async function applyAukTimbreCore(stems, { referenceDataUrl, textDescription, checkpoint, modelVariant, textEncoder, vae, lyrics, whisper, language, chunkSeconds, overlapSeconds, onProgress }) {
-    const description = text(textDescription, 500).trim();
-    let referenceBuffer = null;
-    let referenceExt = null;
-    if (typeof referenceDataUrl === 'string' && referenceDataUrl.length) {
-      const match = referenceDataUrl.match(/^data:(audio\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
-      if (!match) throw fail(400, '지원하지 않는 참조 오디오 형식입니다.');
-      const ext = AUDIO_MIME[match[1]];
-      if (!ext) throw fail(400, '지원하지 않는 오디오 형식입니다. MP3/WAV/FLAC/M4A/OGG 파일을 사용해 주세요.');
-      referenceBuffer = Buffer.from(match[2], 'base64');
-      if (referenceBuffer.length > 50 * 1024 * 1024) throw fail(413, '참조 오디오 파일이 너무 큽니다. 50MB 이하로 줄여 주세요.');
-      referenceExt = ext;
-    }
-    if (!referenceBuffer && !description) throw fail(400, '레퍼런스 오디오나 음색 설명 중 하나는 입력해 주세요.');
-
-    const endpoint = settings.audioAukEndpoint || DEFAULT_AUDIO_AUK_ENDPOINT;
-    const audioAukPath = resolveConfigPath(settings.audioAukPath, DEFAULT_AUDIO_AUK_PATH);
-
-    const originalVocalsWav = path.join(stems, 'vocals-original.wav');
-    if (!(await exists(originalVocalsWav))) throw fail(502, '보컬/악기 분리 결과를 찾을 수 없습니다.');
-
-    // 앱에서 만든 곡이면 저장된 가사가 있어 전사(Whisper STT, 혼합음에서 환각 자주 발생)를 건너뛴다.
-    // 표시용으로는 원본 그대로, AuK에 줄 instruction에는 [Verse]/[Chorus] 같은 구간 표기를 제거한다.
-    const storedLyrics = typeof lyrics === 'string' ? lyrics.trim() : '';
-    const spokenLyrics = storedLyrics ? storedLyrics.replace(/\[[^\]]+\]/g, ' ').replace(/\s+/g, ' ').trim() : undefined;
-
-    const workDir = path.join(outputDirectory, `auk-convert-${randomUUID()}`);
-    await mkdir(workDir, { recursive: true });
-    try {
-      const durationMs = await measureDurationMs(originalVocalsWav);
-      const durationSeconds = durationMs ? durationMs / 1000 : 0;
-      const chunkParams = resolveChunkParams(chunkSeconds, overlapSeconds);
-      const useChunking = !referenceBuffer && durationSeconds > chunkParams.chunkSeconds;
-      const chunkPlan = useChunking ? buildAukChunkPlan(durationSeconds, chunkParams.chunkSeconds, chunkParams.overlapSeconds) : [];
-      const warning = useChunking
-        ? `긴 보컬을 ${chunkParams.chunkSeconds}초 단위(겹침 ${chunkParams.overlapSeconds}초)로 ${chunkPlan.length}개 처리해 연결했습니다.`
-        : durationMs && durationMs > 30000
-          ? '참조 음성을 사용하는 AuK TTS는 긴 음원에서 결과가 노이즈로 무너지는 경향이 있습니다. 30초 이하에서 더 안정적입니다.'
-          : null;
-
-      let referenceFilePath = null;
-      if (referenceBuffer) {
-        const referenceSource = path.join(workDir, `reference.${referenceExt}`);
-        await writeFile(referenceSource, referenceBuffer);
-        referenceFilePath = path.join(workDir, 'reference-normalized.wav');
-        await runFfmpegCli(['-y', '-i', referenceSource, '-ar', '44100', '-ac', '1', referenceFilePath], '참조 오디오 변환');
-      }
-
-      const convertedVocals = path.join(workDir, 'converted-vocals.wav');
-      let resultTranscript = null;
-
-      const runFfmpeg = (args, label) => runFfmpegCli(args, label);
-
-      if (useChunking) {
-        const sharedSeed = randomInt(0, 2147483647);
-        const stitchedParts = [];
-        if (typeof onProgress === 'function') onProgress(2, `AuK 조각 준비 중 (0/${chunkPlan.length})`);
-
-        for (let index = 0; index < chunkPlan.length; index += 1) {
-          const chunk = chunkPlan[index];
-          const chunkSource = path.join(workDir, `chunk-${String(index).padStart(3, '0')}.wav`);
-          const sourceFilter = `atrim=start=${chunk.start.toFixed(3)}:duration=${chunk.duration.toFixed(3)},asetpts=PTS-STARTPTS`;
-          await runFfmpeg(['-y', '-i', originalVocalsWav, '-af', sourceFilter, '-ar', '44100', '-ac', '1', chunkSource], 'AuK 입력 조각 생성');
-
-          let chunkResult;
-          try {
-            chunkResult = await submitAukJob(fetchImpl, spawnImpl, endpoint, audioAukPath, {
-              referenceFilePath: null, textDescription: description, sourceVocalPath: chunkSource, checkpoint, modelVariant, textEncoder, vae, lyrics: null, whisper, language, seed: sharedSeed, configCache: audioAukConfigCache,
-            });
-          } catch (error) {
-            throw fail(502, `AuK ${index + 1}/${chunkPlan.length} 조각 변환에 실패했습니다. ${(error && error.message) || '알 수 없는 오류'}`);
-          }
-
-          const rawOutput = path.join(workDir, `chunk-${String(index).padStart(3, '0')}-raw${chunkResult.outputExt}`);
-          const stitchedPart = path.join(workDir, `chunk-${String(index).padStart(3, '0')}-stitched.wav`);
-          await writeFile(rawOutput, chunkResult.outputBuffer);
-
-          const trimStart = index === 0 ? 0 : chunkParams.edgeTrimSeconds;
-          const trimEnd = index === chunkPlan.length - 1 ? null : Math.max(trimStart, chunk.duration - chunkParams.edgeTrimSeconds);
-          const trimFilter = `atrim=start=${trimStart.toFixed(3)}${trimEnd === null ? '' : `:end=${trimEnd.toFixed(3)}`},asetpts=PTS-STARTPTS`;
-          await runFfmpeg(['-y', '-i', rawOutput, '-af', trimFilter, '-ar', '44100', '-ac', '1', stitchedPart], 'AuK 결과 조각 정리');
-          stitchedParts.push(stitchedPart);
-          if (typeof onProgress === 'function') onProgress(Math.round(5 + ((index + 1) / chunkPlan.length) * 85), `AuK 조각 처리 중 (${index + 1}/${chunkPlan.length})`);
-        }
-
-        const concatInputs = stitchedParts.flatMap((file) => ['-i', file]);
-        const concatFilter = `${stitchedParts.map((_, index) => `[${index}:a]`).join('')}concat=n=${stitchedParts.length}:v=0:a=1[out]`;
-        await runFfmpeg(['-y', ...concatInputs, '-filter_complex', concatFilter, '-map', '[out]', '-ar', '44100', '-ac', '1', convertedVocals], 'AuK 결과 조각 연결');
-      } else {
-        let result;
-        try {
-          if (typeof onProgress === 'function') onProgress(5, 'AuK 처리 중');
-          result = await submitAukJob(fetchImpl, spawnImpl, endpoint, audioAukPath, {
-            referenceFilePath, textDescription: description || null, sourceVocalPath: originalVocalsWav, checkpoint, modelVariant, textEncoder, vae, lyrics: spokenLyrics, whisper, language, configCache: audioAukConfigCache,
-          });
-        } catch (error) {
-          throw fail(502, `AuK 변환에 실패했습니다. ${(error && error.message) || '알 수 없는 오류'}`);
-        }
-        resultTranscript = result.transcript;
-        const rawOutput = path.join(workDir, `auk-output${result.outputExt}`);
-        await writeFile(rawOutput, result.outputBuffer);
-        await runFfmpeg(['-y', '-i', rawOutput, '-ar', '44100', '-ac', '1', convertedVocals], 'AuK 결과 오디오 변환');
-        if (typeof onProgress === 'function') onProgress(90, 'AuK 결과 정리 중');
-      }
-
-      const gatedVocals = await postProcessConvertedVocal(convertedVocals, originalVocalsWav, workDir);
-      await copyFile(gatedVocals, path.join(stems, 'vocals.wav'));
-      if (typeof onProgress === 'function') onProgress(96, '보컬과 반주를 합치는 중');
-      return { ok: true, warning, transcript: storedLyrics || resultTranscript || null, chunkCount: useChunking ? chunkPlan.length : 1 };
-    } finally {
-      await rm(workDir, { recursive: true, force: true }).catch(() => {});
-    }
-  }
-  // "Tools" 메뉴: 완성곡과 무관한 독립 AuK 작업(TTS/가사 편집/피치·속도·음량/음성 변형/품질 개선).
-  // 음색 변조 AuK 탭과 달리 STEM 분리도, 사이드체인 게이트 같은 SVC 전용 후처리도 없다 -- 그냥
-  // AudioAuK 결과를 WAV로 변환해 그대로 돌려주고, 저장은 프론트가 기존 POST /audio-save로 한다.
   // dataUrl 오디오(MP3/WAV/FLAC/M4A/OGG, 50MB 이하)를 작업 폴더에 저장한 뒤 ffmpeg로 모노 44.1kHz
-  // WAV로 정규화한다. runAukTool과 /api/audio-tools/transcribe가 공유한다.
+  // WAV로 정규화한다. Audio Tools의 TTS/ASR/조절 작업이 공유한다.
   async function normalizeInputAudio(workDir, audioDataUrl) {
     const match = typeof audioDataUrl === 'string' && audioDataUrl.match(/^data:(audio\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
     if (!match) throw fail(400, '지원하지 않는 오디오 형식입니다.');
@@ -1052,76 +920,189 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     await runFfmpegCli(['-y', '-i', source, '-ar', '44100', '-ac', '1', audioFilePath], '입력 오디오 변환');
     return audioFilePath;
   }
-  async function runAukTool({ task, instruction, audioDataUrl, checkpoint, modelVariant, textEncoder, vae, seconds, chunk, chunkSeconds, overlapSeconds }) {
-    const cleanTask = text(task, 100).trim();
-    const cleanInstruction = text(instruction, 2000).trim();
-    if (!cleanTask || !cleanInstruction) throw fail(400, '작업 종류와 지시문이 필요합니다.');
-    const endpoint = settings.audioAukEndpoint || DEFAULT_AUDIO_AUK_ENDPOINT;
-    const audioAukPath = resolveConfigPath(settings.audioAukPath, DEFAULT_AUDIO_AUK_PATH);
-    const workDir = path.join(outputDirectory, `auk-tool-${randomUUID()}`);
+  // Audio Tools TTS on audio.cpp (Qwen3-TTS / VoxCPM2 / Chatterbox ...). The text is split into
+  // sentence-packed segments, each synthesized by its own audiocpp_cli run, then concatenated.
+  const ttsDownloads = new Map();
+  async function runTtsCli(args, outputWav = args[args.indexOf('--out') + 1]) {
+    const engine = resolveConfigPath(settings.enginePath, DEFAULT_ENGINE_PATH);
+    const log = await new Promise((resolve, reject) => {
+      const child = spawnImpl(engine, ['--backend', 'cuda', ...args], { windowsHide: true, cwd: audioCppCwd(engine) });
+      const chunks = [];
+      let size = 0;
+      const collect = (data) => { size += data.length; if (size < 512 * 1024) chunks.push(data); };
+      child.stdout.on('data', collect);
+      child.stderr.on('data', collect);
+      const timer = setTimeout(() => child.kill(), GENERATE_TIMEOUT_MS);
+      child.once('error', (error) => { clearTimeout(timer); reject(error); });
+      child.once('close', (code, signal) => { clearTimeout(timer); resolve({ text: Buffer.concat(chunks).toString('utf8'), code, signal }); });
+    }).catch(() => { throw fail(502, 'TTS 엔진(audio.cpp)을 실행할 수 없습니다.'); });
+    if (log.signal) throw fail(502, 'TTS 생성이 제한 시간을 넘어 중단되었습니다.');
+    if (log.code !== 0 || !(await exists(outputWav))) throw fail(502, `TTS 생성에 실패했습니다 (종료 코드 ${log.code}). ${log.text.trim().slice(-500) || '알 수 없는 오류'}`);
+  }
+  function resolveTtsModel(input) {
+    const design = input.mode === 'design';
+    const preset = input.mode === 'preset';
+    const familyId = text(input.family, 40);
+    if (ASR_FAMILIES.some((item) => item.id === familyId)) {
+      const asrModel = findTtsModel(familyId, 'asr', text(input.size, 20), text(input.precision, 20));
+      if (!asrModel) throw fail(400, '지원하지 않는 모델 조합입니다.');
+      return { model: asrModel, mode: 'asr', design: false };
+    }
+    // Families without a native voice-design variant (Chatterbox etc.) always need a reference
+    // clip, so in the design tab they use their reference variants and a Qwen3 VoiceDesign clip stands
+    // in as the reference.
+    const nativeDesign = TTS_FAMILIES.find((item) => item.id === familyId)?.variants.some((variant) => variant.mode === 'design');
+    const model = findTtsModel(familyId, preset ? 'preset' : design && nativeDesign ? 'design' : 'ref', text(input.size, 20), text(input.precision, 20));
+    if (!model) throw fail(400, '지원하지 않는 TTS 모델 조합입니다.');
+    return { model, mode: model.variant.mode, design };
+  }
+  // Picks the requested ASR model, or the first installed one (Qwen3-ASR 1.7B q8 first) when none is given.
+  async function resolveAsrModel(familyId, size, precision) {
+    if (familyId) {
+      const model = findTtsModel(familyId, 'asr', size, precision);
+      if (!model) throw fail(400, '지원하지 않는 음성 인식 모델 조합입니다.');
+      if (!(await isTtsModelInstalled(root, model))) throw fail(409, `${model.family.label} ${model.variant.size} ${precision} 모델이 설치되어 있지 않습니다. 모델 선택에서 '받기'를 눌러 내려받아 주세요.`);
+      return model;
+    }
+    for (const family of ASR_FAMILIES) {
+      for (const variant of [...family.variants].reverse()) {
+        for (const precision of ['q8_0', 'f16']) {
+          const model = findTtsModel(family.id, 'asr', variant.size, precision);
+          if (model && await isTtsModelInstalled(root, model)) return model;
+        }
+      }
+    }
+    throw fail(409, '음성 인식 모델이 설치되어 있지 않습니다. 음성 인식 탭에서 모델을 받아 주세요.');
+  }
+  async function transcribeWav(workDir, wavPath, language = '', familyId = '', size = '', precision = '') {
+    const model = await resolveAsrModel(familyId, size, precision);
+    const wav16 = path.join(workDir, `asr-${randomUUID()}.wav`);
+    await runFfmpegCli(['-y', '-i', wavPath, '-ar', '16000', '-ac', '1', wav16], '음성 인식 입력 변환');
+    const textOut = `${wav16}.txt`;
+    const languageValue = model.family.languages?.[language];
+    const args = ['--task', 'asr', '--family', model.family.cliFamily, '--model', path.join(root, model.relativePath), '--audio', wav16, ...(languageValue ? ['--language', languageValue] : []), '--text', '', '--text-out', textOut];
+    await runTtsCli(args, textOut);
+    return (await readFile(textOut, 'utf8')).trim();
+  }
+  // Pitch/tempo via rubberband (independent), loudness via volume, optional broadband denoise via afftdn.
+  async function adjustAudio(input) {
+    const pitch = Math.max(-24, Math.min(24, Number(input.pitchSemitones) || 0));
+    const speed = Math.max(0.25, Math.min(4, Number(input.speed) || 1));
+    const volumeDb = Math.max(-40, Math.min(40, Number(input.volumeDb) || 0));
+    const denoise = input.denoise === true;
+    const filters = [];
+    if (denoise) filters.push('afftdn=nr=12:nf=-30');
+    if (pitch !== 0 || speed !== 1) filters.push(`rubberband=pitch=${(2 ** (pitch / 12)).toFixed(6)}:tempo=${speed}`);
+    if (volumeDb !== 0) filters.push(`volume=${volumeDb}dB`);
+    if (!filters.length) throw fail(400, '적용할 조절 값을 하나 이상 입력해 주세요.');
+    const workDir = path.join(outputDirectory, `audio-adjust-${randomUUID()}`);
     await mkdir(workDir, { recursive: true });
     try {
-      let audioFilePath = null;
-      if (typeof audioDataUrl === 'string' && audioDataUrl.length) {
-        audioFilePath = await normalizeInputAudio(workDir, audioDataUrl);
+      const source = await normalizeInputAudio(workDir, input.audioDataUrl);
+      const outputWav = path.join(workDir, 'adjusted.wav');
+      await runFfmpegCli(['-y', '-i', source, '-af', filters.join(','), '-ar', '44100', '-ac', '1', outputWav], '오디오 조절');
+      return { dataUrl: `data:audio/wav;base64,${(await readFile(outputWav)).toString('base64')}` };
+    } finally {
+      await rm(workDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+  // Typecast cloud TTS: the key is read from .env (TYPECAST_API_KEY) at call time and never sent to the browser.
+  const typecastKey = () => (process.env.TYPECAST_API_KEY || '').trim();
+  const typecastMissingKey = () => fail(409, 'Typecast API 키가 없습니다. 프로젝트 폴더의 .env 파일에 TYPECAST_API_KEY=발급받은키 를 추가하고 백엔드를 재시작해 주세요. (키 발급: https://studio.typecast.ai/developers/api)');
+  const typecastFailure = (error) => (error instanceof TypecastError ? fail(error.status, error.message) : fail(502, `Typecast에 연결할 수 없습니다. ${(error && error.message) || ''}`.trim()));
+  async function runTypecastTool(input) {
+    const apiKey = typecastKey();
+    if (!apiKey) throw typecastMissingKey();
+    const cloneMode = input.mode === 'ref';
+    let voiceId = text(input.voiceId, 80).trim();
+    const description = text(input.description, 500).trim();
+    if (cloneMode && !(typeof input.referenceDataUrl === 'string' && input.referenceDataUrl.length)) throw fail(400, '참조 목소리를 선택해 주세요.');
+    if (!cloneMode && !voiceId && !description) throw fail(400, '음색 설명을 입력하거나 Typecast 목소리를 직접 선택해 주세요.');
+    const content = text(input.text, 20000).trim();
+    if (!content) throw fail(400, '말할 내용을 입력해 주세요.');
+    const language = TYPECAST_LANGUAGES[input.language] ? input.language : 'auto';
+    const preset = text(input.emotionPreset, 20);
+    const segments = splitTtsText(content, 1500);
+    const workDir = path.join(outputDirectory, `typecast-tool-${randomUUID()}`);
+    await mkdir(workDir, { recursive: true });
+    let clonedVoiceId = '';
+    let usedVoiceName = '';
+    try {
+      if (cloneMode) {
+        // Reference clip -> Typecast instant cloning (WAV/MP3, 5-150 s); the temporary voice is deleted afterwards.
+        const referenceWav = await normalizeInputAudio(workDir, input.referenceDataUrl);
+        const seconds = ((await measureDurationMs(referenceWav)) || 0) / 1000;
+        if (seconds && (seconds < 5 || seconds > 150)) throw fail(400, `Typecast 목소리 복제는 5~150초 길이의 참조 오디오가 필요합니다(현재 약 ${Math.round(seconds)}초).`);
+        voiceId = clonedVoiceId = await cloneTypecastVoice(fetchImpl, apiKey, await readFile(referenceWav), `songyue-${randomUUID().slice(0, 8)}`).catch((error) => { throw typecastFailure(error); });
+      } else if (!voiceId) {
+        const picked = await recommendTypecastVoice(fetchImpl, apiKey, description).catch((error) => { throw typecastFailure(error); });
+        voiceId = picked.id;
+        usedVoiceName = picked.name;
       }
-
-      // Tools 메뉴의 오디오 편집/조절/변형/품질개선 도구: AuK는 오디오 전체를 한 번에 편집할 때
-      // 10초를 넘기면 음성 환각으로 무너진다. 조각과 무관한 지시문(음량/피치/속도/속삭임/노이즈 제거
-      // 등)이라면 입력을 겹치는 10초 창으로 잘라 각각 처리한 뒤 같은 방식으로 이어붙인다. 시점에
-      // 의존하거나 텍스트 앵커가 필요한 도구(비언어음 추가, 가사/대사 편집)는 프론트가 chunk 대신
-      // 단일 잡으로 보낸다.
-      const durationMs = audioFilePath ? await measureDurationMs(audioFilePath) : null;
-      const durationSeconds = durationMs ? durationMs / 1000 : 0;
-      const chunkParams = resolveChunkParams(chunkSeconds, overlapSeconds);
-      const useChunking = chunk === true && audioFilePath && durationMs !== null && durationSeconds > chunkParams.chunkSeconds;
-      const chunkPlan = useChunking ? buildAukChunkPlan(durationSeconds, chunkParams.chunkSeconds, chunkParams.overlapSeconds) : [];
-      const warning = useChunking
-        ? `긴 오디오를 ${chunkParams.chunkSeconds}초 단위(겹침 ${chunkParams.overlapSeconds}초)로 ${chunkPlan.length}개로 나눠 순차 처리하고 연결했습니다. 조각 경계 부근에서 오디오가 어색할 수 있습니다.`
-        : null;
-
-      const runFfmpeg = (args, label) => runFfmpegCli(args, label);
-      const runToolJob = async (jobAudioPath, index) => {
-        let result;
-        try {
-          result = await submitAukToolJob(fetchImpl, spawnImpl, endpoint, audioAukPath, { task: cleanTask, instruction: cleanInstruction, audioFilePath: jobAudioPath, checkpoint, modelVariant, textEncoder, vae, seconds, configCache: audioAukConfigCache });
-        } catch (error) {
-          throw fail(502, `AuK 작업에 실패했습니다. ${(error && error.message) || '알 수 없는 오류'}`);
-        }
-        const rawOutput = path.join(workDir, `output-${String(index).padStart(3, '0')}${result.outputExt}`);
-        await writeFile(rawOutput, result.outputBuffer);
-        return rawOutput;
-      };
-
-      if (useChunking) {
-        const stitchedParts = [];
-        for (let index = 0; index < chunkPlan.length; index += 1) {
-          const chunk = chunkPlan[index];
-          const chunkSource = path.join(workDir, `chunk-${String(index).padStart(3, '0')}.wav`);
-          const sourceFilter = `atrim=start=${chunk.start.toFixed(3)}:duration=${chunk.duration.toFixed(3)},asetpts=PTS-STARTPTS`;
-          await runFfmpeg(['-y', '-i', audioFilePath, '-af', sourceFilter, '-ar', '44100', '-ac', '1', chunkSource], '입력 조각 생성');
-          const rawOutput = await runToolJob(chunkSource, index);
-          const stitchedPart = path.join(workDir, `chunk-${String(index).padStart(3, '0')}-stitched.wav`);
-          const trimStart = index === 0 ? 0 : chunkParams.edgeTrimSeconds;
-          const trimEnd = index === chunkPlan.length - 1 ? null : Math.max(trimStart, chunk.duration - chunkParams.edgeTrimSeconds);
-          const trimFilter = `atrim=start=${trimStart.toFixed(3)}${trimEnd === null ? '' : `:end=${trimEnd.toFixed(3)}`},asetpts=PTS-STARTPTS`;
-          await runFfmpeg(['-y', '-i', rawOutput, '-af', trimFilter, '-ar', '44100', '-ac', '1', stitchedPart], '결과 조각 정리');
-          stitchedParts.push(stitchedPart);
-        }
-        const outputWav = path.join(workDir, 'output.wav');
-        const concatInputs = stitchedParts.flatMap((file) => ['-i', file]);
-        const concatFilter = `${stitchedParts.map((_, index) => `[${index}:a]`).join('')}concat=n=${stitchedParts.length}:v=0:a=1[out]`;
-        await runFfmpeg(['-y', ...concatInputs, '-filter_complex', concatFilter, '-map', '[out]', '-ar', '44100', '-ac', '1', outputWav], '결과 조각 연결');
-        const wavBuffer = await readFile(outputWav);
-        return { dataUrl: `data:audio/wav;base64,${wavBuffer.toString('base64')}`, warning, chunkCount: chunkPlan.length };
+      const parts = [];
+      for (let index = 0; index < segments.length; index += 1) {
+        const emotion = input.emotion === 'preset' ? { type: 'preset', preset } : { type: 'smart', previousText: segments[index - 1]?.slice(-300), nextText: segments[index + 1]?.slice(0, 300) };
+        const wav = await typecastSpeak(fetchImpl, apiKey, { voiceId, text: segments[index], language, emotion }).catch((error) => { throw typecastFailure(error); });
+        const file = path.join(workDir, `seg-${String(index).padStart(3, '0')}.wav`);
+        await writeFile(file, wav);
+        parts.push(file);
       }
-
-      const rawOutput = await runToolJob(audioFilePath, 0);
-      const outputWav = path.join(workDir, 'output.wav');
-      await runFfmpegCli(['-y', '-i', rawOutput, outputWav], 'AuK 결과 오디오 변환');
-
-      const wavBuffer = await readFile(outputWav);
-      return { dataUrl: `data:audio/wav;base64,${wavBuffer.toString('base64')}` };
+      const finalWav = path.join(workDir, 'output.wav');
+      if (parts.length === 1) await copyFile(parts[0], finalWav);
+      else await runFfmpegCli(['-y', ...parts.flatMap((file) => ['-i', file]), '-filter_complex', `${parts.map((_, index) => `[${index}:a]`).join('')}concat=n=${parts.length}:v=0:a=1[out]`, '-map', '[out]', '-ar', '44100', '-ac', '1', finalWav], 'Typecast 조각 연결');
+      return { dataUrl: `data:audio/wav;base64,${(await readFile(finalWav)).toString('base64')}`, segmentCount: segments.length, voiceName: usedVoiceName || undefined };
+    } finally {
+      if (clonedVoiceId) await deleteTypecastVoice(fetchImpl, apiKey, clonedVoiceId);
+      await rm(workDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+  async function runTtsTool(input) {
+    const { model, mode, design } = resolveTtsModel(input);
+    if (!(await isTtsModelInstalled(root, model))) throw fail(409, `${model.family.label} ${model.variant.size} ${input.precision} 모델이 설치되어 있지 않습니다. 모델 선택에서 '받기'를 눌러 내려받아 주세요.`);
+    const content = text(input.text, 20000).trim();
+    if (!content) throw fail(400, '말할 내용을 입력해 주세요.');
+    const description = text(input.description, 500).trim();
+    if (design && !description) throw fail(400, '음색 설명을 입력해 주세요.');
+    if (!design && mode === 'ref' && !(typeof input.referenceDataUrl === 'string' && input.referenceDataUrl.length)) throw fail(400, '참조 목소리를 선택해 주세요.');
+    const language = ['ko', 'en'].includes(input.language) ? input.language : 'auto';
+    let referenceText = design ? '' : text(input.referenceText, 1000).trim();
+    let autoReferenceText = '';
+    const style = STYLE_FAMILIES.includes(model.family.id) && (model.family.id !== 'qwen3' || mode === 'preset') ? text(input.style, 200).trim() : '';
+    const segments = language === 'auto' ? splitTtsByScript(content, 200) : splitTtsText(content, 200);
+    const workDir = path.join(outputDirectory, `tts-tool-${randomUUID()}`);
+    await mkdir(workDir, { recursive: true });
+    try {
+      let referenceWav = '';
+      if (design && mode === 'ref') {
+        // Render a short clean reference clip from the description with Qwen3 VoiceDesign, then clone it.
+        const voiceModel = findTtsModel('qwen3', 'design', '1.7B', 'q8_0');
+        if (!(await isTtsModelInstalled(root, voiceModel))) throw fail(409, `음색 설명을 참조 목소리로 만들려면 Qwen3-TTS VoiceDesign 1.7B INT8 모델이 필요합니다. Qwen3-TTS를 선택해 '받기'를 눌러 내려받아 주세요.`);
+        const koreanText = language === 'ko' || (language === 'auto' && /[가-힣]/.test(content));
+        referenceText = koreanText ? '안녕하세요, 저는 지금 차분하고 또렷한 목소리로 이야기하고 있습니다.' : 'Hello, I am speaking in a calm and clear voice right now.';
+        referenceWav = path.join(workDir, 'design-reference.wav');
+        await runTtsCli(buildTtsArgs({ model: voiceModel, mode: 'design', text: referenceText, description, language: koreanText ? 'ko' : 'en', outputWav: referenceWav, modelPath: path.join(root, voiceModel.relativePath) }));
+      } else if (mode === 'ref') {
+        referenceWav = await normalizeInputAudio(workDir, input.referenceDataUrl);
+        // Qwen3 Base clones far better with the reference transcript; when the user left it empty,
+        // transcribe the clip with Qwen3-ASR (best effort: without an installed ASR model it falls
+        // back to speaker-embedding-only cloning).
+        if (!referenceText && ['qwen3', 'omnivoice', 'fish'].includes(model.family.id)) {
+          referenceText = await transcribeWav(workDir, referenceWav, language === 'auto' ? '' : language).catch(() => '');
+          autoReferenceText = referenceText;
+        }
+        if (!referenceText && model.family.id === 'omnivoice') throw fail(409, 'OmniVoice는 참조 목소리 텍스트가 필요합니다. 텍스트를 직접 입력하거나 음성 인식 모델(Qwen3-ASR 등)을 설치해 주세요.');
+      }
+      const parts = [];
+      for (let index = 0; index < segments.length; index += 1) {
+        const outputWav = path.join(workDir, `seg-${String(index).padStart(3, '0')}.wav`);
+        await runTtsCli(buildTtsArgs({ model, mode, text: segments[index], description, style, voiceId: text(input.voiceId, 4), language, referenceWav, referenceText, outputWav, modelPath: path.join(root, model.relativePath) }));
+        parts.push(outputWav);
+      }
+      const finalWav = path.join(workDir, 'output.wav');
+      if (parts.length === 1) await copyFile(parts[0], finalWav);
+      else await runFfmpegCli(['-y', ...parts.flatMap((file) => ['-i', file]), '-filter_complex', `${parts.map((_, index) => `[${index}:a]`).join('')}concat=n=${parts.length}:v=0:a=1[out]`, '-map', '[out]', '-ar', '44100', '-ac', '1', finalWav], 'TTS 조각 연결');
+      const wavBuffer = await readFile(finalWav);
+      return { dataUrl: `data:audio/wav;base64,${wavBuffer.toString('base64')}`, segmentCount: segments.length, referenceText: autoReferenceText || undefined };
     } finally {
       await rm(workDir, { recursive: true, force: true }).catch(() => {});
     }
@@ -1458,7 +1439,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   }
   const publicSettings = () => {
     const env = providerFromEnv(settings.provider);
-    return { provider: settings.provider, endpoint: env.endpoint, llmModel: env.model, enginePath: settings.enginePath, pythonEnginePath: settings.pythonEnginePath, pythonScriptPath: settings.pythonScriptPath, pythonMemoryBudgetGib: settings.pythonMemoryBudgetGib, sheetSagePythonPath: settings.sheetSagePythonPath, comfyUiEndpoint: settings.comfyUiEndpoint, comfyUiEnginePath: settings.comfyUiEnginePath, audioAukEndpoint: settings.audioAukEndpoint, audioAukPath: settings.audioAukPath, ddspSvcPath: settings.ddspSvcPath, settingPath: settings.settingPath, musicPath: settings.musicPath, examplesPath: settings.examplesPath, coversPath: settings.coversPath, abcNotesPath: settings.abcNotesPath, stylePresets: settings.stylePresets, visualizerEnabled: settings.visualizerEnabled, visualizerRingCount: settings.visualizerRingCount, visualizerHue: settings.visualizerHue, visualizerLineWidth: settings.visualizerLineWidth, visualizerTrail: settings.visualizerTrail, visualizerSpiral: settings.visualizerSpiral, visualizerRingMode: settings.visualizerRingMode, visualizerTimeStep: settings.visualizerTimeStep, visualizerTimeSkew: settings.visualizerTimeSkew, visualizerRingStep: settings.visualizerRingStep, visualizerAmplitude: settings.visualizerAmplitude, saveFormat: settings.saveFormat, viewMode: settings.viewMode, outputDirectory: path.relative(root, outputDirectory) || '.', hasApiKey: Boolean(env.apiKey), apiKey: env.apiKey ? '***' : null, apiKeyStorage: 'env' };
+    return { provider: settings.provider, endpoint: env.endpoint, llmModel: env.model, enginePath: settings.enginePath, pythonEnginePath: settings.pythonEnginePath, pythonScriptPath: settings.pythonScriptPath, pythonMemoryBudgetGib: settings.pythonMemoryBudgetGib, sheetSagePythonPath: settings.sheetSagePythonPath, comfyUiEndpoint: settings.comfyUiEndpoint, comfyUiEnginePath: settings.comfyUiEnginePath, ddspSvcPath: settings.ddspSvcPath, settingPath: settings.settingPath, musicPath: settings.musicPath, examplesPath: settings.examplesPath, coversPath: settings.coversPath, abcNotesPath: settings.abcNotesPath, stylePresets: settings.stylePresets, visualizerEnabled: settings.visualizerEnabled, visualizerRingCount: settings.visualizerRingCount, visualizerHue: settings.visualizerHue, visualizerLineWidth: settings.visualizerLineWidth, visualizerTrail: settings.visualizerTrail, visualizerSpiral: settings.visualizerSpiral, visualizerRingMode: settings.visualizerRingMode, visualizerTimeStep: settings.visualizerTimeStep, visualizerTimeSkew: settings.visualizerTimeSkew, visualizerRingStep: settings.visualizerRingStep, visualizerAmplitude: settings.visualizerAmplitude, saveFormat: settings.saveFormat, viewMode: settings.viewMode, outputDirectory: path.relative(root, outputDirectory) || '.', hasApiKey: Boolean(env.apiKey), apiKey: env.apiKey ? '***' : null, apiKeyStorage: 'env' };
   };
   async function localFile(relativePath) {
     const file = path.join(root, relativePath);
@@ -1538,7 +1519,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       const ownPort = server.address()?.port || port;
       const validHosts = new Set([`127.0.0.1:${ownPort}`, `localhost:${ownPort}`]);
       if (!validHosts.has(req.headers.host)) throw fail(403, '이 PC에서 앱 주소로 접속해 주세요.');
-      const allowedOrigins = new Set([`http://127.0.0.1:${ownPort}`, `http://localhost:${ownPort}`, 'http://localhost:5173', 'http://127.0.0.1:5173']);
+      const allowedOrigins = new Set([`http://127.0.0.1:${ownPort}`, `http://localhost:${ownPort}`, 'http://localhost:5176', 'http://127.0.0.1:5176']);
       const origin = req.headers.origin;
       if (origin && !allowedOrigins.has(origin)) throw fail(403, '허용되지 않은 앱 주소입니다. 로컬 앱에서 다시 시도해 주세요.');
       if (req.headers['sec-fetch-site'] === 'cross-site') throw fail(403, '외부 페이지에서는 요청할 수 없습니다.');
@@ -1570,8 +1551,6 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           if (input.sheetSagePythonPath !== undefined) next.sheetSagePythonPath = text(input.sheetSagePythonPath, 2048);
           if (input.comfyUiEndpoint !== undefined) next.comfyUiEndpoint = text(input.comfyUiEndpoint, 2048);
           if (input.comfyUiEnginePath !== undefined) next.comfyUiEnginePath = text(input.comfyUiEnginePath, 2048);
-          if (input.audioAukEndpoint !== undefined) next.audioAukEndpoint = text(input.audioAukEndpoint, 2048);
-          if (input.audioAukPath !== undefined) next.audioAukPath = text(input.audioAukPath, 2048);
           if (input.ddspSvcPath !== undefined) next.ddspSvcPath = text(input.ddspSvcPath, 2048);
           if (input.settingPath !== undefined) next.settingPath = text(input.settingPath, 2048);
           if (input.musicPath !== undefined) next.musicPath = text(input.musicPath, 2048);
@@ -1592,7 +1571,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           if (input.visualizerAmplitude !== undefined) next.visualizerAmplitude = Math.max(0.1, Math.min(10, Number.isFinite(Number(input.visualizerAmplitude)) ? Number(input.visualizerAmplitude) : DEFAULT_VISUALIZER_AMPLITUDE));
           if (input.saveFormat !== undefined) next.saveFormat = input.saveFormat;
           if (input.viewMode !== undefined) next.viewMode = input.viewMode;
-          await saveJson(settingsFile, { provider: next.provider, enginePath: next.enginePath, pythonEnginePath: next.pythonEnginePath, pythonScriptPath: next.pythonScriptPath, pythonMemoryBudgetGib: next.pythonMemoryBudgetGib, sheetSagePythonPath: next.sheetSagePythonPath, comfyUiEndpoint: next.comfyUiEndpoint, comfyUiEnginePath: next.comfyUiEnginePath, audioAukEndpoint: next.audioAukEndpoint, audioAukPath: next.audioAukPath, ddspSvcPath: next.ddspSvcPath, settingPath: next.settingPath, musicPath: next.musicPath, examplesPath: next.examplesPath, coversPath: next.coversPath, abcNotesPath: next.abcNotesPath, stylePresets: next.stylePresets, visualizerEnabled: next.visualizerEnabled, visualizerRingCount: next.visualizerRingCount, visualizerHue: next.visualizerHue, visualizerLineWidth: next.visualizerLineWidth, visualizerTrail: next.visualizerTrail, visualizerSpiral: next.visualizerSpiral, visualizerRingMode: next.visualizerRingMode, visualizerTimeStep: next.visualizerTimeStep, visualizerTimeSkew: next.visualizerTimeSkew, visualizerRingStep: next.visualizerRingStep, visualizerAmplitude: next.visualizerAmplitude, saveFormat: next.saveFormat, viewMode: next.viewMode });
+          await saveJson(settingsFile, { provider: next.provider, enginePath: next.enginePath, pythonEnginePath: next.pythonEnginePath, pythonScriptPath: next.pythonScriptPath, pythonMemoryBudgetGib: next.pythonMemoryBudgetGib, sheetSagePythonPath: next.sheetSagePythonPath, comfyUiEndpoint: next.comfyUiEndpoint, comfyUiEnginePath: next.comfyUiEnginePath, ddspSvcPath: next.ddspSvcPath, settingPath: next.settingPath, musicPath: next.musicPath, examplesPath: next.examplesPath, coversPath: next.coversPath, abcNotesPath: next.abcNotesPath, stylePresets: next.stylePresets, visualizerEnabled: next.visualizerEnabled, visualizerRingCount: next.visualizerRingCount, visualizerHue: next.visualizerHue, visualizerLineWidth: next.visualizerLineWidth, visualizerTrail: next.visualizerTrail, visualizerSpiral: next.visualizerSpiral, visualizerRingMode: next.visualizerRingMode, visualizerTimeStep: next.visualizerTimeStep, visualizerTimeSkew: next.visualizerTimeSkew, visualizerRingStep: next.visualizerRingStep, visualizerAmplitude: next.visualizerAmplitude, saveFormat: next.saveFormat, viewMode: next.viewMode });
           settings = next;
           if (input.settingPath !== undefined) await mkdir(settingDir(), { recursive: true });
           if (input.musicPath !== undefined) await mkdir(musicDir(), { recursive: true });
@@ -2246,7 +2225,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         return send(200, { ok: true, folder: dir, filename, path: target });
       }
       // "음색 변조" 팝업: 라이브러리에서 자유롭게 고른 "원본 audio"를 위한 프로젝트 무관 라우트 묶음.
-      // prepare가 스템 분리까지 미리 끝내두면, 이후 세 엔진(legacy/auk/ddsp)이 같은 previewId로
+      // prepare가 스템 분리까지 미리 끝내두면, 이후 두 엔진(legacy/ddsp)이 같은 previewId로
       // vocals-original.wav를 공유해서 쓴다 -- 예전 project.id 스코프 라우트들과 완전히 같은 흐름을
       // previewId 기준으로 옮긴 것뿐이다(옛 /projects/:id/vocal-timbre/apply 등은 제거됨).
       if (req.method === 'POST' && pathname === '/api/timbre-transform/prepare') {
@@ -2303,54 +2282,80 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         }, onProgress)); }
         finally { generating = false; generationStatus = null; }
       }
-      const timbreAukApplyMatch = pathname.match(/^\/api\/timbre-transform\/([^/]+)\/auk\/apply$/);
-      if (timbreAukApplyMatch && req.method === 'POST') {
+      if (req.method === 'GET' && pathname === '/api/audio-tools/typecast/voices') {
+        const apiKey = typecastKey();
+        if (!apiKey) return send(200, { configured: false, voices: [] });
+        try { const [voices, subscription] = await Promise.all([listTypecastVoices(fetchImpl, apiKey), typecastSubscription(fetchImpl, apiKey)]); return send(200, { configured: true, voices, subscription }); }
+        catch (error) { throw typecastFailure(error); }
+      }
+      if (req.method === 'POST' && pathname === '/api/audio-tools/typecast') {
         const input = await body(req, 50 * 1024 * 1024);
-        const dir = timbrePreviewDir(timbreAukApplyMatch[1]);
-        if (!(await exists(dir))) throw fail(404, '원본 오디오 준비 정보를 찾을 수 없습니다. 원본을 다시 선택해 주세요.');
-        if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
+        if (generating) throw fail(409, '이미 다른 작업을 실행 중입니다. 완료 후 다시 시도해 주세요.');
         generating = true;
-        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 90000, progress: 0, detail: 'AuK 준비 중' };
-        const onProgress = (progress, detail) => {
-          if (!generationStatus) return;
-          generationStatus.progress = progress;
-          generationStatus.detail = detail;
-        };
-        try { return send(200, await applyAukTimbreCore(path.join(dir, 'stems'), { referenceDataUrl: input.referenceDataUrl, textDescription: input.textDescription, checkpoint: input.checkpoint, modelVariant: input.modelVariant, textEncoder: input.textEncoder, vae: input.vae, lyrics: input.lyrics, whisper: input.whisper, language: input.language, chunkSeconds: input.chunkSeconds, overlapSeconds: input.overlapSeconds, onProgress })); }
+        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: Math.max(8000, text(input.text, 20000).length * 60) };
+        try { return send(200, await runTypecastTool(input)); }
         finally { generating = false; generationStatus = null; }
       }
-      // "Tools" 메뉴: 완성곡과 무관한 독립 AuK 작업. /projects/:id 스코프가 아니라 /audio-save와
-      // 같은 층위의 범용 라우트 -- 결과는 저장하지 않고 dataUrl로 돌려주며, 저장 여부는 프론트가
-      // 기존 POST /audio-save로 별도 결정한다.
-      if (req.method === 'POST' && pathname === '/api/audio-tools/auk') {
-        const input = await body(req, 50 * 1024 * 1024);
-        if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
-        generating = true;
-        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 60000 };
-        try { return send(200, await runAukTool({ task: input.task, instruction: input.instruction, audioDataUrl: input.audioDataUrl, checkpoint: input.checkpoint, modelVariant: input.modelVariant, textEncoder: input.textEncoder, vae: input.vae, seconds: input.seconds, chunk: input.chunk === true, chunkSeconds: input.chunkSeconds, overlapSeconds: input.overlapSeconds })); }
-        finally { generating = false; generationStatus = null; }
+      if (req.method === 'GET' && pathname === '/api/audio-tools/tts/models') {
+        return send(200, { families: await listTtsModels(root, ttsDownloads), asr: await listTtsModels(root, ttsDownloads, ASR_FAMILIES) });
       }
-      // "Tools" 메뉴(가사/대사 편집 탭): 선택한 오디오를 AudioAuK Whisper STT로 전사해 가사 후보를
-      // 돌려준다. 오디오는 업로드만 하고 결과는 저장하지 않는다 -- 프론트가 편집 UI에 표시한다.
-      if (req.method === 'POST' && pathname === '/api/audio-tools/transcribe') {
-        const input = await body(req, 50 * 1024 * 1024);
-        if (!(typeof input.audioDataUrl === 'string' && input.audioDataUrl.length)) throw fail(400, '전사할 오디오가 필요합니다.');
-        if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
+      if (req.method === 'POST' && pathname === '/api/audio-tools/tts/download') {
+        const input = await body(req, 64 * 1024);
+        const { model } = resolveTtsModel(input);
+        if (await isTtsModelInstalled(root, model)) return send(200, { ok: true, installed: true });
+        void downloadTtsModel({ fetchImpl, root, model, downloads: ttsDownloads });
+        return send(202, { ok: true });
+      }
+      if (req.method === 'POST' && pathname === '/api/audio-tools/tts/preview') {
+        // Short cached sample of one preset voice so the user can audition it before generating.
+        const input = await body(req, 64 * 1024);
+        const { model } = resolveTtsModel({ ...input, mode: 'preset' });
+        const voiceId = presetVoice(model, text(input.voiceId, 40));
+        const cacheFile = path.join(outputDirectory, 'preset-previews', `${model.family.id}-${model.variant.size}-${text(input.precision, 12)}-${voiceId}.wav`.replace(/[^\w.-]+/g, '_'));
+        if (await exists(cacheFile)) return send(200, { dataUrl: `data:audio/wav;base64,${(await readFile(cacheFile)).toString('base64')}`, cached: true });
+        if (generating) throw fail(409, '이미 다른 작업을 실행 중입니다. 완료 후 다시 시도해 주세요.');
         generating = true;
-        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 60000 };
+        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 8000 };
         try {
-          const endpoint = settings.audioAukEndpoint || DEFAULT_AUDIO_AUK_ENDPOINT;
-          const audioAukPath = resolveConfigPath(settings.audioAukPath, DEFAULT_AUDIO_AUK_PATH);
-          const workDir = path.join(outputDirectory, `auk-transcribe-${randomUUID()}`);
-          await mkdir(workDir, { recursive: true });
-          try {
-            const audioFilePath = await normalizeInputAudio(workDir, input.audioDataUrl);
-            const transcript = await transcribeAukAudio(fetchImpl, spawnImpl, endpoint, audioAukPath, { audioFilePath, checkpoint: input.checkpoint, modelVariant: input.modelVariant, textEncoder: input.textEncoder, vae: input.vae, language: input.language, whisper: input.whisper, configCache: audioAukConfigCache });
-            return send(200, { transcript });
-          } finally {
-            await rm(workDir, { recursive: true, force: true }).catch(() => {});
-          }
+          const result = await runTtsTool({ family: model.family.id, mode: 'preset', size: model.variant.size, precision: text(input.precision, 12), voiceId, language: 'ko', text: '안녕하세요, 저는 이 목소리입니다. 오늘도 좋은 하루 되세요.' });
+          await mkdir(path.dirname(cacheFile), { recursive: true });
+          await writeFile(cacheFile, Buffer.from(result.dataUrl.split(',')[1], 'base64'));
+          return send(200, { dataUrl: result.dataUrl, cached: false });
         } finally { generating = false; generationStatus = null; }
+      }
+      if (req.method === 'POST' && pathname === '/api/audio-tools/tts') {
+        const input = await body(req, 50 * 1024 * 1024);
+        if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
+        generating = true;
+        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: Math.max(20000, text(input.text, 20000).length * 250) };
+        try { return send(200, await runTtsTool(input)); }
+        finally { generating = false; generationStatus = null; }
+      }
+      if (req.method === 'POST' && pathname === '/api/audio-tools/asr') {
+        const input = await body(req, 50 * 1024 * 1024);
+        if (!(typeof input.audioDataUrl === 'string' && input.audioDataUrl.length)) throw fail(400, '인식할 오디오가 필요합니다.');
+        if (generating) throw fail(409, '이미 다른 작업을 실행 중입니다. 완료 후 다시 시도해 주세요.');
+        generating = true;
+        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 30000 };
+        try {
+          const workDir = path.join(outputDirectory, `asr-tool-${randomUUID()}`);
+          await mkdir(workDir, { recursive: true });
+          let transcript;
+          try {
+            const wav = await normalizeInputAudio(workDir, input.audioDataUrl);
+            transcript = await transcribeWav(workDir, wav, text(input.language, 8), text(input.family, 20), text(input.size, 8), text(input.precision, 8));
+          } finally { await rm(workDir, { recursive: true, force: true }).catch(() => {}); }
+          return send(200, { transcript });
+        } finally { generating = false; generationStatus = null; }
+      }
+      if (req.method === 'POST' && pathname === '/api/audio-tools/adjust') {
+        const input = await body(req, 50 * 1024 * 1024);
+        if (!(typeof input.audioDataUrl === 'string' && input.audioDataUrl.length)) throw fail(400, '조절할 오디오가 필요합니다.');
+        if (generating) throw fail(409, '이미 다른 작업을 실행 중입니다. 완료 후 다시 시도해 주세요.');
+        generating = true;
+        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 8000 };
+        try { return send(200, await adjustAudio(input)); }
+        finally { generating = false; generationStatus = null; }
       }
       // job.child(ChildProcess)는 JSON으로 못 보내니 제외하고 나머지 상태만 프론트에 노출한다.
       const publicDdspJob = (job) => ({ id: job.id, projectId: job.projectId, status: job.status, targetStep: job.targetStep, currentStep: job.currentStep, currentLoss: job.currentLoss, featureEncoder: job.featureEncoder, pitchExtractor: job.pitchExtractor, vocoder: job.vocoder, createdAt: job.createdAt, updatedAt: job.updatedAt, skippedRefs: job.skippedRefs, error: job.error });

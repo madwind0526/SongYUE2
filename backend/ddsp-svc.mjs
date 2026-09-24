@@ -1,4 +1,4 @@
-// DDSP-SVC integration for the "음색 변조" DDSP-SVC tab -- unlike AuK (a single zero-shot API
+// DDSP-SVC integration for the "음색 변조" DDSP-SVC tab -- unlike the zero-shot engines (a single CLI
 // call), this trains a small per-target-voice model from the user's reference clips before it can
 // convert anything, which takes tens of minutes to hours on this hardware. This module owns the
 // whole job lifecycle: copy references into a job-scoped dataset, preprocess, train while watching
@@ -79,7 +79,7 @@ async function latestCheckpoint(expDir) {
 // referenceFilePaths: already-written-to-disk audio files (any format ffprobe/ffmpeg can read).
 // options.sourceVocalPath: the completed song's isolated pre-conversion vocal to convert once
 // training finishes. options.postProcess(convertedVocalPath, workDir): the caller's shared
-// gain-match + silence-gate chain (same one Seed-VC/Vevo2/AuK use) -- this module calls it but
+// gain-match + silence-gate chain (same one Seed-VC/Vevo2 use) -- this module calls it but
 // doesn't own it, since it lives in server.mjs alongside the other SVC engines.
 // Mutates `job` in place through every status transition and returns the final gated vocal path,
 // or throws (after recording job.status='failed'/job.error) if any step fails.

@@ -1,5 +1,8 @@
 # Rules
 
+> **2026-09-24: AuK(AudioAuK) 연동은 SongYUE2에서 제거되었다.** 이 문서의 AuK 관련 항목은 과거 이력이며 현재 코드에는 해당 기능이 없다(음성 인식은 audio.cpp Qwen3-ASR 등, Audio Tools는 audio.cpp/ffmpeg 기반).
+
+
 > 이 프로젝트의 규칙과 컨벤션. 모든 sub-agent가 반드시 따라야 함.
 
 ## G-01: 코드 주석은 영어만 사용 (MANDATORY)
@@ -23,7 +26,7 @@
 ## 새 HTTP 메서드 추가 시 OPTIONS 프리플라이트도 갱신
 
 **규칙:** `backend/server.mjs`에 GET/POST/PUT/PATCH 외의 새 메서드(DELETE 등)를 쓰는 라우트를 추가하면, `OPTIONS` 핸들러의 `Access-Control-Allow-Methods` 목록에도 반드시 같은 메서드를 추가한다.
-**이유:** 프론트엔드(5173)와 백엔드(4311)가 다른 포트라 브라우저가 크로스오리진 프리플라이트를 보내는데, 목록에 없는 메서드는 CORS로 막혀 실제 라우트가 있어도 요청 자체가 도달하지 못한다.
+**이유:** 프론트엔드(5176)와 백엔드(4311)가 다른 포트라 브라우저가 크로스오리진 프리플라이트를 보내는데, 목록에 없는 메서드는 CORS로 막혀 실제 라우트가 있어도 요청 자체가 도달하지 못한다.
 **적용 시점:** 새 라우트/메서드를 추가할 때마다.
 
 ## 로컬 실행 파일/스크립트 경로 설정도 라이브러리 폴더처럼 SongYUE2 루트 기준 상대경로로 취급
@@ -150,3 +153,10 @@
 - 음색 변조의 텍스트 전용 AuK 경로는 `Keep the lyrics, melody, phrasing and rhythm unchanged and change the timbre to: "${textDescription}".` 형식을 사용한다.
 - 기본 목표 음색 설명은 `a deep adult male with a warm, resonant baritone voice`이다.
 - 이 프롬프트는 남성 음색을 유지하지만 가창 품질을 크게 개선하지는 않는다.
+
+## Wave 49 (2026-09-24)
+
+- 한국어를 지원하지 않는 모델은 카탈로그에 넣지 않고, 받아 둔 파일은 삭제한다(사용자 결정). 품질이 나쁘다고 판단된 모델(CosyVoice3)도 제거.
+- 포트는 `C:\Claude\PORTS.md`에서만 배정(SongYUE2 = 5176/4311).
+- 테스트의 fake spawn이 실제 파일을 덮어쓰지 않게 한다(`--out` 없는 호출은 아무것도 쓰지 않도록 유지). 테스트가 실제 프로세스 기동 경로를 타면 안 된다.
+- 응답 전송 전에 `generating` 락을 풀어야 한다.

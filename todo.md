@@ -1,5 +1,48 @@
 # TODO
 
+## ▶ 진행 중 계획 (2026-09-24): AuK 완전 제거 + Audio Tools를 audio.cpp 기반으로 재구성
+
+**결정 사항(사용자 확정)**
+- **CosyVoice3는 품질이 좋지 않아 제거**(카탈로그·모델 파일·테스트). 이미 빌드된 exe에는 코드가 남아 있고 다음 재빌드부터 빠짐.
+- **프리셋 탭**: Supertonic 3 + Qwen3 CustomVoice(화자 9, `--instruct` 스타일 지원) + MagpieTTS(화자 5), 목소리 선택 + 미리듣기(샘플을 한 번 생성해 `runs/preset-previews`에 캐시).
+- **한국어를 지원하지 않는 모델은 카탈로그에서 제외하고, 이미 받은 파일은 삭제한다.**
+- AuK(AudioAuK) 전면 제거. 음색 변조에서도 AuK 탭 제거. AuK의 Whisper는 audio.cpp의 음성 인식 모델로 대체(Qwen3-ASR 한국어 실측 정확).
+- **음성 인식은 한 모델로 고정하지 않고 여러 모델을 선택 가능하게**, 모델이 없으면 앱에서 내려받을 수 있게 한다(TTS와 같은 방식).
+- 음성 변환: Seed-VC/Vevo2/DDSP-SVC에 **RVC, MeanVC2 추가**.
+- 음악 생성은 YuE2 유지(ACE-Step은 이전 평가에서 도움이 안 됐으므로 편집 기능도 pending).
+- Audio Tools 메뉴 구성: TTS 생성 / 음성 인식 / 음성 조절 / **대사 편집(예정)** / **효과음 생성(예정)**. "음성 변형", "품질 개선", "가사/대사 편집(AuK)" 메뉴는 삭제.
+- TTS 생성은 현재 모델(Qwen3-TTS/CosyVoice3/Chatterbox)에 **추가 모델을 옵션으로** 넣는다.
+- 단어별 시간 정렬(Forced Aligner), 화자 분리, ACE-Step 편집은 **pending**(필요성 미정).
+
+### 이미 끝난 것 (코드 반영됨, 커밋 전)
+- [x] 포트 정리 + `C:\Claude\PORTS.md`. SongYUE2는 프론트 5176 / 백엔드 4311.
+- [x] TTS 엔진 교체: `backend/tts.mjs`(모델 카탈로그·CLI 인자·문장 분할·이어받기 다운로드) + `/api/audio-tools/tts{,/models,/download}`. Qwen3(VoiceDesign/Base 0.6B·1.7B), CosyVoice3, Chatterbox를 모델·크기·정밀도로 선택. T2S 탭에서 CosyVoice3/Chatterbox는 Qwen3 VoiceDesign이 만든 참조 음성을 사용.
+- [x] 음성 인식 탭: `/api/audio-tools/asr` (현재 Qwen3-ASR 0.6B/1.7B, q8_0/f16, 언어 지정). Qwen3 Base TTS의 참조 텍스트가 비어 있으면 자동 받아쓰기.
+- [x] 음성 조절 탭: `/api/audio-tools/adjust` (ffmpeg rubberband 피치/속도, volume dB, afftdn 노이즈 줄이기).
+- [x] AuK 제거(SongYUE2 안): `backend/auk.mjs` 삭제, 관련 라우트/설정/테스트/프론트 UI 제거, 백엔드 테스트 통과, tsc 통과. (git 히스토리에 남아 있음)
+- [x] 엔진 재빌드: `engine/audio.cpp/run-build.ps1` (모델셋에 `qwen3_tts,cosyvoice3,chatterbox,qwen3_asr,qwen3_forced_aligner` 포함). 모델 다운로드: Qwen3-ASR-1.7B q8 설치됨.
+- [x] 저장 버튼 = OS "다른 이름으로 저장" 창(File System Access API, 미지원 시 다운로드).
+
+### 남은 일 (우선순위 순) — 각 단계의 상세 절차는 `progress.md` "다음 에이전트용 상세 계획" 참고
+
+- [ ] **P0. 마무리/정리** (먼저)
+  - [ ] 브라우저에서 새 Audio Tools(음성 인식·음성 조절 탭)와 음색 변조(AuK 탭 제거 확인) 화면 실확인
+  - [ ] README.md·docs/*.md·memory-bank/*·`test/tts-model-comparison/bench.mjs`(AuK Whisper 사용 중 → `/api/audio-tools/asr`로 교체)에서 AuK 언급 정리 (`grep -rni auk`)
+  - [ ] `scripts/download_models.py`의 audio.cpp-gguf prefixes와 `docs/audiocpp-setup.md`의 `-Models` 목록 갱신(앱 내 다운로드로 대체함을 문서화)
+  - [ ] memory-bank(STATE/CACHE flush, active-context) 갱신 후 커밋
+- [x] **P0-b. 음성 인식 다중 모델 선택 + 다운로드** (완료 2026-09-24): Qwen3-ASR(0.6B/1.7B) / Nemotron 3.5 ASR / Fun-ASR-Nano(ko 미지원) / VibeVoice-ASR(약 10GB)를 모델→크기→정밀도로 선택, 미설치는 "모델 받기". 엔진에 `nemotron_asr,fun_asr_nano,vibevoice_asr` 빌드 포함. 한국어 실측: Qwen3-ASR 1.7B가 가장 정확, Nemotron은 일부 오인식. 남은 것: VibeVoice-ASR/Fun-ASR 실제 다운로드 후 동작 확인(VibeVoice는 VRAM 10GB 필요), 모델별 CER 비교표를 test/ 에 기록
+- [ ] **P1. 음성 변환에 RVC·MeanVC2 추가** (음색 변조 창의 모델 Selection 버튼 확장)
+- [x] **P2. TTS 추가 모델 옵션** (1차 완료 2026-09-24): VoxCPM2(design+ref, CER 0.000~0.017, 최고), OmniVoice(ref 전용, 참조 텍스트 자동 ASR) 추가. 한국어 미지원 모델은 제외 원칙. Supertonic 3 추가(프리셋 목소리 10개, 한/영/혼합 CER 0.000, 새 탭 "TTS (프리셋 목소리)"). Fish Audio S2 Pro INT8 추가·실측(한국어 CER 0.000, 혼합문 0.263, 생성 17~22초). 스타일 지시(선택) 입력칸을 CosyVoice3(instruct 템플릿)·VoxCPM2("(style)text")에 추가, 나머지 모델은 비활성. 미확인: Fish 스타일 태그 문법, Qwen3 CustomVoice(--instruct). IndexTTS2는 한국어 미표기라 제외. 남은 후보(선택): FireRedTTS3 — 필요 시 같은 절차(빌드 목록 추가→다운로드→`bench2.mjs`→`TTS_FAMILIES` 등록)로 추가
+- [x] **Typecast(클라우드 TTS) 추가** (2026-09-24): TTS 모델 버튼 "Typecast (클라우드)". T2S=추천 API로 목소리 자동 선택(실측 정확), Ref-T2S=즉시 복제(현재 요금제는 복제 불가: CLONING_NOT_AVAILABLE, 유료 플랜에서 재확인 필요). 키는 `.env`의 TYPECAST_API_KEY.
+- [ ] **P3. 대사 편집 탭** (Vevo2 editing / DotTTS Edit / FireRedTTS3 — 한국어 실측 후 결정)
+- [ ] **P4. 효과음 생성 탭** (Stable Audio SFX / ControlFoley)
+- [ ] **Pending(필요성 판단 후)**: 단어별 시간 정렬(Qwen3-ForcedAligner: 가사 싱크·LRC/SRT·편집 앵커), 화자 분리(Sortformer, 영어 4인 한정), 무음 검출(Silero VAD), ACE-Step 편집(repaint/lego/extract/complete), 음성 인식 결과의 SRT/LRC 저장
+
+### 질문에 대한 정리 (2026-09-24)
+- **ACE-Step "편집" 기능** = `complete`(이어 쓰기/완성), `lego`(원곡에 새 악기 레이어 추가), `extract`(보컬·악기 등 트랙 추출), `cover`(스타일 변환 커버), `repaint`(시간 구간을 새로 생성해 교체). 이전 평가(`test/vocal-timbre-engine-comparison/README.md`)에서 cover 품질이 기대에 못 미쳤고 ACE 자체 생성 품질이 YuE2보다 낮아 pending. 그나마 쓸모 있는 후보는 곡의 특정 구간만 갈아끼우는 `repaint`와 stem 추출 `extract`(이미 HTDemucs/RoFormer가 있음).
+- **Whisper vs Sortformer**: 둘은 목적이 다르다. Whisper(OpenAI 제작)는 음성→텍스트이고 화자 분리 기능이 없다(보통 pyannote 등과 조합). Sortformer(NVIDIA)는 "누가 언제 말했나"만 구하는 화자 분리 모델로 최대 4명, 영어 위주 학습이라 한국어 성능은 미검증. 이 앱은 대화 녹음보다 노래/TTS가 중심이라 우선순위 낮음 → pending.
+- **단어별 시간 정렬** = 오디오와 "정확한 텍스트"를 주면 각 단어의 시작/끝 시간을 계산해 주는 기능(Qwen3-ForcedAligner, 음성 인식과 결합 시 `--words-out words.json`). 용도: 가사 싱크(LRC)·자막(SRT)·특정 단어 구간 잘라내기/교체. 필요성 확정 전까지 pending.
+
 하기로 했지만 아직 진행하지 못한 일들. (2026-09-19 기준)
 
 ## 현재까지 결론 (2026-09-19): 쓸 만한 접근은 2가지로 좁혀짐

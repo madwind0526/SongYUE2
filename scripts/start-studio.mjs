@@ -15,5 +15,5 @@ function run(args, cwd) {
   child.on('exit', code => { if (code) { stop(); process.exitCode = code; } });
 }
 if (!await alive('http://127.0.0.1:4311/api/health')) run(['backend/server.mjs'], root);
-if (!await alive('http://127.0.0.1:5173/')) run(['node_modules/vinext/dist/cli.js', 'dev'], path.join(root, 'app'));
-console.log('음악 작업실: http://127.0.0.1:5173/');
+if (!await alive('http://127.0.0.1:5176/')) run(['node_modules/vinext/dist/cli.js', 'dev'], path.join(root, 'app'));
+console.log('음악 작업실: http://127.0.0.1:5176/');

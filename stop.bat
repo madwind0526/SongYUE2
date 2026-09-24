@@ -7,8 +7,8 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":4311" ^| findstr "LISTENING
     taskkill /F /PID %%P >nul 2>&1
 )
 
-for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":5173" ^| findstr "LISTENING"') do (
-    echo Stopping dev server on port 5173 ^(PID %%P^)...
+for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":5176" ^| findstr "LISTENING"') do (
+    echo Stopping dev server on port 5176 ^(PID %%P^)...
     taskkill /F /PID %%P >nul 2>&1
 )
 

@@ -223,3 +223,15 @@ GGUF 모델로 최종 오디오를 생성하는 데는 이 문서만으로 충�
 | `--list-loaders`에 `yue2`가 안 보임 | `dev` 브랜치가 아니라 `main`을 클론했을 가능성 — `git branch`로 확인(`-b dev`로 다시 클론) |
 | 모델 파일이 없다는 오류 | `scripts/download_models.py`를 아직 안 돌렸거나 중간에 중단됨 — 다시 실행하면 이어받기 |
 | VRAM 부족(OOM) | 더 작은 양자화(BF16→Q8→Q4) 또는 F16 VAE 조합으로 모델 선택 변경 |
+
+## Audio Tools 모델 (TTS / 음성 인식)
+
+"오디오 도구" 페이지의 TTS·음성 인식 모델은 **앱에서 모델·크기·정밀도를 고르고 "모델 받기"로 내려받는다**(`backend/tts.mjs`의 카탈로그, 이어받기 지원, 저장 위치 `models/audio-cpp/audio.cpp-gguf/<폴더>/`). `scripts/download_models.py`의 프리픽스 목록에는 넣지 않았다.
+
+엔진에 패밀리가 컴파일돼 있어야 한다(없으면 "unsupported model family hint"). 재빌드는 `engine\audio.cpp\run-build.ps1`을 실행한다(로그 `build-asr.log`, 끝에 `EXIT=0` 확인). 현재 `-Models` 목록:
+
+```
+yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc,vevo2,qwen3_tts,chatterbox,qwen3_asr,qwen3_forced_aligner,nemotron_asr,vibevoice_asr,voxcpm2,omnivoice,supertonic,fish_audio,magpie_tts
+```
+
+새 모델을 추가하는 절차: ① `-Models`에 패밀리 추가 후 재빌드 ② `backend/tts.mjs`의 `TTS_FAMILIES`/`ASR_FAMILIES`에 파일·크기·정밀도 등록 ③ `buildTtsArgs`에 CLI 인자 분기 추가 ④ 한국어 문장으로 실측(`test/tts-model-comparison/`). 한국어를 지원하지 않는 모델은 넣지 않는다.

@@ -54,12 +54,12 @@ test('local API persistence, request boundaries, provider adapters, and setting/
   assert.equal((await readFile(path.join(root, 'data/settings.json'), 'utf8')).includes('unit-test-secret'), false);
   assert.equal(requests.length, 0);
 
-  // regression: ComfyUI/AudioAuK/DDSP-SVC endpoint+path settings were silently missing from
+  // regression: ComfyUI/DDSP-SVC endpoint+path settings were silently missing from
   // publicSettings()'s response allowlist (comfyUiEndpoint/comfyUiEnginePath, pre-existing) and
-  // from the saveJson() disk-persistence allowlist (audioAukEndpoint/audioAukPath/ddspSvcPath,
+  // from the saveJson() disk-persistence allowlist (ddspSvcPath,
   // introduced when those fields were added) -- both bugs let "설정 저장" claim success while the
   // value silently never reached the client or survived a restart. Assert the full round trip.
-  const engineSettingsInput = { comfyUiEndpoint: 'http://127.0.0.1:9001', comfyUiEnginePath: 'engine/ComfyUI-test', audioAukEndpoint: 'http://127.0.0.1:9002', audioAukPath: 'C:\\AudioAuK-test', ddspSvcPath: 'test/DDSP-SVC-test' };
+  const engineSettingsInput = { comfyUiEndpoint: 'http://127.0.0.1:9001', comfyUiEnginePath: 'engine/ComfyUI-test', ddspSvcPath: 'test/DDSP-SVC-test' };
   const engineSettingsSaved = await call('/api/settings', 'PUT', engineSettingsInput);
   for (const [key, value] of Object.entries(engineSettingsInput)) assert.equal(engineSettingsSaved.data[key], value, `expected ${key} in the PUT response`);
   const engineSettingsFetched = await call('/api/settings');
@@ -272,14 +272,16 @@ function makeFakeSpawn() {
       return emitter;
     }
     const behavior = next;
-    const outPath = args[args.indexOf('--out') + 1];
+    const outIndex = args.indexOf('--out');
+    const outPath = outIndex >= 0 ? args[outIndex + 1] : null; // never fall back to args[0]: that once overwrote a real script
     const textOutIndex = args.indexOf('--text-out');
     const textOutPath = textOutIndex >= 0 ? args[textOutIndex + 1] : null;
     (async () => {
       await new Promise(resolve => setTimeout(resolve, behavior.delayMs || 0));
       if (behavior.writeOutput && behavior.exitCode === 0) {
-        await writeFile(outPath, Buffer.from('RIFF-fake-wav-bytes'));
-        if (textOutPath) {
+        if (outPath) await writeFile(outPath, Buffer.from('RIFF-fake-wav-bytes'));
+        if (textOutPath && behavior.textOut !== undefined) await writeFile(textOutPath, behavior.textOut);
+        else if (textOutPath) {
           await writeFile(textOutPath, JSON.stringify([
             { type: 'start', pitch: 60, start_time: 0, index: 0, instrument: 'acoustic_piano' },
             { type: 'end', end_time: 0.5, start_event_index: 0 },
@@ -1223,7 +1225,7 @@ test('음색 변조 - 기존 방식(Seed-VC) 탭: prepare가 원본을 한 번�
   assert.ok(reapplyCalls.some(c => c.args.includes('seed_vc')), 'expected re-apply to still run a fresh seed_vc conversion');
 
   // "저장": the frontend mixes vocals+instrumental client-side (Web Audio) and uploads the result via
-  // the generic, project-independent /api/audio-save (same route AuK/DDSP-SVC/음원비교 already use)
+  // the generic, project-independent /api/audio-save (same route DDSP-SVC/음원비교 already use)
   const mixedWavDataUrl = `data:audio/wav;base64,${Buffer.from('client-mixed-wav-bytes').toString('base64')}`;
   const saved = await callJson('/api/audio-save', 'POST', { dataUrl: mixedWavDataUrl, title: '음색 변환됨' });
   assert.equal(saved.status, 200);
@@ -1319,7 +1321,7 @@ test('음색 변조 - 기존 방식: engine:\'vevo2\'를 보내면 Seed-VC 대�
   assert.match(noModel.data.error, /Vevo2/);
 });
 
-test('음색 변조 - 기존 방식: 긴 보컬은 Seed-VC도 10초 창(겹침 2초)으로 나눠 같은 참조 목소리로 변환하고 연결한다(AuK와 동일 패턴, 긴 소스 붕괴 회피)', async t => {
+test('음색 변조 - 기존 방식: 긴 보컬은 Seed-VC도 10초 창(겹침 2초)으로 나눠 같은 참조 목소리로 변환하고 연결한다(와 동일 패턴, 긴 소스 붕괴 회피)', async t => {
   resetEnv();
   const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-timbre-legacy-chunk-'));
   const { enginePath } = await setUpEngine(root);
@@ -1362,149 +1364,6 @@ test('음색 변조 - 기존 방식: 긴 보컬은 Seed-VC도 10초 창(겹침 2
   assert.ok(applyCalls.some(c => c.engine === 'ffmpeg' && c.args.some(arg => typeof arg === 'string' && arg.startsWith('volume='))), 'expected the shared gain-correction pass on the concatenated vocal');
 });
 
-function makeFakeAudioAuk() {
-  const calls = [];
-  const jobs = new Map();
-  const audio = new Map();
-  let counter = 1;
-  const fetchImpl = async (url, options = {}) => {
-    const parsed = new URL(url);
-    const method = (options.method || 'GET').toUpperCase();
-    calls.push({ pathname: parsed.pathname, method, body: options.body });
-    if (parsed.pathname === '/api/health') return Response.json({ status: 'ok', engine: { connected: true } });
-    if (parsed.pathname === '/api/settings' && method === 'PUT') return Response.json(JSON.parse(options.body));
-    if (parsed.pathname === '/api/audio' && method === 'POST') {
-      const id = `audio-${counter++}.wav`;
-      return new Response(JSON.stringify({ id, name: id, url: `/api/audio/${id}`, kind: 'source' }), { status: 201 });
-    }
-    if (parsed.pathname === '/api/transcribe' && method === 'POST') {
-      const id = `job-stt-${counter++}`;
-      jobs.set(id, { id, task: 'stt', status: 'completed', transcript: '가짜로 인식된 가사입니다' });
-      return new Response(JSON.stringify({ id, status: 'queued' }), { status: 201 });
-    }
-    if (parsed.pathname === '/api/jobs' && method === 'POST') {
-      const id = `job-tts-${counter++}`;
-      const resultId = `result-${counter++}.flac`;
-      audio.set(resultId, Buffer.from('fake-auk-converted-bytes'));
-      jobs.set(id, { id, task: 'tts', status: 'completed', outputUrl: `/api/audio/${resultId}`, instruction: JSON.parse(options.body).instruction });
-      return new Response(JSON.stringify({ id, status: 'queued' }), { status: 201 });
-    }
-    if (parsed.pathname === '/api/jobs' && method === 'GET') return Response.json([...jobs.values()]);
-    if (parsed.pathname.startsWith('/api/audio/') && method === 'GET') {
-      const id = parsed.pathname.slice('/api/audio/'.length);
-      const bytes = audio.get(id);
-      if (!bytes) return new Response(null, { status: 404 });
-      return new Response(bytes, { status: 200 });
-    }
-    return new Response(JSON.stringify({ error: `unhandled AudioAuK route: ${method} ${parsed.pathname}` }), { status: 404 });
-  };
-  return { fetchImpl, calls, jobs };
-}
-
-test('음색 변조 - AuK 탭: 레퍼런스만 있으면 소스를 전사해 그 목소리로 clone하고, 텍스트만 있으면 change-timbre로, 둘 다 없으면 400, Flash/Base 체크포인트가 설정에 반영된다', async t => {
-  resetEnv();
-  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-timbre-auk-'));
-  const { enginePath } = await setUpEngine(root);
-  const fakeSpawn = makeFakeSpawn();
-  const auk = makeFakeAudioAuk();
-  const server = await createStudioServer({ root, fetchImpl: auk.fetchImpl, spawnImpl: fakeSpawn.spawnImpl });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const base = `http://127.0.0.1:${server.address().port}`;
-  const call = async (route, method = 'GET', payload) => fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) });
-  const callJson = async (route, method, payload) => { const response = await call(route, method, payload); return { status: response.status, data: await response.json() }; };
-  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
-
-  await callJson('/api/settings', 'PUT', { enginePath, audioAukEndpoint: 'http://fake-auk.local' });
-  const sourceDataUrl = `data:audio/wav;base64,${Buffer.from('fake-source-song').toString('base64')}`;
-  const previewId = (await callJson('/api/timbre-transform/prepare', 'POST', { sourceDataUrl })).data.previewId;
-  assert.ok(fakeSpawn.calls.some(c => c.args.includes('mel_band_roformer')), 'expected prepare to separate the source once, up front');
-  fakeSpawn.setProbe({ durationSeconds: '9.5' });
-
-  // neither reference nor text description: clear 400, no AudioAuK calls made
-  const neither = await callJson(`/api/timbre-transform/${previewId}/auk/apply`, 'POST', { checkpoint: 'flash' });
-  assert.equal(neither.status, 400);
-  assert.match(neither.data.error, /레퍼런스 오디오나 음색 설명/);
-  assert.equal(auk.calls.length, 0, 'expected no AudioAuK HTTP calls before validation passes');
-
-  // text description only: uses the change-timbre shape (audio = source vocal, not a reference)
-  const callsBeforeText = fakeSpawn.calls.length;
-  const textOnly = await callJson(`/api/timbre-transform/${previewId}/auk/apply`, 'POST', { textDescription: '따뜻하고 부드러운 남성 재즈 보컬', checkpoint: 'base', modelVariant: 'bf16', textEncoder: 'int8', vae: 'auk' });
-  assert.equal(textOnly.status, 200);
-  assert.equal(textOnly.data.transcript, null, 'change-timbre shape does not transcribe anything');
-  assert.ok(!fakeSpawn.calls.slice(callsBeforeText).some(c => c.args.includes('mel_band_roformer')), 'expected apply to reuse the STEM split done during prepare, not re-run it');
-  const settingsCallText = auk.calls.find(c => c.pathname === '/api/settings' && c.method === 'PUT');
-  assert.deepEqual(JSON.parse(settingsCallText.body).engine, { model: 'auk_base_bf16.safetensors', encoder: 'qwen_omni_int8.safetensors', vae: 'auk_vae.safetensors', precision: 'auto' }, 'expected every selected AuK component to reach AudioAuK');
-  const ttsJobCallText = auk.calls.filter(c => c.pathname === '/api/jobs' && c.method === 'POST').at(-1);
-  const ttsBodyText = JSON.parse(ttsJobCallText.body);
-  assert.match(ttsBodyText.instruction, /Keep the lyrics, melody, phrasing and rhythm unchanged and change the timbre to: "따뜻하고 부드러운 남성 재즈 보컬"\./);
-  assert.equal(ttsBodyText.steps, 32);
-  assert.equal(ttsBodyText.guidance, 0.7);
-  assert.ok(!auk.calls.some(c => c.pathname === '/api/transcribe'), 'expected no transcription step when only a text description is given');
-
-  // reference only: transcribes the source vocal, then clones the reference's voice reciting that transcript
-  const referenceDataUrl = `data:audio/wav;base64,${Buffer.from('fake-reference-voice').toString('base64')}`;
-  const refOnly = await callJson(`/api/timbre-transform/${previewId}/auk/apply`, 'POST', { referenceDataUrl, checkpoint: 'flash' });
-  assert.equal(refOnly.status, 200);
-  assert.equal(refOnly.data.transcript, '가짜로 인식된 가사입니다');
-  assert.ok(auk.calls.some(c => c.pathname === '/api/transcribe' && c.method === 'POST'), 'expected a transcription step when a reference clip is given');
-  const settingsCallRef = auk.calls.filter(c => c.pathname === '/api/settings' && c.method === 'PUT').at(-1);
-  assert.equal(JSON.parse(settingsCallRef.body).engine.model, 'auk_flash_bf16.safetensors', 'expected the "flash" checkpoint choice to reach AudioAuK');
-  const ttsJobCallRef = auk.calls.filter(c => c.pathname === '/api/jobs' && c.method === 'POST').at(-1);
-  const ttsBodyRef = JSON.parse(ttsJobCallRef.body);
-  assert.match(ttsBodyRef.instruction, /^다음 내용을 같은 목소리로 읽어 주세요: "가짜로 인식된 가사입니다"\.$/);
-  assert.equal(ttsBodyRef.steps, 4);
-  assert.equal(ttsBodyRef.guidance, 0);
-
-  // both reference and text: clone the reference's voice, but fold the text in as a style qualifier
-  const both = await callJson(`/api/timbre-transform/${previewId}/auk/apply`, 'POST', { referenceDataUrl, textDescription: 'warm and smooth', checkpoint: 'flash' });
-  assert.equal(both.status, 200);
-  const ttsJobCallBoth = auk.calls.filter(c => c.pathname === '/api/jobs' && c.method === 'POST').at(-1);
-  const ttsBodyBoth = JSON.parse(ttsJobCallBoth.body);
-  assert.match(ttsBodyBoth.instruction, /^다음 내용을 읽어 주세요: "가짜로 인식된 가사입니다"\. 목소리 설명: warm and smooth\.$/);
-
-  // 앱에서 만든 저장곡이면: json에 그대로 있던 가사를 쓰고 Whisper STT 단계를 건너뛴다. AuK의
-  // instruction에는 [Verse]/[Chorus] 같은 구간 표기를 제거해 넘기고, 응답 transcript는 그대로 남긴다.
-  const callsBeforeLyrics = auk.calls.length;
-  const storedLyrics = '[Verse]\n낮은 목소리로 부른 원곡 가사\n[Chorus]\n후렴은 크게';
-  const withLyrics = await callJson(`/api/timbre-transform/${previewId}/auk/apply`, 'POST', { referenceDataUrl, lyrics: storedLyrics, checkpoint: 'flash' });
-  assert.equal(withLyrics.status, 200);
-  assert.equal(withLyrics.data.transcript, storedLyrics, 'expected the display transcript to be the untouched stored lyrics');
-  assert.ok(!auk.calls.slice(callsBeforeLyrics).some(c => c.pathname === '/api/transcribe'), 'expected stored lyrics to skip the Whisper STT step entirely');
-  const ttsJobCallLyrics = auk.calls.filter(c => c.pathname === '/api/jobs' && c.method === 'POST').at(-1);
-  const ttsBodyLyrics = JSON.parse(ttsJobCallLyrics.body);
-  assert.match(ttsBodyLyrics.instruction, /^다음 내용을 같은 목소리로 읽어 주세요: "낮은 목소리로 부른 원곡 가사 후렴은 크게"\.$/);
-
-  // Long text-only timbre edits are split into overlapping 10-second windows. With a 26-second
-  // source the plan is 0-10, 8-18, 16-26. The first tail and following head each lose one second,
-  // producing contiguous 0-9, 9-17, 17-26 output without sending a long clip to AuK.
-  fakeSpawn.setProbe({ durationSeconds: '26' });
-  const callsBeforeChunking = auk.calls.length;
-  const spawnsBeforeChunking = fakeSpawn.calls.length;
-  const chunked = await callJson(`/api/timbre-transform/${previewId}/auk/apply`, 'POST', { textDescription: '따뜻하고 중후한 남성', checkpoint: 'flash' });
-  assert.equal(chunked.status, 200);
-  assert.equal(chunked.data.chunkCount, 3);
-  assert.match(chunked.data.warning, /10초 단위.*3개/);
-  const chunkJobBodies = auk.calls.slice(callsBeforeChunking)
-    .filter(c => c.pathname === '/api/jobs' && c.method === 'POST')
-    .map(c => JSON.parse(c.body));
-  assert.equal(chunkJobBodies.length, 3, 'expected one AuK job per overlapping source chunk');
-  assert.equal(new Set(chunkJobBodies.map(body => body.seed)).size, 1, 'expected every chunk to share one seed for consistent timbre');
-  const chunkFfmpegArgs = fakeSpawn.calls.slice(spawnsBeforeChunking).filter(c => c.engine === 'ffmpeg').flatMap(c => c.args);
-  assert.ok(chunkFfmpegArgs.some(arg => String(arg).includes('atrim=start=0.000:duration=10.000')));
-  assert.ok(chunkFfmpegArgs.some(arg => String(arg).includes('atrim=start=8.000:duration=10.000')));
-  assert.ok(chunkFfmpegArgs.some(arg => String(arg).includes('atrim=start=16.000:duration=10.000')));
-  assert.ok(chunkFfmpegArgs.some(arg => String(arg).includes('atrim=start=0.000:end=9.000')));
-  assert.ok(chunkFfmpegArgs.some(arg => String(arg).includes('atrim=start=1.000:end=9.000')));
-  assert.ok(chunkFfmpegArgs.some(arg => String(arg).includes('atrim=start=1.000,asetpts=PTS-STARTPTS')));
-  assert.ok(chunkFfmpegArgs.some(arg => String(arg).includes('concat=n=3:v=0:a=1')));
-
-  // the sidechain silence-gate (shared postProcessConvertedVocal helper) still runs on AuK's output, same as Seed-VC/Vevo2
-  assert.ok(fakeSpawn.calls.some(c => c.engine === 'ffmpeg' && c.args.some(arg => typeof arg === 'string' && arg.includes('sidechaingate'))), 'expected the shared post-processing chain to run on the AuK result too');
-
-  // an unknown previewId is a clear 404, not a crash
-  assert.equal((await callJson('/api/timbre-transform/not-a-real-preview-id/auk/apply', 'POST', { textDescription: 'x' })).status, 404);
-});
-
 async function setUpDdspSvcRoot(root) {
   const ddspSvcRoot = path.join(root, 'ddsp-svc-root');
   await mkdir(path.join(ddspSvcRoot, '.venv', 'Scripts'), { recursive: true });
@@ -1520,15 +1379,6 @@ async function setUpDdspSvcRoot(root) {
   return ddspSvcRoot;
 }
 
-// Simulates train_reflow.py emitting one "step: N | loss: X" stdout line per simulated step, and
-// (like the real process) stops emitting once its own child.kill() is invoked -- this is what lets
-// the test assert the kill-at-target-step mechanism actually fires instead of running past target,
-// which is the exact regression (~4h training runaway) this whole DDSP-SVC integration must not repeat.
-// Checkpoints are only written every `interval_val` steps (read from the job's own patched config,
-// same as the real solver.py) rather than every step -- this is what lets the test also catch the
-// separate checkpoint-cadence regression (2026-09-19): the template's own interval_val (2000) never
-// saves a checkpoint before a small targetStep is reached, so a naive mock that checkpoints on a
-// fixed small cadence would never have exposed that bug.
 function makeFakeDdspSpawn({ finalStep = 260 } = {}) {
   const calls = [];
   let killCount = 0;
@@ -1592,117 +1442,6 @@ function makeFakeDdspSpawn({ finalStep = 260 } = {}) {
   };
   return { spawnImpl, calls, killCount: () => killCount };
 }
-
-test('Tools 메뉴 - AuK 작업: 완성곡과 무관하게 독립 오디오(선택)+지시문으로 실행하고, 결과를 dataUrl로 돌려준다(라이브러리 저장은 별도)', async t => {
-  resetEnv();
-  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-audio-tools-auk-'));
-  const fakeSpawn = makeFakeSpawn();
-  const auk = makeFakeAudioAuk();
-  const server = await createStudioServer({ root, fetchImpl: auk.fetchImpl, spawnImpl: fakeSpawn.spawnImpl });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const base = `http://127.0.0.1:${server.address().port}`;
-  const call = async (route, method = 'GET', payload) => fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) });
-  const callJson = async (route, method, payload) => { const response = await call(route, method, payload); return { status: response.status, data: await response.json() }; };
-  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
-
-  await callJson('/api/settings', 'PUT', { audioAukEndpoint: 'http://fake-auk.local' });
-
-  // task/instruction 누락은 400, AudioAuK 호출 없음
-  const missing = await callJson('/api/audio-tools/auk', 'POST', {});
-  assert.equal(missing.status, 400);
-  assert.equal(auk.calls.length, 0);
-
-  // 텍스트 전용(오디오 없음) -- Voice description TTS: audioId 없이 잡 제출
-  const ttsOnly = await callJson('/api/audio-tools/auk', 'POST', {
-    task: 'tts', instruction: 'Generate speech based on the following description: "warm, clear voice". The content to speak is: "안녕하세요".', checkpoint: 'flash',
-  });
-  assert.equal(ttsOnly.status, 200);
-  assert.match(ttsOnly.data.dataUrl, /^data:audio\/wav;base64,/);
-  assert.ok(!auk.calls.some(c => c.pathname === '/api/audio' && c.method === 'POST'), 'expected no audio upload when no audioDataUrl is given');
-  const ttsJobCall = auk.calls.filter(c => c.pathname === '/api/jobs' && c.method === 'POST').at(-1);
-  const ttsBody = JSON.parse(ttsJobCall.body);
-  assert.equal(ttsBody.audioId, undefined);
-  assert.match(ttsBody.instruction, /warm, clear voice/);
-
-  // 오디오+지시문 -- 예: Raise pitch: 오디오 업로드 후 audioId로 제출
-  const audioDataUrl = `data:audio/wav;base64,${Buffer.from('fake-input-audio').toString('base64')}`;
-  const withAudio = await callJson('/api/audio-tools/auk', 'POST', {
-    task: 'tts', instruction: 'Raise the pitch by 2 semitones.', audioDataUrl, checkpoint: 'base',
-  });
-  assert.equal(withAudio.status, 200);
-  assert.match(withAudio.data.dataUrl, /^data:audio\/wav;base64,/);
-  assert.ok(auk.calls.some(c => c.pathname === '/api/audio' && c.method === 'POST'), 'expected an audio upload when audioDataUrl is given');
-  const pitchJobCall = auk.calls.filter(c => c.pathname === '/api/jobs' && c.method === 'POST').at(-1);
-  const pitchBody = JSON.parse(pitchJobCall.body);
-  assert.ok(pitchBody.audioId, 'expected the uploaded audioId to be wired into the job');
-  assert.match(pitchBody.instruction, /Raise the pitch by 2 semitones/);
-  const settingsCall = auk.calls.filter(c => c.pathname === '/api/settings' && c.method === 'PUT').at(-1);
-  assert.equal(JSON.parse(settingsCall.body).engine.model, 'auk_base_bf16.safetensors');
-
-  // 긴 오디오+지시문(chunk:true)은 10초 창으로 나눠 각각 AuK 잡을 돌리고 이어붙인다 -- 결과는
-  // 여전히 dataUrl, 환각 회피용 warning/chunkCount 포함. 참조 목소리나 시점 앵커가 필요한 도구는
-  // 프론트가 chunk를 보내지 않으므로 이 경로는 "조각과 무관한 지시문" 전용이다.
-  fakeSpawn.setProbe({ durationSeconds: '26' });
-  const aukCallsBeforeChunk = auk.calls.length;
-  const chunked = await callJson('/api/audio-tools/auk', 'POST', {
-    task: 'tts', instruction: 'Remove the background noise, preserve everything else.', audioDataUrl, checkpoint: 'base', chunk: true,
-  });
-  assert.equal(chunked.status, 200);
-  assert.equal(chunked.data.chunkCount, 3);
-  assert.match(chunked.data.warning, /10초 단위.*3개/);
-  assert.match(chunked.data.dataUrl, /^data:audio\/wav;base64,/);
-  const chunkAudios = auk.calls.slice(aukCallsBeforeChunk).filter(c => c.pathname === '/api/audio' && c.method === 'POST');
-  assert.equal(chunkAudios.length, 3, 'expected one AudioAuK audio upload per 10s source chunk');
-  const chunkJobBodies = auk.calls.slice(aukCallsBeforeChunk).filter(c => c.pathname === '/api/jobs' && c.method === 'POST').map(c => JSON.parse(c.body));
-  assert.equal(chunkJobBodies.length, 3, 'expected one AuK job per source chunk');
-  assert.equal(new Set(chunkJobBodies.map(body => body.instruction)).size, 1, 'expected every chunk job to carry the same instruction');
-  assert.ok(!auk.calls.slice(aukCallsBeforeChunk).filter(c => c.pathname === '/api/jobs' && c.method === 'POST').some(c => JSON.parse(c.body).instruction.includes('26s')), 'sanity: instruction is unchanged by chunking');
-  const chunkFfmpegArgs = fakeSpawn.calls.filter(c => c.engine === 'ffmpeg').flatMap(c => c.args).map(String);
-  assert.ok(chunkFfmpegArgs.some(arg => arg.includes('concat=n=3:v=0:a=1')), 'expected the three chunk results to be concatenated');
-  // chunk:false(또는 누락)는 기존처럼 단일 잡 + 단일 업로드로 돌아간다
-  const callsBeforeSingle = auk.calls.length;
-  const chunkOff = await callJson('/api/audio-tools/auk', 'POST', {
-    task: 'tts', instruction: 'Raise the pitch by 1 semitone.', audioDataUrl, checkpoint: 'base',
-  });
-  assert.equal(chunkOff.status, 200);
-  assert.equal(chunkOff.data.chunkCount, undefined);
-  assert.equal(auk.calls.slice(callsBeforeSingle).filter(c => c.pathname === '/api/audio' && c.method === 'POST').length, 1, 'expected exactly one upload when chunking is off');
-
-  // 결과가 라이브러리에 자동 저장되지 않는다 -- 별도로 /api/audio-save를 호출해야 함
-  const saved = await callJson('/api/audio-save', 'POST', { dataUrl: withAudio.data.dataUrl, title: 'Tools 결과' });
-  assert.equal(saved.status, 200);
-  assert.equal(saved.data.status, 'completed');
-});
-
-test('Tools 메뉴 - 전사: 오디오를 업로드해 Whisper STT로 전사하고 transcript를 돌려준다 (오디오 없음 400)', async t => {
-  resetEnv();
-  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-audio-tools-transcribe-'));
-  const fakeSpawn = makeFakeSpawn();
-  const auk = makeFakeAudioAuk();
-  const server = await createStudioServer({ root, fetchImpl: auk.fetchImpl, spawnImpl: fakeSpawn.spawnImpl });
-  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-  const base = `http://127.0.0.1:${server.address().port}`;
-  const call = async (route, method = 'GET', payload) => fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) });
-  const callJson = async (route, method, payload) => { const response = await call(route, method, payload); return { status: response.status, data: await response.json() }; };
-  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
-
-  await callJson('/api/settings', 'PUT', { audioAukEndpoint: 'http://fake-auk.local' });
-
-  // 오디오 없음은 명확한 400, AudioAuK 호출 없음
-  const missing = await callJson('/api/audio-tools/transcribe', 'POST', {});
-  assert.equal(missing.status, 400);
-  assert.ok(!auk.calls.some(c => c.pathname === '/api/transcribe'), 'expected no AudioAuK transcription call without audio');
-
-  // 오디오를 업로드해 전사하고 transcript를 돌려준다 -- 결과 저장 없음
-  const audioDataUrl = `data:audio/wav;base64,${Buffer.from('fake-edit-clip').toString('base64')}`;
-  const result = await callJson('/api/audio-tools/transcribe', 'POST', { audioDataUrl, checkpoint: 'base' });
-  assert.equal(result.status, 200);
-  assert.equal(result.data.transcript, '가짜로 인식된 가사입니다');
-  assert.ok(auk.calls.some(c => c.pathname === '/api/audio' && c.method === 'POST'), 'expected the audio to be uploaded to AudioAuK');
-  assert.ok(auk.calls.some(c => c.pathname === '/api/transcribe' && c.method === 'POST'), 'expected a transcription job on AudioAuK');
-  const settingsCall = auk.calls.filter(c => c.pathname === '/api/settings' && c.method === 'PUT').at(-1);
-  assert.equal(JSON.parse(settingsCall.body).engine.model, 'auk_base_bf16.safetensors', 'expected the checkpoint choice to reach AudioAuK');
-});
 
 test('음색 변조 - DDSP-SVC 탭: 목표 스텝에 도달하면 실제로 학습 프로세스를 죽이고(방치 사고 재발 방지), 그 체크포인트로 추론+후처리까지 끝난다', async t => {
   resetEnv();
@@ -1867,7 +1606,7 @@ test('보컬 음색 변환의 내장 파일 탐색기: library/ 트리 안 어�
   assert.equal((await call('/api/library/file?path=audio-ref/missing.mp3')).status, 404);
 
   // an in-app-created song keeps a {제목}.json next to its audio -- the meta route surfaces the
-  // stored lyrics (used by the 음색 변조 AuK tab to skip Whisper STT) alongside title/style
+  // stored lyrics (used to skip transcription) alongside title/style
   await writeFile(path.join(root, 'library', 'music', 'song.json'), JSON.stringify({ title: '저장된 곡', lyrics: '[Verse] 실제로 적은 가사', style: '밝은 팝' }));
   const meta = await callJson('/api/library/meta?path=music/song.json');
   assert.equal(meta.status, 200);
@@ -1875,4 +1614,228 @@ test('보컬 음색 변환의 내장 파일 탐색기: library/ 트리 안 어�
   assert.equal((await call('/api/library/meta?path=audio-ref/voice-a.mp3')).status, 400, 'expected the meta route to only read json files');
   assert.equal((await call('/api/library/meta?path=music/없는.json')).status, 404);
   assert.equal((await call('/api/library/meta?path=../outside.json')).status, 400);
+});
+
+test('Tools 메뉴 - audio.cpp TTS: 모델 목록/설치 확인, 문장 분할 생성, 모델별 CLI 인자', async t => {
+  resetEnv();
+  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-tts-'));
+  const fakeSpawn = makeFakeSpawn();
+  const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}), spawnImpl: fakeSpawn.spawnImpl });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const callJson = async (route, method = 'GET', payload) => { const response = await fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) }); return { status: response.status, data: await response.json() }; };
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+  const modelDir = path.join(root, 'models', 'audio-cpp', 'audio.cpp-gguf');
+  const install = async (dir, file) => { await mkdir(path.join(modelDir, dir), { recursive: true }); await writeFile(path.join(modelDir, dir, file), Buffer.from('fake-gguf')); };
+  const refAudio = `data:audio/wav;base64,${Buffer.from('fake-ref').toString('base64')}`;
+
+  const listed = await callJson('/api/audio-tools/tts/models');
+  assert.equal(listed.status, 200);
+  assert.deepEqual(listed.data.families.map(f => f.id), ['qwen3', 'voxcpm2', 'omnivoice', 'fish', 'supertonic', 'magpie', 'chatterbox']);
+  assert.ok(listed.data.families.every(f => f.variants.every(v => v.precisions.every(p => p.installed === false))));
+
+  // not installed -> 409 with guidance, engine never spawned
+  const missing = await callJson('/api/audio-tools/tts', 'POST', { family: 'chatterbox', mode: 'ref', size: '기본', precision: 'q8_0', text: '안녕하세요', referenceDataUrl: refAudio });
+  assert.equal(missing.status, 409);
+  assert.equal((await callJson('/api/audio-tools/tts', 'POST', { family: 'nope', mode: 'ref', size: 'x', precision: 'y', text: 'a' })).status, 400);
+
+  await install('Chatterbox-GGUF', 'chatterbox-q8_0.gguf');
+  await install('Qwen3-TTS-12Hz-1.7B-VoiceDesign-GGUF', 'qwen3-tts-12hz-1.7b-voicedesign-q8_0.gguf');
+  const after = await callJson('/api/audio-tools/tts/models');
+  assert.equal(after.data.families[6].variants[0].precisions[0].installed, true);
+
+  // chatterbox: Korean text -> --language ko, clon task with the reference clip
+  const cli = () => fakeSpawn.calls.filter(c => !['ffmpeg', 'ffprobe'].includes(c.engine));
+  const chatter = await callJson('/api/audio-tools/tts', 'POST', { family: 'chatterbox', mode: 'ref', size: '기본', precision: 'q8_0', text: '안녕하세요. 반갑습니다.', referenceDataUrl: refAudio });
+  assert.equal(chatter.status, 200);
+  assert.match(chatter.data.dataUrl, /^data:audio\/wav;base64,/);
+  const chatterArgs = cli().at(-1).args;
+  assert.ok(chatterArgs.includes('clon') && chatterArgs.includes('chatterbox'));
+  assert.equal(chatterArgs[chatterArgs.indexOf('--language') + 1], 'ko');
+
+  // qwen3 base without a transcript falls back to speaker-embedding-only cloning
+  await install('Qwen3-TTS-12Hz-1.7B-Base-GGUF', 'qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf');
+  await callJson('/api/audio-tools/tts', 'POST', { family: 'qwen3', mode: 'ref', size: '1.7B', precision: 'q8_0', text: 'Hello there.', referenceDataUrl: refAudio });
+  assert.ok(cli().at(-1).args.includes('x_vector_only_mode=true'));
+
+  // qwen3 voicedesign: needs a description, uses vdes + full language name; long text is split per sentence
+  assert.equal((await callJson('/api/audio-tools/tts', 'POST', { family: 'qwen3', mode: 'design', size: '1.7B', precision: 'q8_0', text: 'Hi' })).status, 400);
+  const before = cli().length;
+  const long = Array.from({ length: 12 }, (_, i) => `This is sentence number ${i} and it goes on for a little while to fill space nicely.`).join(' ');
+  const design = await callJson('/api/audio-tools/tts', 'POST', { family: 'qwen3', mode: 'design', size: '1.7B', precision: 'q8_0', text: long, description: 'calm woman', language: 'en' });
+  assert.equal(design.status, 200);
+  assert.ok(design.data.segmentCount > 1);
+  assert.equal(cli().length - before, design.data.segmentCount);
+  const designArgs = cli().at(-1).args;
+  assert.ok(designArgs.includes('vdes'));
+  assert.equal(designArgs[designArgs.indexOf('--language') + 1], 'english');
+  assert.equal(designArgs[designArgs.indexOf('--instruct') + 1], 'calm woman');
+
+  // language auto + mixed Korean/English: one CLI run per same-script run, each with its own language flag
+  const mixedBefore = cli().length;
+  await callJson('/api/audio-tools/tts', 'POST', { family: 'qwen3', mode: 'design', size: '1.7B', precision: 'q8_0', text: '안녕하세요. 반갑습니다. Please bring your laptop.', description: 'calm woman' });
+  const mixedCalls = cli().slice(mixedBefore).map(c => c.args[c.args.indexOf('--language') + 1]);
+  assert.deepEqual(mixedCalls, ['korean', 'english']);
+
+  // VoxCPM2 has native voice design: the description goes inline, no stand-in clip
+  await install('VoxCPM2-GGUF', 'voxcpm2-q8_0.gguf');
+  await install('OmniVoice-GGUF', 'omnivoice-q8_0.gguf');
+  const nativeBefore = cli().length;
+  await callJson('/api/audio-tools/tts', 'POST', { family: 'voxcpm2', mode: 'design', size: '2B', precision: 'q8_0', text: 'Hello there.', description: 'calm woman' });
+  const nativeCalls = cli().slice(nativeBefore);
+  assert.equal(nativeCalls.length, 1, 'expected exactly one engine run (no stand-in reference clip)');
+  assert.equal(nativeCalls[0].args[nativeCalls[0].args.indexOf('--text') + 1], '(calm woman)Hello there.');
+
+  // style instruction: VoxCPM2 prefixes "(style)"; models without style support ignore it
+  await callJson('/api/audio-tools/tts', 'POST', { family: 'voxcpm2', mode: 'ref', size: '2B', precision: 'q8_0', text: 'Hello there.', referenceDataUrl: refAudio, style: 'whispering' });
+  const voxArgs = cli().at(-1).args;
+  assert.equal(voxArgs[voxArgs.indexOf('--text') + 1], '(whispering)Hello there.');
+  await callJson('/api/audio-tools/tts', 'POST', { family: 'chatterbox', mode: 'ref', size: '기본', precision: 'q8_0', text: 'Hello there.', referenceDataUrl: refAudio, style: 'ignored' });
+  assert.ok(!cli().at(-1).args.some(a => String(a).includes('ignored')));
+
+  // Supertonic: preset voice, no reference/description needed; language follows the text
+  await install('Supertonic-3-GGUF', 'supertonic-3-q8_0.gguf');
+  const presetBefore = cli().length;
+  const preset = await callJson('/api/audio-tools/tts', 'POST', { family: 'supertonic', mode: 'preset', size: '기본', precision: 'q8_0', text: '안녕하세요.', voiceId: 'M2' });
+  assert.equal(preset.status, 200);
+  const presetArgs = cli().slice(presetBefore)[0].args;
+  assert.equal(presetArgs[presetArgs.indexOf('--voice-id') + 1], 'M2');
+  assert.equal(presetArgs[presetArgs.indexOf('--language') + 1], 'ko');
+
+  // preset voices: Qwen3 CustomVoice (--speaker + --instruct) and Magpie (voice_id), plus a cached preview
+  await install('Qwen3-TTS-12Hz-1.7B-CustomVoice-GGUF', 'qwen3-tts-12hz-1.7b-customvoice-q8_0.gguf');
+  await install('MagpieTTS-Multilingual-357M-GGUF', 'magpie-tts-multilingual-357m-q8_0.gguf');
+  await callJson('/api/audio-tools/tts', 'POST', { family: 'qwen3', mode: 'preset', size: '1.7B', precision: 'q8_0', text: '안녕하세요.', voiceId: 'Sohee', style: 'Very happy.' });
+  const customArgs = cli().at(-1).args;
+  assert.equal(customArgs[customArgs.indexOf('--speaker') + 1], 'Sohee');
+  assert.equal(customArgs[customArgs.indexOf('--instruct') + 1], 'Very happy.');
+  await callJson('/api/audio-tools/tts', 'POST', { family: 'magpie', mode: 'preset', size: '357M', precision: 'q8_0', text: '안녕하세요.', voiceId: 'Leo' });
+  assert.ok(cli().at(-1).args.includes('voice_id=Leo'));
+  const previewBefore = cli().length;
+  const preview = await callJson('/api/audio-tools/tts/preview', 'POST', { family: 'magpie', size: '357M', precision: 'q8_0', voiceId: 'Sofia' });
+  assert.equal(preview.status, 200);
+  assert.equal(preview.data.cached, false);
+  const previewAgain = await callJson('/api/audio-tools/tts/preview', 'POST', { family: 'magpie', size: '357M', precision: 'q8_0', voiceId: 'Sofia' });
+  assert.equal(previewAgain.data.cached, true);
+  assert.equal(cli().length - previewBefore, 1, 'expected the second preview to come from the cache');
+
+  // design tab + Chatterbox: Qwen3 VoiceDesign renders a stand-in reference clip first, then the clone runs
+  const designBefore = cli().length;
+  const viaChatter = await callJson('/api/audio-tools/tts', 'POST', { family: 'chatterbox', mode: 'design', size: '기본', precision: 'q8_0', text: 'Hello there.', description: 'calm woman' });
+  assert.equal(viaChatter.status, 200);
+  const designCalls = cli().slice(designBefore).map(c => c.args[c.args.indexOf('--family') + 1]);
+  assert.deepEqual(designCalls, ['qwen3_tts', 'chatterbox']);
+});
+
+test('Tools 메뉴 - 음성 인식(Qwen3-ASR)과 조절(ffmpeg): 모델 미설치 409, 전사 텍스트 반환, 조절 값 검증', async t => {
+  resetEnv();
+  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-asr-'));
+  const fakeSpawn = makeFakeSpawn();
+  const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}), spawnImpl: fakeSpawn.spawnImpl });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const callJson = async (route, method = 'GET', payload) => { const response = await fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) }); return { status: response.status, data: await response.json() }; };
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+  const audio = `data:audio/wav;base64,${Buffer.from('fake-audio').toString('base64')}`;
+
+  const models = await callJson('/api/audio-tools/tts/models');
+  assert.deepEqual(models.data.asr.map(f => f.id), ['qwen3asr', 'nemotronasr', 'vibevoiceasr']);
+  assert.equal((await callJson('/api/audio-tools/asr', 'POST', {})).status, 400);
+  assert.equal((await callJson('/api/audio-tools/asr', 'POST', { audioDataUrl: audio })).status, 409, 'expected 409 while no ASR model is installed');
+
+  const dir = path.join(root, 'models', 'audio-cpp', 'audio.cpp-gguf', 'Qwen3-ASR-1.7B-GGUF');
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, 'qwen3-asr-1.7b-q8_0.gguf'), Buffer.from('fake-gguf'));
+  fakeSpawn.set({ textOut: '안녕하세요 테스트입니다' });
+  const recognized = (await callJson('/api/audio-tools/asr', 'POST', { audioDataUrl: audio, language: 'ko' })).data;
+  assert.equal(recognized.transcript, '안녕하세요 테스트입니다');
+  const asrCall = fakeSpawn.calls.filter(c => c.args.includes('asr')).at(-1);
+  assert.equal(asrCall.args[asrCall.args.indexOf('--language') + 1], 'Korean');
+
+  assert.equal((await callJson('/api/audio-tools/adjust', 'POST', { audioDataUrl: audio })).status, 400);
+  assert.equal((await callJson('/api/audio-tools/adjust', 'POST', { audioDataUrl: audio })).status, 400);
+  const adjusted = await callJson('/api/audio-tools/adjust', 'POST', { audioDataUrl: audio, pitchSemitones: 2, speed: 1.25, volumeDb: -3 });
+  assert.equal(adjusted.status, 200);
+  assert.match(adjusted.data.dataUrl, /^data:audio\/wav;base64,/);
+  const adjustCall = fakeSpawn.calls.filter(c => c.engine === 'ffmpeg' && c.args.includes('-af')).at(-1);
+  const filter = adjustCall.args[adjustCall.args.indexOf('-af') + 1];
+  assert.match(filter, /rubberband=pitch=1\.122462:tempo=1\.25/);
+  assert.match(filter, /volume=-3dB/);
+});
+
+test('Tools 메뉴 - Typecast 클라우드 TTS: 키 없으면 안내, 키는 .env에서 읽어 헤더로만 전송, 감정/언어/분할 반영', async t => {
+  resetEnv();
+  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-typecast-'));
+  const fakeSpawn = makeFakeSpawn();
+  const requests = [];
+  const fetchImpl = async (url, options = {}) => {
+    requests.push({ method: options.method || 'GET', url: String(url), headers: options.headers || {}, body: typeof options.body === 'string' ? JSON.parse(options.body) : null, form: options.body instanceof FormData ? options.body : null });
+    if (String(url).includes('/v1/voices/recommendations')) return Response.json([{ voice_id: 'tc_rec', voice_name: { eng: 'Valkyrie', kor: '발키리' }, score: 0.9 }]);
+    if (String(url).includes('/v1/voices/clone')) return Response.json({ voice_id: 'uc_temp1' });
+    if (options.method === 'DELETE') return new Response(null, { status: 204 });
+    if (String(url).includes('/v3/voices')) return Response.json([{ voice_id: 'tc_1', voice_name: 'Hana', gender: 'female', age: 'young_adult' }]);
+    return new Response(Buffer.from('RIFF-fake-typecast-wav'), { headers: { 'Content-Type': 'audio/wav' } });
+  };
+  const server = await createStudioServer({ root, fetchImpl, spawnImpl: fakeSpawn.spawnImpl });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const callJson = async (route, method = 'GET', payload) => { const response = await fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) }); return { status: response.status, data: await response.json() }; };
+  const savedKey = process.env.TYPECAST_API_KEY;
+  t.after(async () => { if (savedKey === undefined) delete process.env.TYPECAST_API_KEY; else process.env.TYPECAST_API_KEY = savedKey; await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+
+  delete process.env.TYPECAST_API_KEY;
+  assert.deepEqual((await callJson('/api/audio-tools/typecast/voices')).data, { configured: false, voices: [] });
+  const noKey = await callJson('/api/audio-tools/typecast', 'POST', { voiceId: 'tc_1', text: '안녕하세요' });
+  assert.equal(noKey.status, 409);
+  assert.match(noKey.data.error, /TYPECAST_API_KEY/);
+  assert.equal(requests.length, 0, 'expected no Typecast request without a key');
+
+  process.env.TYPECAST_API_KEY = '  test-key  ';
+  const voices = await callJson('/api/audio-tools/typecast/voices');
+  assert.equal(voices.data.voices[0].id, 'tc_1'); assert.equal(voices.data.voices[0].name, 'Hana');
+  assert.equal(requests[0].headers['X-API-KEY'], 'test-key');
+  assert.match(requests[0].headers['User-Agent'], /typecast-integration\/1 \(source=api-page; generated_by=claude-code\)/);
+
+  const single = await callJson('/api/audio-tools/typecast', 'POST', { voiceId: 'tc_1', text: '안녕하세요.', language: 'ko', emotion: 'preset', emotionPreset: 'happy' });
+  assert.equal(single.status, 200);
+  assert.match(single.data.dataUrl, /^data:audio\/wav;base64,/);
+  const tts = requests.at(-1);
+  assert.equal(tts.url, 'https://api.typecast.ai/v1/text-to-speech');
+  assert.deepEqual(tts.body.prompt, { emotion_type: 'preset', emotion_preset: 'happy', emotion_intensity: 1 });
+  assert.equal(tts.body.language, 'kor');
+  assert.equal(tts.body.model, 'ssfm-v30');
+
+  // smart emotion sends neighbouring text as context; long text is split into several requests
+  const before = requests.length;
+  const long = Array.from({ length: 40 }, (_, i) => `This is sentence number ${i} and it keeps going for a while to fill the space.`).join(' ');
+  const multi = await callJson('/api/audio-tools/typecast', 'POST', { voiceId: 'tc_1', text: long, emotion: 'smart' });
+  assert.equal(multi.status, 200);
+  assert.ok(multi.data.segmentCount >= 2 && requests.length - before === multi.data.segmentCount);
+  assert.equal(requests[before].body.prompt.emotion_type, 'smart');
+  assert.ok(requests[before].body.prompt.next_text);
+  assert.equal(requests[before].body.language, undefined);
+
+  // T2S: no voice chosen -> the description picks a voice through recommendations
+  const design = await callJson('/api/audio-tools/typecast', 'POST', { mode: 'design', description: '따뜻한 여성 아나운서', text: '안녕하세요.', emotion: 'smart' });
+  assert.equal(design.status, 200);
+  assert.equal(design.data.voiceName, '발키리');
+  assert.equal(requests.at(-1).body.voice_id, 'tc_rec');
+  assert.equal((await callJson('/api/audio-tools/typecast', 'POST', { mode: 'design', text: '안녕하세요.' })).status, 400);
+
+  // Ref-T2S: instant cloning from the reference clip, synthesis with the uc_ voice, then the temporary voice is deleted
+  fakeSpawn.setProbe({ durationSeconds: '12' });
+  const refAudio = `data:audio/wav;base64,${Buffer.from('fake-ref').toString('base64')}`;
+  const cloned = await callJson('/api/audio-tools/typecast', 'POST', { mode: 'ref', referenceDataUrl: refAudio, text: '안녕하세요.', emotion: 'preset', emotionPreset: 'normal' });
+  assert.equal(cloned.status, 200);
+  const cloneCall = requests.find(r => r.url.endsWith('/v1/voices/clone'));
+  assert.ok(cloneCall.form.get('file') && cloneCall.form.get('model') === 'ssfm-v30');
+  assert.equal(requests.filter(r => r.url.endsWith('/v1/text-to-speech')).at(-1).body.voice_id, 'uc_temp1');
+  assert.equal(requests.at(-1).method, 'DELETE');
+  assert.ok(requests.at(-1).url.endsWith('/v1/voices/uc_temp1'));
+  // regression: a reference clip larger than 1 MB must not trip the request-size limit ("입력 내용이 너무 깁니다")
+  const bigRef = `data:audio/wav;base64,${Buffer.alloc(3 * 1024 * 1024, 1).toString('base64')}`;
+  const bigCloned = await callJson('/api/audio-tools/typecast', 'POST', { mode: 'ref', referenceDataUrl: bigRef, text: '안녕하세요.' });
+  assert.equal(bigCloned.status, 200);
+  fakeSpawn.setProbe({ durationSeconds: '2' });
+  assert.equal((await callJson('/api/audio-tools/typecast', 'POST', { mode: 'ref', referenceDataUrl: refAudio, text: '안녕하세요.' })).status, 400, 'expected a too-short reference to be rejected');
 });

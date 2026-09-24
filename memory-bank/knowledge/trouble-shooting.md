@@ -1,5 +1,8 @@
 # Trouble Shooting
 
+> **2026-09-24: AuK(AudioAuK) 연동은 SongYUE2에서 제거되었다.** 이 문서의 AuK 관련 항목은 과거 이력이며 현재 코드에는 해당 기능이 없다(음성 인식은 audio.cpp Qwen3-ASR 등, Audio Tools는 audio.cpp/ffmpeg 기반).
+
+
 > 발생했던 버그와 해결 방법. 같은 문제를 두 번 겪지 않기 위한 기록.
 
 ## 새 CSS 클래스가 안 먹힐 때: 나중에 정의했다고 이기지 않는다 (specificity)
@@ -545,3 +548,11 @@ const patched = template
   poll / result download were unbounded, and the 20-min poll deadline only applied *between* fetches.
   `aukFetchJson` now applies `AbortSignal.timeout` per call (5min config, 10s poll, 3min output).
 - **Test status:** 23 tests pass; `npm run check` clean.
+
+## Wave 49 (2026-09-24)
+
+- **증상**: Qwen3-TTS `--language korean`이 혼합문의 영어를 빼먹고 `auto`는 한국어를 빼먹음. **해결**: language=auto일 때 문장 단위로 스크립트(한/영)별 분할해 조각마다 언어 지정(`splitTtsByScript`).
+- **증상**: Qwen3 Base "requires reference text". **해결**: 참조 텍스트가 비면 Qwen3-ASR로 자동 받아쓰기, 불가하면 `x_vector_only_mode=true`.
+- **증상**: Typecast Ref-T2S에서 "입력 내용이 너무 깁니다". **원인**: 요청 본문 한도 1MB에 참조 오디오가 걸림. **해결**: 50MB로 상향. Typecast 복제는 무료 플랜(`custom_voice_slot: 0`)에서 `CLONING_NOT_AVAILABLE`.
+- **증상**: Git Bash `curl -d`로 한글 JSON이 깨짐. **해결**: node fetch 스크립트 사용.
+- **증상**: 테스트 실행 후 `scripts/start-studio.mjs`가 더미 텍스트로 덮어써짐. **원인**: fake spawn이 `--out` 없을 때 args[0]에 기록. **해결**: 복구 + 실제 프로세스 기동 경로 차단.

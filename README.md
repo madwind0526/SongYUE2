@@ -17,7 +17,6 @@
 - **MIDI로 내보내기**: 완성곡 메뉴에서 audio.cpp의 MuScriptor로 오디오를 표준 MIDI 파일(악기·음표·타이밍)로 변환. 바로 다운로드하지 않고 SVG 피아노롤 팝업으로 먼저 보여줘서 음표를 확인·이동·리사이즈·삭제·추가한 뒤 저장(또는 취소)할 수 있고, "미리듣기" 버튼으로 브라우저 안에서 간단한 신디사이저 소리로 편집 내용을 바로 들어볼 수 있음(Web Audio 오실레이터 기반). 매우 빠르고(RTX 5070에서 30초 곡 기준 약 0.7초) 결과는 곡별로 캐시됨
 - **음색 변조 (실험적)**: 완성곡(또는 라이브러리의 어떤 오디오라도)의 보컬 음색을 바꾸는 통합 팝업 — 3개 탭에서 엔진을 고릅니다.
   - **기존 방식 (Seed-VC / Vevo2)**: 목표 음색의 짧은 참조 오디오를 고르면 보컬만 Singing Voice Conversion으로 변환. 변환 직후 원본과의 음량 차이를 자동 보정하고, 무음 구간에 엔진이 채우는 잡음은 게이트로 정리합니다. **긴 보컬은 10초 창(2초 겹침, 경계 1초 트림)으로 나눠 각각 변환한 뒤 이어붙여, 10초를 넘기는 입력에서 두 엔진이 소리를 노이즈로 붕괴시키는 문제를 회피합니다.** Seed-VC는 원곡 음정선 사용(F0 condition)·자동 음정 조절·추론 스텝(기본 80)을, Vevo2는 노래용 SVC/말소리용 VC 변환 라우트를 고를 수 있습니다. 결과는 원곡과 비교해 미리 듣고 "저장"으로 새 완성곡으로 라이브러리에 추가(원곡 유지). 보컬 분리+변환을 순서대로 거치므로 원곡보다 음질이 떨어질 수 있고 AudioSR만큼 느립니다(RTX 5070에서 RTF ≈ 0.82).
-  - **AuK**: 참조 목소리가 있으면 소스 보컬 가사를 전사해 그 참조 목소리로 낭독하는 제로샷 TTS 클론, 텍스트 설명만 있으면 "가사·멜로디·박자·리듬은 그대로 두고 음색만" 변경합니다(기본 목표 음색은 `a deep adult male with a warm, resonant baritone voice`). 체크포인트 계열(Flash 4스텝 / Base 32스텝)·모델 정밀도(Flash W4A8/BF16/FP32, Base W4A8/BF16)·텍스트 인코더(Qwen W4A8/INT8)·VAE를 선택할 수 있습니다. 저장된 가사가 있는 곡은 전사 없이 그대로 쓰며, 긴 보컬은 기존 방식과 같은 10초 청크로 처리합니다. Tools 메뉴의 TTS/편집 도구도 같은 구성 선택을 공유합니다.
   - **DDSP-SVC**: 목표 목소리의 레퍼런스 여러 개로 실제 학습해 변환하는 방식 — 특징 인코더(ContentVec/HubertSoft)·음정 추출기(RMVPE/FCPE)·보코더(NSF-HiFiGAN/PC-NSF-HiFiGAN)·목표 스텝을 고르고, 목표 도달 시 학습을 정확히 중단한 뒤 그 체크포인트로 추론합니다. 프레임 단위로 처리해 긴 입력도 그대로 변환됩니다.
 - 라이브러리(완성곡) / 프로젝트(초안·설정) 완전 분리 — 하나를 지워도 다른 하나는 그대로 유지
 - 재생목록 생성 및 PC에서 연속 재생, 앨범 커버 등록
@@ -126,7 +125,7 @@ python scripts/download_models.py
 - **⑥ AudioSR (선택, "음원 복원" 메뉴 전용, 실험적)**: 저음질 오디오를 복원하는 audio.cpp의 AudioSR 모델(약 6.18GB, f32 단일 정밀도)입니다. ①을 빌드할 때 `-Models "yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc"`로 `audiosr`을 포함해야 합니다. **클릭/틱 잡음이 재현되는 것을 확인한 실험적 기능**입니다 — `progress.md` 참고. → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)의 음원 복원 절**
 - **⑦ MuScriptor (선택, "MIDI로 내보내기" 메뉴 전용)**: 완성곡을 표준 MIDI 파일로 변환하는 audio.cpp의 MuScriptor 모델(약 412MB). 매우 빠름(RTX 5070에서 30초 곡 기준 약 0.7초). ①을 빌드할 때 `-Models "yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc"`로 `muscriptor`를 포함해야 합니다. → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)의 MIDI로 내보내기 절**
 - **⑧ Seed-VC / Vevo2 (선택, "음색 변조" 메뉴의 기존 방식 탭 전용, 실험적)**: 완성곡의 보컬 음색을 참조 오디오로 바꾸는 audio.cpp의 SVC 모델 두 가지 — Seed-VC(약 2.90GB, MLX Q8_0)와 Vevo2(약 3.2GB, Q8_0). ①을 빌드할 때 `-Models "yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc,vevo2"`로 `seed_vc`와 `vevo2`를 모두 포함해야 합니다. 보컬 분리(STEM)+음색 변환을 순서대로 거치는 다단계 파이프라인이라 원곡보다 음질이 떨어질 수 있고, AudioSR만큼 느립니다(RTX 5070에서 RTF ≈ 0.82). → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)의 보컬 음색 변환 절**
-- **⑨ AuK (선택, "음색 변조"의 AuK 탭 + "Tools" 메뉴 전용, 실험적)**: 자매 프로젝트 AudioAuK(ComfyUI 기반, HTTP API, 기본 `127.0.0.1:4312`)를 연결해 쓰는 zero-shot TTS/음색 변경 엔진. 참조 목소리로 "그 가사를 그 목소리로 낭독"하는 클론, 또는 텍스트 설명만으로 "가사·멜로디·리듬 보존 + 음색 변경"이 가능합니다. 체크포인트 계열(Flash 기본 4스텝 / Base 32스텝)·모델 정밀도(Flash W4A8/BF16/FP32, Base W4A8/BF16)·텍스트 인코더(Qwen W4A8/INT8)·VAE를 선택할 수 있고, AudioAuK의 별도 설치가 필요합니다(경로·주소는 설정 화면에서 변경 가능).
+- **⑨ Audio Tools 엔진 (audio.cpp, 선택)**: "오디오 도구" 페이지의 TTS(Qwen3-TTS·VoxCPM2·OmniVoice·Fish Audio·Supertonic 3·MagpieTTS·Chatterbox)와 음성 인식(Qwen3-ASR·Nemotron 3.5·VibeVoice-ASR)은 audio.cpp로 실행합니다. 모델은 앱에서 선택해 내려받고(미설치 시 "모델 받기"), 음성 조절(피치·속도·음량·노이즈)은 ffmpeg로 처리합니다. (이전의 AudioAuK 연동은 2026-09-24 제거되었습니다.)
 - **⑩ DDSP-SVC (선택, "음색 변조"의 DDSP-SVC 탭 전용, 실험적)**: 목표 목소리의 레퍼런스 클립들로 SVC 모델을 실제로 학습해(기본 4만 스텝 ≈ 1시간 반) 변환하는 파이프라인. 특징 인코더(ContentVec/HubertSoft)·음정 추출기(RMVPE/FCPE)·보코더(NSF-HiFiGAN/PC-NSF-HiFiGAN)와 목표 스텝을 고르고, 목표에 도달하면 학습을 정확히 중단해 그 체크포인트로 추론합니다. 별도의 DDSP-SVC 설치가 필요합니다(기본 경로 `test\DDSP-SVC`, `ddspSvcPath` 설정).
 
 > "심볼릭 작곡"·"악기만"·ABC 기반 커버는 최종 생성에 ①이나 ②를 쓰더라도, ABC 악보 준비(계획 생성/보컬 성부 뮤트) 자체는 항상 ②의 Python 엔진(`abc_tools.py`)을 거칩니다. 즉 GGUF만 쓰더라도 이 기능들을 쓰려면 ②의 Python 환경 구성이 필요합니다.
@@ -139,7 +138,7 @@ python scripts/download_models.py
 npm run dev
 ```
 
-또는 Windows에서 `Start-SongYUE2.cmd`를 더블클릭하세요. 브라우저에서 `http://127.0.0.1:5173`으로 접속합니다.
+또는 Windows에서 `Start-SongYUE2.cmd`를 더블클릭하세요. 브라우저에서 `http://127.0.0.1:5176`으로 접속합니다.
 
 ### 5단계. 설정 화면에서 엔진 경로 연결
 
@@ -153,8 +152,6 @@ npm run dev
 | SheetSage2 Python 실행 파일 | `test\YuE2-source\.venv-sheetsage2\Scripts\python.exe` |
 | ComfyUI 연결 주소 | `http://127.0.0.1:8190` (기본값, 비워두면 자동 사용) |
 | ComfyUI 설치 폴더 | `engine\ComfyUI` (기본값, 비워두면 자동 사용) |
-| AudioAuK 연결 주소 (음색 변조 AuK 탭 / Tools) | `http://127.0.0.1:4312` (기본값) |
-| AudioAuK 설치 폴더 | `C:\Claude\AudioAuK` (기본값) |
 | DDSP-SVC 설치 폴더 (음색 변조 DDSP 탭) | `test\DDSP-SVC` (기본값) |
 
 경로는 모두 SongYUE2 폴더 기준 상대 경로 또는 절대 경로를 쓸 수 있습니다.
@@ -175,7 +172,7 @@ npm run check   # 프론트엔드 타입 체크
 npm run build   # 프론트엔드 빌드
 ```
 
-`start.bat`/`stop.bat`도 있습니다 — `start-studio.mjs`는 포트 4311에 이미 떠 있는 백엔드가 있으면 그대로 재사용하기 때문에(`Start-SongYUE2.cmd`도 동일), 코드를 수정한 뒤 다시 실행해도 예전 백엔드가 계속 응답할 수 있습니다. `start.bat`은 실행 전 4311/5173 포트를 먼저 정리해 항상 최신 코드로 새로 뜨도록 하고, `stop.bat`은 두 포트를 정리만 합니다.
+`start.bat`/`stop.bat`도 있습니다 — `start-studio.mjs`는 포트 4311에 이미 떠 있는 백엔드가 있으면 그대로 재사용하기 때문에(`Start-SongYUE2.cmd`도 동일), 코드를 수정한 뒤 다시 실행해도 예전 백엔드가 계속 응답할 수 있습니다. `start.bat`은 실행 전 4311/5176 포트를 먼저 정리해 항상 최신 코드로 새로 뜨도록 하고, `stop.bat`은 두 포트를 정리만 합니다.
 
 ## 문서
 
@@ -190,3 +187,23 @@ npm run build   # 프론트엔드 빌드
 ## 라이선스 안내
 
 YuE2 모델 가중치(GGUF/원본 모두)는 CC BY-NC 4.0을 따릅니다. 비상업적 용도로만 사용하세요.
+
+## Audio Tools (audio.cpp 기반)
+
+- **TTS 생성**: T2S(음색 설명) / Ref-T2S(참조 목소리 복제) / 프리셋 목소리 3가지. 모델·크기·정밀도를 화면에서 고르고 미설치 조합은 "모델 받기"로 내려받습니다(`models/audio-cpp/audio.cpp-gguf/`).
+  - T2S: Qwen3-TTS VoiceDesign, VoxCPM2, (Chatterbox는 Qwen3가 만든 참조 음성 사용), Typecast
+  - Ref-T2S: Qwen3-TTS Base, VoxCPM2, OmniVoice, Fish Audio S2 Pro, Chatterbox, Typecast(유료 플랜)
+  - 프리셋: Supertonic 3, Qwen3 CustomVoice, MagpieTTS — 목소리 선택 + 미리듣기
+  - 스타일 지시(선택): VoxCPM2, Qwen3 CustomVoice
+- **음성 인식**: Qwen3-ASR(0.6B/1.7B), Nemotron 3.5 ASR, VibeVoice-ASR. 결과는 텍스트로 저장할 수 있습니다.
+- **음성 조절**: ffmpeg(rubberband)로 피치·속도·음량, 노이즈 줄이기.
+- 엔진 빌드에는 `run-build.ps1`의 `-Models` 목록(`yue2,htdemucs,bs_roformer,audiosr,muscriptor,seed_vc,vevo2,qwen3_tts,chatterbox,qwen3_asr,qwen3_forced_aligner,nemotron_asr,vibevoice_asr,voxcpm2,omnivoice,supertonic,fish_audio,magpie_tts`)이 필요합니다. 모델 비교 결과는 `test/tts-model-comparison/README.md`.
+
+### Typecast (클라우드 TTS, 선택)
+
+Audio Tools의 TTS 모델 버튼에 "Typecast (클라우드)"가 있습니다. `.env`의 `TYPECAST_API_KEY`(키 발급: https://studio.typecast.ai/developers/api, API 요금제 필요)를 채우고 백엔드를 재시작하면 쓸 수 있습니다. 키는 백엔드에서만 쓰고 브라우저로 보내지 않습니다.
+
+- **T2S**: 음색 설명으로 Typecast 추천 API가 목소리를 골라 줍니다(직접 고를 수도 있음).
+- **Ref-T2S**: 참조 오디오(5~150초)로 즉시 목소리 복제를 만들어 읽고 임시 목소리를 삭제합니다(복제는 유료 요금제 전용).
+- 감정: 스마트(문맥 자동) 또는 보통/기쁨/슬픔/화남/속삭임/톤 올림/톤 내림. 텍스트는 클라우드로 전송되고 크레딧이 차감됩니다.
+- 구현: `backend/typecast.mjs`(직접 HTTP, User-Agent에 `source=api-page; generated_by=claude-code` 표기).

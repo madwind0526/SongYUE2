@@ -1,8 +1,69 @@
 # SongYUE2 진행 상황 / 남은 일
 
-최종 업데이트: 2026-09-16
+최종 업데이트: 2026-09-24
 
 이 문서는 지금까지 구현이 끝난 것과 별개로, **아직 손대지 않았거나 실제 환경에서 검증되지 않은 부분**만 모아 둔 체크리스트입니다. 완료된 기능 전체 목록은 [README.md](README.md)를, 커밋 단위 변경 이력은 [revision.md](revision.md)를 참고하세요.
+
+## ▶ 다음 에이전트용 상세 계획 (2026-09-24 작성)
+
+이 절은 토큰/세션 한도로 작업이 끊겨도 **다른 에이전트가 그대로 이어받을 수 있게** 쓴 인수인계 문서다. 작업 전에 `todo.md` 최상단의 "진행 중 계획"과 이 절을 먼저 읽는다.
+
+### 0. 환경/규칙 요약
+- 작업 폴더 `C:\Claude\SongYUE2`. 프론트 `app/app/studio.tsx`(거대한 단일 파일), 백엔드 `backend/server.mjs`, 모델 카탈로그·CLI 인자 `backend/tts.mjs`, 테스트 `backend/server.test.mjs`(`npm test`, 타입체크 `cd app && npx tsc --noEmit -p tsconfig.json`).
+- 전역 규칙: 코드 주석은 영어만, UI 문자열은 한국어. 포트는 `C:\Claude\PORTS.md`에서만 배정(SongYUE2 = 5176 프론트 / 4311 백엔드).
+- **서버 재시작**: 백엔드는 핫리로드 없음. 포트 4311/5176 리스너를 죽이고 `node scripts/start-studio.mjs`를 백그라운드로 실행(PowerShell `Start-Process node -ArgumentList 'scripts/start-studio.mjs' -WorkingDirectory C:\Claude\SongYUE2 -WindowStyle Hidden`). `start.bat`을 백그라운드로 돌리면 뜨지 않는 경우가 있었다.
+- **audio.cpp CLI**: `engine/audio.cpp/build/windows-cuda-release/bin/audiocpp_cli.exe`, 반드시 cwd=`engine/audio.cpp`. 패밀리는 빌드 시 포함돼야 함(안 그러면 "unsupported model family hint"). 재빌드: `powershell -File engine\audio.cpp\run-build.ps1`(로그 `build-asr.log`, 끝에 `EXIT=0` 확인; 백업 exe는 `*.bak-before-asr`). 새 패밀리를 쓰려면 `run-build.ps1`의 `-Models` 목록에 추가 후 재빌드(10~20분, GPU 작업과 동시에 돌리지 말 것).
+- **모델 파일**: `models/audio-cpp/audio.cpp-gguf/<디렉터리>/<파일>.gguf`. 다운로드 URL은 `https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main/<디렉터리>/<파일>` (목록: `https://huggingface.co/api/models/audio-cpp/audio.cpp-gguf/tree/main/<디렉터리>`). 앱 안에서는 `/api/audio-tools/tts/download`(카탈로그: `backend/tts.mjs`)로 받는다. 수동은 `curl -L -C - --retry-all-errors -o <파일> <URL>`.
+- **함정들**
+  - Git Bash `curl -d`로 한글 JSON을 보내면 인코딩이 깨진다 → 테스트는 node `fetch` 스크립트 사용. 긴 Python/JS를 heredoc으로 넘기면 따옴표 문제가 나므로 파일로 만들어 실행.
+  - 테스트의 fake spawn은 `--out` 인자가 없으면 `args[0]`에 더미 바이트를 쓴다 → 실제 스크립트를 덮어쓴 사고가 있었음(`scripts/start-studio.mjs`). 테스트에서 실제 프로세스를 띄우는 코드 경로를 만들지 말 것.
+  - `generating` 락은 응답 전송 전에 풀려야 한다(응답 후 `await rm(...)` 같은 게 락 해제를 늦추면 연속 요청이 409). ASR 라우트에서 겪음.
+  - Qwen3-TTS `--language`는 `korean`/`english`/`auto` 전체 이름. 혼합 문장은 auto가 한국어를 빼먹고 korean이 영어를 빼먹으므로 문장 단위로 나눠 언어를 따로 지정(`splitTtsByScript`).
+  - Qwen3-ASR는 `--language Korean` 같은 전체 이름, 입력은 16kHz mono WAV(서버가 ffmpeg로 변환), 출력은 `--text-out` 파일.
+  - Playwright MCP 브라우저에 파일 대화상자가 쌓여 클릭이 막히는 경우가 있음 → `browser_file_upload`(경로 없이)로 취소하거나 `browser_close` 후 재접속.
+  - 동시에 GPU를 쓰는 작업(Seed-VC 변환 등)을 벤치/빌드와 겹치면 OOM.
+
+### 1. P0 — 마무리/정리 (먼저, 1~2시간)
+1. 브라우저(`http://127.0.0.1:5176/`)로 Audio Tools → 음성 인식(파일 선택→실행→텍스트 표시→저장 .txt), 음성 조절(피치/속도/음량→처리본 재생→저장), TTS 두 탭 동작 확인. 음색 변조 창에서 모델 버튼이 Seed-VC/Vevo/DDSP-SVC 3개인지 확인.
+2. 남은 AuK/Whisper 언급 정리: `README.md`, `docs/*.md`, `memory-bank/knowledge/*`, `test/tts-model-comparison/bench.mjs`(전사를 AuK 4312로 하고 있음 → `POST /api/audio-tools/asr`로 교체).
+3. `scripts/download_models.py`(REPOS `audio-cpp/audio.cpp-gguf` prefixes)와 `docs/audiocpp-setup.md`(`-Models` 목록)에 Qwen3-TTS/CosyVoice3/Chatterbox/Qwen3-ASR/ForcedAligner 반영.
+4. memory-bank: `CACHE.md`의 wave 49 항목을 `knowledge/`로 flush, `STATE.md` wave 증가·CLEAN, `active-context.md`를 다음 과제로 갱신. `PORTS.md`의 AudioAuK 행은 별개 프로젝트이므로 유지.
+5. `git add`(untracked `backend/tts.mjs` 포함) 후 커밋(시스템이 지정한 Co-Authored-By 줄 포함).
+
+### 2. P0-b — 음성 인식 다중 모델 (사용자 요청)
+- 현재 `backend/tts.mjs`의 `ASR_FAMILIES`에 `qwen3asr` 하나만 있고, `server.mjs`의 `transcribeWav`/`resolveAsrModel`이 `qwen3_asr` 패밀리 인자로 고정돼 있다. 프론트 `AudioToolsPage`의 음성 인식 UI도 `asrModels[0]`만 쓴다.
+- 후보(README 표, 한국어 가능 여부 확인 필요): `nemotron_asr`(100+ 언어, Nemotron-3.5-ASR-Streaming-0.6B-GGUF), `vibevoice_asr`(auto, VibeVoice-ASR-GGUF), `fun_asr_nano`(auto/zh/en/ja, Fun-ASR-Nano-2512-GGUF — 한국어 미표기), `sense_asr`/`audio8_asr`(ko 표기, HF 디렉터리 존재 여부 확인), `voxtral_realtime`. 각 `docs/models/<family>.md`에서 CLI 예시(`--task asr --family <f> --model <gguf> --audio ... --text-out`)와 언어 옵션 이름을 확인.
+- 절차: ① `run-build.ps1` `-Models`에 채택 후보 패밀리 추가·재빌드 ② 모델 다운로드 후 같은 한국어 샘플(`test/tts-model-comparison/audio/*.wav`)로 CER 비교 ③ `ASR_FAMILIES`에 패밀리별 `variants`(크기/정밀도)와 `cliFamily`, 언어 옵션 매핑을 추가 ④ `transcribeWav`가 선택된 패밀리의 `cliFamily`와 언어 인자를 쓰도록 일반화(`/api/audio-tools/asr` 요청에 `family` 추가) ⑤ 프론트에 모델(패밀리) 버튼 + 크기 + 정밀도 + "모델 받기" 표시(TTS 모델 선택 UI와 동일 컴포넌트 패턴, `renderModelStatus` 재사용) ⑥ 백엔드 테스트에 패밀리별 인자 검증 추가.
+- 미설치 모델은 409 + "받기" 안내(이미 구현된 패턴). 자동 참조 텍스트(TTS)는 설치된 ASR 중 가장 좋은 것 사용(`resolveAsrModel` 우선순위 목록 갱신).
+
+### 3. P1 — 음성 변환에 RVC·MeanVC2 추가
+- 문서: `engine/audio.cpp/docs/audio_tools.md`의 "RVC", "MeanVC2" 절과 `docs/models/meanvc2.md`에서 CLI 확인 (RVC: `--family rvc --task vc`, 포장된 v1/v2 음성 + retrieval blending 옵션; MeanVC2: `--task vc`, zero-shot).
+- 모델: HF `RVC-GGUF/`, MeanVC2 디렉터리 이름은 `.../tree/main`에서 `MeanVC` 검색. `run-build.ps1`의 `-Models`에 `rvc,meanvc2` 추가 후 재빌드.
+- 백엔드: `runSeedVcSvc`/`runVevo2Svc`(server.mjs)와 같은 위치에 `runRvcSvc`/`runMeanVc2Svc` 추가(둘 다 `runSvcCli` 재사용). `applyVocalTimbreCore`의 엔진 분기(`engine: 'seed_vc'|'vevo2'`)에 새 값 추가, 긴 보컬은 기존 10초 창 청크 로직(`buildChunkPlan`) 공유. 결과는 `postProcessConvertedVocal` 통과.
+- 프론트: `TIMBRE_ENGINES`에 `rvc`, `meanvc2` 추가, `isLegacy`(참조 audio 기반) 조건과 `applyLegacy`의 engine 전달 확장. RVC는 "packaged voice" 선택 UI가 필요할 수 있으니 문서를 먼저 읽고 결정.
+- 테스트: `server.test.mjs`의 Vevo2 엔진 테스트를 복제(인자 `--family rvc` 등, 모델 미설치 400). 실제 곡으로 Seed-VC와 A/B 청취 후 `test/vocal-timbre-engine-comparison/README.md`에 기록.
+
+### 4. P2 — TTS 추가 모델 옵션
+- 후보: `voxcpm2`(30개 언어, 48kHz, Clone/Design), `fish_audio`(S2 Pro, 감정 태그), `index_tts2`(zh/en/ja 위주, 감정 제어), `omnivoice`(646개 언어, Clone/Design), `supertonic`(ko 포함, 프리셋 화자), `fireredtts3`, `dots_tts`. 각 `docs/models/<family>.md`에서 CLI 예시와 한국어 지원 확인.
+- 절차: (a) 후보 3~4개 빌드 목록 추가·재빌드, 모델 다운로드 (b) `test/tts-model-comparison/bench.mjs`에 설정 추가(전사는 Qwen3-ASR로 교체 후) 동일 4개 문장으로 CER 비교 (c) 상위 모델을 `backend/tts.mjs`의 `TTS_FAMILIES`에 variants로 추가하고 `buildTtsArgs`에 분기 (d) 프론트는 `ttsModels`에서 버튼이 자동으로 늘어남(`ttsVariantsFor`의 non-qwen 규칙 확인) — Design 지원 모델은 `mode:'design'` 변형으로 등록.
+- 기본 선택은 Qwen3-TTS 유지.
+
+### 5. P3 — 대사 편집 탭
+- 후보를 한국어로 실측: Vevo2 `--task s2s --task-route editing --source-audio A.wav --target-voice ref.wav --target-text "새 문장"`(빌드 포함됨, `docs/models/vevo2.md` "Speech Editing"), DotTTS Edit(`template_name=edit`, `source_text` 필요), FireRedTTS3 edit.
+- UX: 오디오 선택 → 음성 인식으로 전사해 텍스트 표시(`/api/audio-tools/asr` 재사용) → 바꿀 문장 입력 → 새 라우트 `/api/audio-tools/edit` → 처리본 비교/저장. 과거 AuK Function UI(교체/삽입(앞)/삽입(뒤)/삭제)는 `git show HEAD:app/app/studio.tsx`의 `EDIT_FUNCTIONS` 참고.
+- 실측 결과가 나쁘면 탭을 만들지 않고 pending으로 남긴다.
+
+### 6. P4 — 효과음 생성 탭
+- `stable_audio`(SFX 변형) 또는 `controlfoley`(44kHz). `docs/audio_tools.md` ControlFoley 절: `--task gen --family controlfoley --model .../controlfoley-large-44k-f32.gguf --text "..."`. 모델 크기·VRAM·길이 지정 가능 여부 확인 후 선택.
+- UI: 텍스트 프롬프트 + 길이 + 모델/정밀도 선택, 결과 비교창 재사용, 저장은 `AudioToolsPage`의 `saveBlob`.
+
+### 7. Pending 판단 기준
+- 강제 정렬: 가사 싱크/LRC가 필요해지면 `qwen3_asr`의 `--words-out words.json`(+forced aligner 모델 경로, `docs/models/qwen3.md`) 또는 `qwen3_forced_aligner` 단독. 모델 `Qwen3-ForcedAligner-0.6B-GGUF`(q8 1130MB).
+- 화자 분리: 대화 오디오 처리 요구가 생길 때. `sortformer_diar`(`--task diar --turns-out`, 4인, 영어 학습).
+- ACE-Step 편집: YuE2 결과의 부분 재생성이 필요할 때 `repaint`(`--repaint-start/--repaint-end`)만 시험.
+
+### 8. 완료 정의 (각 단계 공통)
+`npm test` 통과 + `npx tsc --noEmit` 통과 + 실제 모델로 API 직접 호출 1회(node fetch) + 브라우저 화면 확인 + 문서/todo 체크 갱신 + 커밋.
 
 ## 문서화
 

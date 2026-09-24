@@ -32,7 +32,7 @@
 .at-transcribe-options { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin-top: 10px; }
 .at-run-summary { margin-top: 14px; color: #d6e0d1; font-size: 12px; font-weight: 600; }
 .at-transcribe-options-head { font-size: 14px; font-weight: 700; letter-spacing: 0.04em; color: #d6e0d1; }
-.timbre-auk-option-head { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; opacity: 0.65; }
+.timbre-option-head { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; opacity: 0.65; }
 .at-transcribe-options label { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; color: #c5d1bb; }
 .at-transcribe-options select { background: #232b23; color: #e4ece0; border: 1px solid #3b493d; border-radius: 6px; padding: 5px 8px; font-size: 12px; cursor: pointer; }
 .audio-tools-result-empty { border: 1px dashed #4b5846; border-radius: 10px; min-height: 300px; display: grid; place-items: center; place-content: center; gap: 10px; text-align: center; color: #8a978c; font-size: 13px; line-height: 1.7; }
@@ -54,4 +54,6 @@
   .audio-tools-panel { flex-direction: column; }
   .audio-tools-inputs { flex: 1 1 auto; width: 100%; max-width: none; }
   .audio-tools-result { width: 100%; }
-}
+}/* TTS model buttons: 4 per row so 7 models wrap onto two lines instead of overflowing */
+.audio-tools-model-switch.two-rows { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-self: stretch; gap: 6px; border: 0; overflow: visible; }
+.audio-tools-model-switch.two-rows button { padding: 9px 6px; border: 1px solid #3b493d; border-radius: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
