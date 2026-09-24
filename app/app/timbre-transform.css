@@ -277,6 +277,6 @@
 .lyric-sync-line.current { color: #f0f7ea; background: #2a3a2a; }
 .lyric-sync-line.weak { color: #c9a86a; }
 .lyric-sync-time { flex: none; width: 52px; font-variant-numeric: tabular-nums; color: #7f917b; }
-.player-lyric { display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 36px; padding: 2px 8px; text-align: center; }
-.player-lyric .current { font-size: 14px; font-weight: 600; color: #e8f2e2; }
-.player-lyric .next { font-size: 11px; color: #6f806c; }
+.player-lyric { flex: 4 1 0; min-width: 0; height: 30px; display: flex; flex-direction: column; justify-content: center; gap: 1px; padding: 0 6px; text-align: center; overflow: hidden; }
+.player-lyric .current { font-size: 13px; font-weight: 600; color: #e8f2e2; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.player-lyric .next { font-size: 10px; color: #6f806c; line-height: 1.25; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
