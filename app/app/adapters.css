@@ -159,3 +159,7 @@ button.adapter-card, label.adapter-card { cursor: pointer; }
 /* the sample players have only slightly rounded corners (the default is a pill) */
 .adapter-detail-dialog audio, .adapter-samples audio { border-radius: 6px; }
 .adapter-detail-dialog audio::-webkit-media-controls-enclosure, .adapter-samples audio::-webkit-media-controls-enclosure { border-radius: 6px; }
+/* the sample player panel: a dark green like the rest of the window instead of the browser's gray */
+.adapter-detail-dialog audio, .adapter-samples audio { background-color: #131a12; }
+.adapter-detail-dialog audio::-webkit-media-controls-enclosure, .adapter-samples audio::-webkit-media-controls-enclosure { background-color: #131a12; }
+.adapter-detail-dialog audio::-webkit-media-controls-panel, .adapter-samples audio::-webkit-media-controls-panel { background-color: #131a12; }
