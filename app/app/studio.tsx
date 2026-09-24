@@ -2269,6 +2269,8 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
     if (file) applyPickedAudio(file, file.name);
   }
   function applyPickedAudio(file: Blob, name: string, fromMic = false) {
+    // Choosing a file/library source replaces the microphone: close the recorder panel (and its input stream).
+    if (!fromMic && micPanelOpen) closeMicPanel();
     audioBlobRef.current = file;
     setAudioName(name);
     setSourceFromMic(fromMic);
