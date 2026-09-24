@@ -114,7 +114,7 @@ button.adapter-card, label.adapter-card { cursor: pointer; }
 .adapter-import-files li button { background: transparent; border: 0; color: #8fa280; cursor: pointer; }
 
 /* import box: one column (drop zone, file list, name, hint) with the same right edge, and a big import button beside it */
-.adapter-import { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 10px 14px; }
+.adapter-import { display: grid; grid-template-columns: minmax(0, 1fr) 110px; gap: 10px 14px; }
 .adapter-import > strong { grid-column: 1 / -1; }
 .adapter-import-main { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .adapter-import .adapter-import-go { align-self: stretch; height: auto; min-height: 96px; flex-direction: column; gap: 8px; font-size: 15px; font-weight: 600; }
@@ -128,3 +128,6 @@ button.adapter-card, label.adapter-card { cursor: pointer; }
 .adapter-import-files.empty { padding: 9px 12px; border-radius: 7px; border: 1px dashed #364434; color: #667a60; font-size: 12.5px; }
 /* the chosen-file chip and the name field have the same height */
 .adapter-import-namerow .adapter-import-files li, .adapter-import-namerow .adapter-import-files.empty { min-height: 40px; box-sizing: border-box; display: flex; align-items: center; }
+
+/* the name field text (and its placeholder) is centered */
+.adapter-import-namerow [data-slot=input] { text-align: center; }
