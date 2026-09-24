@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { createStudioServer } from './server.mjs';
-import { isYueAdapterRepo, classifyRepo, listUnits, summarizeReadme, installCatalogEntry, installHubUnits, importLocalFiles, loadCatalog, catalogSummary, clearHubCache } from './adapters.mjs';
+import { isYueAdapterRepo, classifyRepo, listUnits, groupUnits, summarizeReadme, installCatalogEntry, installHubUnits, importLocalFiles, loadCatalog, catalogSummary, clearHubCache } from './adapters.mjs';
 import { extractAudioPart, normalizeAdapterSelection, toEngineAdapters, listAdapters, synthesize } from './yueserver.mjs';
 
 const repoModel = (extra) => ({ id: 'someone/yue2-rock-lora', likes: 4, tags: ['lora', 'yue2', 'rock', 'en', 'base_model:m-a-p/YuE2-3B', 'license:cc-by-nc-4.0'], cardData: { language: ['en'] },
@@ -238,4 +238,32 @@ test('API: files chosen in the browser are uploaded and become one adapter', asy
   // the temporary upload folder is gone, and importing it again fails cleanly
   const again = await fetch(`${base}/api/adapters/import`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'x', uploadId }) });
   assert.equal(again.status, 400);
+});
+
+test('the detail window lists LoRAs: latest version first, AR + NAR as one entry, variants and tokenizer heads left out', () => {
+  const files = (names) => listUnits({ siblings: names.map((rfilename) => ({ rfilename, size: 10 })) });
+  // industrial rock: several training-set sizes of an AR and a NAR adapter -> one AR+NAR pair (the newest of each) and the older ones below
+  const rock = groupUnits(files(['adapter-ar-179/lora.safetensors', 'adapter-ar-86/lora.safetensors', 'adapter-nar-179-v2/lora.safetensors', 'adapter-nar-179/lora.safetensors', 'adapter-nar-86/lora.safetensors']));
+  const main = rock.filter((entry) => !entry.older);
+  assert.equal(main.length, 1);
+  assert.deepEqual(main[0].paths, ['adapter-ar-179/lora.safetensors', 'adapter-nar-179-v2/lora.safetensors']);
+  assert.equal(main[0].stage, 'both');
+  const older = rock.filter((entry) => entry.older);
+  assert.ok(older.some((entry) => entry.paths.length === 2 && entry.paths.every((file) => file.includes('86'))), 'ar-86 and nar-86 are paired');
+  assert.ok(older.some((entry) => entry.paths.join() === 'adapter-nar-179/lora.safetensors'), 'the plain nar-179 stays as an older single');
+  // real-audio: four versions x three formats, plus tokenizer heads -> only the newest plain NAR file shows, the other versions are "older"
+  const names = [];
+  for (const version of ['v4', 'v5', 'v8', 'v9']) names.push(`nar_lora_joint_${version}.safetensors`, `nar_lora_joint_${version}.bf16.safetensors`, `nar_lora_joint_${version}_comfyui.safetensors`);
+  names.push('tokenizer_head_joint_v4.safetensors', 'tokenizer_head_joint_v5.safetensors');
+  const real = groupUnits(files(names));
+  assert.deepEqual(real.filter((entry) => !entry.older).map((entry) => entry.paths[0]), ['nar_lora_joint_v9.safetensors']);
+  assert.equal(real.filter((entry) => entry.older).length, 3);
+  assert.equal(real.length, 4, 'no bf16 / ComfyUI copies and no tokenizer heads');
+  assert.equal(real[0].version, '9');
+  // distinct LoRAs (different names) are all listed, none of them is "older"
+  const reggae = groupUnits(files(['mltnt_chanter.safetensors', 'mltnt_frontline.safetensors', 'mltnt_roots.safetensors']));
+  assert.equal(reggae.length, 3);
+  assert.ok(reggae.every((entry) => !entry.older));
+  // a repo that only has variants still offers them
+  assert.equal(groupUnits(files(['a_comfyui.safetensors'])).length, 1);
 });

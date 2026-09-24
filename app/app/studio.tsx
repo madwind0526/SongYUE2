@@ -3207,7 +3207,8 @@ type HubRepo = {
   defaultPaths: string[] | null;
 };
 type HubUnit = { path: string; config: string | null; label: string; size: number; stage: string; variant: string | null };
-type HubDetail = HubRepo & { summary: string; units: HubUnit[]; samples: { name: string; url: string }[] };
+type HubEntry = { id: string; label: string; version: string; detail: string; stage: string; paths: string[]; size: number; older: boolean };
+type HubDetail = HubRepo & { summary: string; units: HubUnit[]; entries: HubEntry[]; samples: { name: string; url: string }[] };
 type InstallJob = { status: string; downloaded: number; total: number; names: string[]; error: string };
 type AdapterChoice = { name: string; arScale: number; narScale: number };
 const STAGE_LABEL: Record<string, string> = { ar: '작곡 (AR)', nar: '사운드 (NAR)', both: '작곡+사운드', unknown: '종류 확인 필요' };
@@ -3296,7 +3297,7 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
   const [sort, setSort] = useState<'az' | 'za' | 'likes' | 'updated' | 'samples'>('likes');
   const [detail, setDetail] = useState<HubDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState('');
-  const [unitsPicked, setUnitsPicked] = useState<string[]>([]);
+  const [showOlder, setShowOlder] = useState(false);
   const [job, setJob] = useState<InstallJob | null>(null);
   const [running, setRunning] = useState(false);
   const [importName, setImportName] = useState('');
@@ -3330,7 +3331,6 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
         if (state.status === 'failed') throw new Error(state.error || '다운로드에 실패했습니다.');
       }
       await reload(); void reloadCatalog();
-      setUnitsPicked([]);
     } catch (error) { notify((error as Error).message, true); }
     finally { setJob(null); }
   }
@@ -3360,6 +3360,13 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
       notify(`"${repo.title}"에서 받은 LoRA ${installedItems.length}개를 삭제했습니다.`); setDeleting(''); await reload();
     } catch (error) { notify((error as Error).message, true); }
   }
+  async function removeEntry(repo: string, entry: HubEntry) {
+    const items = (mine?.adapters || []).filter(item => item.source?.repo === repo && item.source.path.split(' + ').some(file => entry.paths.includes(file)));
+    try {
+      for (const item of items) await api(`/adapters/${encodeURIComponent(item.name)}`, 'DELETE');
+      notify(`"${entry.label}"을(를) 삭제했습니다.`); setDeleting(''); await reload();
+    } catch (error) { notify((error as Error).message, true); }
+  }
   async function importFiles() {
     const weights = importPicked.filter(file => /\.safetensors$/i.test(file.name));
     if (weights.length < 1 || weights.length > 2) { notify('.safetensors 파일을 1~2개 선택해 주세요. (작곡용과 사운드용이 따로 있으면 2개)', true); return; }
@@ -3378,7 +3385,7 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
     finally { setImporting(''); }
   }
   async function openDetail(repoId: string) {
-    setDetailLoading(repoId); setUnitsPicked([]);
+    setDetailLoading(repoId); setShowOlder(false);
     try { setDetail(await api<HubDetail>(`/adapters/hub/detail?repo=${encodeURIComponent(repoId)}`)); }
     catch (error) { notify((error as Error).message, true); }
     finally { setDetailLoading(''); }
@@ -3400,7 +3407,6 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
     .sort((a, b) => sort === 'az' ? a.title.localeCompare(b.title) : sort === 'za' ? b.title.localeCompare(a.title) : sort === 'likes' ? b.likes - a.likes : sort === 'samples' ? b.sampleCount - a.sampleCount : b.updatedAt.localeCompare(a.updatedAt));
   const catalogKinds = [...new Set((catalog || []).map(entry => entry.kind))];
   const catalogShown = (catalog || []).filter(entry => !kind || entry.kind === kind);
-  const unitsBytes = (detail?.units || []).filter(unit => unitsPicked.includes(unit.path)).reduce((sum, unit) => sum + unit.size, 0);
 
   return <section className="adapter-page page-scroll">
     <div className="page-heading"><span className="eyebrow">노래의 색깔을 바꾸는 작은 모델</span><h1>LoRA 관리</h1><p>스타일, 아티스트, 사운드를 가르치는 작은 추가 모델입니다. Preset이나 허깅페이스에서 받고, 곡을 만들 때 "고급 설정"에서 골라 각 부분의 강도를 조절합니다.</p></div>
@@ -3483,16 +3489,29 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
           {detail.summary && <p className="adapter-desc">{detail.summary}</p>}
           {detail.tags.length > 0 && <div className="adapter-meta">{detail.tags.map(tag => <span key={tag} className="adapter-chip">{tag}</span>)}</div>}
           {detail.samples.length > 0 && <div className="adapter-samples"><span className="adapter-sub">샘플 듣기</span>{detail.samples.slice(0, 4).map(sample => <label key={sample.url} className="adapter-sample"><span>{sample.name.split('/').pop()}</span><audio controls preload="none" src={sample.url}/></label>)}</div>}
-          <div className="adapter-units"><span className="adapter-sub">받을 파일 ({detail.units.length}) — 작곡(AR) 파일 1개와 사운드(NAR) 파일 1개를 함께 고르면 하나의 LoRA로 묶입니다. 그 밖에는 파일마다 따로 받습니다.</span>
-            {detail.units.map(unit => {
-              const done = installedKeys.has(`${detail.id}::${unit.path}`);
-              return <label key={unit.path} className={`adapter-unit${done ? ' done' : ''}`}><input type="checkbox" disabled={done || Boolean(job)} checked={unitsPicked.includes(unit.path)} onChange={event => setUnitsPicked(event.target.checked ? [...unitsPicked, unit.path] : unitsPicked.filter(path => path !== unit.path))}/><div><strong>{unit.label}</strong><small>{STAGE_LABEL[unit.stage] || unit.stage}{unit.size ? ` · ${formatSize(unit.size)}` : ''}{unit.variant ? ' · 변형본' : ''}</small></div>{done && <b className="adapter-done"><Check size={13}/>받음</b>}</label>;
-            })}
+          <InstallBar job={job} label="받는 중"/>
+          <div className="adapter-units"><span className="adapter-sub">받을 수 있는 LoRA — 작곡과 사운드가 함께 있는 것은 한 번에 같이 받습니다. 버전이 여럿이면 최종본만 먼저 보입니다.</span>
+            {(() => {
+              const row = (entry: HubEntry) => {
+                const done = entry.paths.every(path => installedKeys.has(`${detail.id}::${path}`));
+                const key = `entry:${entry.id}`;
+                return <div key={entry.id} className={`adapter-unit${done ? ' done' : ''}`}>
+                  <div><strong>{entry.label}{entry.version && <span className="adapter-chip version">{entry.version}</span>}</strong><small>{STAGE_LABEL[entry.stage] || entry.stage}{entry.size ? ` · ${formatSize(entry.size)}` : ''} · {entry.detail}</small></div>
+                  {done
+                    ? (deleting === key
+                      ? <button type="button" className="adapter-icon-btn danger confirm" aria-label={`${entry.label} 삭제 확인`} onClick={() => void removeEntry(detail.id, entry)}><Trash2 size={14}/>삭제?</button>
+                      : <button type="button" className="adapter-icon-btn danger" aria-label={`${entry.label} 삭제`} title="삭제" onClick={() => setDeleting(key)}><Trash2 size={15}/></button>)
+                    : <button type="button" className="adapter-icon-btn" aria-label={`${entry.label} 다운로드`} title="다운로드" disabled={Boolean(job)} onClick={() => void runInstall('/adapters/hub/install', { repo: detail.id, paths: entry.paths })}><Download size={15}/></button>}
+                </div>;
+              };
+              const latest = detail.entries.filter(entry => !entry.older);
+              const older = detail.entries.filter(entry => entry.older);
+              return <>{latest.map(row)}
+                {older.length > 0 && <button type="button" className="adapter-more" aria-expanded={showOlder} onClick={() => setShowOlder(!showOlder)}>{showOlder ? '접기' : `더보기… (이전 버전 ${older.length}개)`}<ChevronDown size={14} className={showOlder ? 'rotated' : ''}/></button>}
+                {showOlder && older.map(row)}</>;
+            })()}
           </div>
-          <div className="dialog-actions">
-            {unitsPicked.length > 0 && <Button disabled={Boolean(job)} onClick={() => { void runInstall('/adapters/hub/install', { repo: detail.id, paths: unitsPicked }); setDetail(null); }}><Download size={14}/>선택한 {unitsPicked.length}개 받기 · {formatSize(unitsBytes)}</Button>}
-            <Button variant="outline" onClick={() => setDetail(null)}>닫기</Button>
-          </div>
+          <div className="dialog-actions"><Button variant="outline" onClick={() => setDetail(null)}>닫기</Button></div>
         </DialogContent>
       </Dialog>}
     </>}

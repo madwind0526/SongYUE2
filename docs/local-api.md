@@ -136,7 +136,7 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 | GET `/api/adapters/catalog` | Preset 탭의 목록(카탈로그) `{entries:[{id, kind, kindLabel, stage, name, description, tip, trigger, scales, bytes, files, license, page, installed}]}` |
 | POST `/api/adapters/catalog/install` | `{ids:[...]}` → 202 `{jobId}` (백그라운드 다운로드, 커밋 고정) |
 | GET `/api/adapters/hub/search?q=` | 허깅페이스의 YuE2 어댑터 저장소를 분류해서 반환(10분 캐시) |
-| GET `/api/adapters/hub/detail?repo=owner/name` | README 요약, 샘플 음원, 받을 수 있는 파일(`units`) |
+| GET `/api/adapters/hub/detail?repo=owner/name` | README 요약, 샘플 음원, 받을 수 있는 파일(`units`), 그리고 화면에 나오는 LoRA 목록 `entries:[{id, label, version, detail, stage, paths, size, older}]`. `entries`는 파일을 이름으로 묶은 것이다: bf16/ComfyUI 복사본과 tokenizer head는 빼고, 같은 LoRA의 여러 버전(`v4 v5 v9`, `86 179` 등)은 최신이 `older:false`·나머지가 `older:true`(화면의 "더보기"), 작곡(AR) 계열과 사운드(NAR) 계열이 하나씩뿐인 저장소는 두 최신 파일이 `paths` 2개짜리 항목 하나(한 번에 함께 받음) |
 | POST `/api/adapters/hub/install` | `{repo, paths:[파일...]}` → 202 `{jobId}`. AR 1개+NAR 1개면 하나의 LoRA로, 아니면 파일마다 하나씩 |
 | GET `/api/adapters/hub/install/:jobId` | `{status(downloading/done/failed), downloaded, total, names, error}` |
 | POST `/api/adapters/upload?uploadId=<uuid v4>&filename=<이름>` | 브라우저에서 고른 파일 하나를 요청 본문(`application/octet-stream`) 그대로 임시 폴더(`runs/adapter-upload-<uploadId>`)에 올린다. `.safetensors`와 `adapter_config.json`만 허용, 최대 2 GB, 서버를 다시 시작하면 남은 임시 폴더는 지워진다 |

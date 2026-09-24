@@ -110,6 +110,70 @@ export function listUnits(model) {
   return units;
 }
 
+// ---- what the detail window lists: LoRAs (not raw files) ----
+// A file name such as "nar_lora_joint_v9" or "adapter-ar-179" = base name + version numbers.
+function splitVersion(name) {
+  // a generic file name (lora.safetensors, adapter_model.safetensors) says nothing: the folder it lives in is the name
+  const parts = name.replace(/\.safetensors$/i, '').split('/');
+  let base = parts.at(-1);
+  if (/^(lora|adapter_model|adapter|model|pytorch_lora_weights)$/i.test(base) && parts.length > 1) base = parts.at(-2);
+  const numbers = [];
+  for (;;) {
+    const match = /(?:[-_.](?:v|step[-_]?)?|v|step[-_]?)(\d+)$/i.exec(base);
+    if (!match || match.index === 0) break;
+    numbers.unshift(Number(match[1]));
+    base = base.slice(0, match.index);
+  }
+  return { base: base.replace(/[-_.]+$/, ''), numbers };
+}
+const compareVersions = (a, b) => { for (let i = 0; i < Math.max(a.length, b.length); i += 1) { const d = (b[i] ?? -1) - (a[i] ?? -1); if (d) return d; } return 0; };
+const versionText = (numbers) => (numbers.length ? numbers.map((n, i) => (i === 0 ? String(n) : `v${n}`)).join(' · ') : '');
+const humanize = (base) => base.replace(/[-_.]+/g, ' ').trim();
+
+// Turns the weight files of a repo into entries the user can download with one click:
+//  - copies in another format (bf16 / ComfyUI / archive) are left out when the plain file exists, tokenizer heads are not LoRAs;
+//  - several versions of one LoRA (v4, v5, v9 ... / 86, 179 ...) -> the latest is `older: false`, the rest `older: true`;
+//  - when a repo has exactly one composition (AR) family and one sound (NAR) family, their latest files are ONE entry that downloads both.
+// entry: { id, label, version, detail, stage, paths, size, older }
+export function groupUnits(units) {
+  const usable = units.filter((unit) => !/tokenizer[_-]?head/i.test(unit.path));
+  const plain = usable.filter((unit) => !unit.variant);
+  const kept = (plain.length ? plain : usable).map((unit) => ({ unit, ...splitVersion(unit.path) }));
+  const families = new Map();
+  for (const item of kept) {
+    const key = `${item.unit.stage}|${item.base.toLowerCase()}`;
+    if (!families.has(key)) families.set(key, []);
+    families.get(key).push(item);
+  }
+  for (const list of families.values()) list.sort((a, b) => compareVersions(a.numbers, b.numbers));
+  const arKeys = [...families.keys()].filter((key) => key.startsWith('ar|'));
+  const narKeys = [...families.keys()].filter((key) => key.startsWith('nar|'));
+  const entries = [];
+  const used = new Set();
+  const single = (item, older) => ({ id: item.unit.path, label: humanize(item.base) || item.unit.label, version: versionText(item.numbers), detail: item.unit.label, stage: item.unit.stage, paths: [item.unit.path], size: item.unit.size, older });
+  const pair = (ar, nar, older) => ({ id: `${ar.unit.path}+${nar.unit.path}`, label: '작곡 + 사운드', version: versionText(ar.numbers.length ? ar.numbers : nar.numbers), detail: `${ar.unit.label} + ${nar.unit.label}`, stage: 'both', paths: [ar.unit.path, nar.unit.path], size: ar.unit.size + nar.unit.size, older });
+  if (arKeys.length === 1 && narKeys.length === 1) {
+    const ars = families.get(arKeys[0]);
+    const nars = families.get(narKeys[0]);
+    entries.push(pair(ars[0], nars[0], false));
+    used.add(ars[0]); used.add(nars[0]);
+    // older versions that share the same first number (e.g. ar-86 and nar-86) are paired as well
+    for (const ar of ars.slice(1)) {
+      const match = nars.find((nar) => !used.has(nar) && nar !== nars[0] && nar.numbers[0] === ar.numbers[0]);
+      if (match) { entries.push(pair(ar, match, true)); used.add(ar); used.add(match); }
+    }
+  }
+  const latestKeys = new Set();
+  for (const [key, list] of families) {
+    list.forEach((item, index) => {
+      if (used.has(item)) return;
+      entries.push(single(item, index > 0 && latestKeys.has(key) ? true : index > 0));
+      if (index === 0) latestKeys.add(key);
+    });
+  }
+  return entries.sort((a, b) => Number(a.older) - Number(b.older));
+}
+
 // First readable paragraph of a model card (front matter, headings, tables and HTML removed).
 export function summarizeReadme(markdown) {
   const body = String(markdown || '').replace(/^---[\s\S]*?\n---\s*\n/, '');
@@ -175,6 +239,7 @@ export async function hubDetail({ fetchImpl = fetch, repo }) {
       ...classifyRepo(model),
       summary,
       units: listUnits(model),
+      entries: groupUnits(listUnits(model)),
       samples: files.filter((file) => /\.(flac|mp3|wav|ogg)$/i.test(file)).slice(0, 8).map((file) => ({ name: file, url: `${HF}/${repo}/resolve/main/${file.split('/').map(encodeURIComponent).join('/')}` })),
     };
   });

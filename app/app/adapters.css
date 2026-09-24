@@ -147,3 +147,15 @@ button.adapter-card, label.adapter-card { cursor: pointer; }
 
 .adapter-filters .adapter-find-btn { height: 38px; padding: 0 22px; font-size: 14px; font-weight: 600; }
 .adapter-sortbar .adapter-sortbar-sep { width: 1px; margin: 4px 3px; background: #364434; }
+
+/* detail window: one row per LoRA with its icon on the right, older versions folded under "더보기" */
+.adapter-unit strong { display: flex; align-items: center; gap: 8px; }
+.adapter-chip.version { border-color: #6a7a9a; color: #bcd0f0; }
+.adapter-more { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 8px; border-radius: 8px; border: 1px dashed #4b5d48; background: transparent; color: #a9bd9f; font-size: 12.5px; cursor: pointer; }
+.adapter-more:hover { border-color: #8fbf7f; color: #eaf3e2; }
+.adapter-more .rotated { transform: rotate(180deg); }
+/* the sample players are dark like the rest of the window (the browser default is a white bar) */
+.adapter-detail-dialog audio, .adapter-samples audio { color-scheme: dark; }
+/* the sample players have only slightly rounded corners (the default is a pill) */
+.adapter-detail-dialog audio, .adapter-samples audio { border-radius: 6px; }
+.adapter-detail-dialog audio::-webkit-media-controls-enclosure, .adapter-samples audio::-webkit-media-controls-enclosure { border-radius: 6px; }
