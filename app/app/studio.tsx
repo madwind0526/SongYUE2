@@ -3618,8 +3618,8 @@ function AiPolishDialog({ project, onClose, notify, onCreated }: { project: Proj
           <div className="stem-list">
             {row('source', '원본', sourceBuffer, false, project.title)}
             {row('output', '다듬은 곡', outputBuffer, true, outputBuffer ? appliedStages.map(stage => stageLabels[stage]).join(' → ') : '아직 만들지 않았습니다')}
+            {report && <PolishReportPanel report={report}/>}
           </div>
-          {report && <PolishReportPanel report={report}/>}
           <span className="field-hint">두 줄의 재생 버튼을 번갈아 누르면 같은 재생 위치에서 이어서 들려서 차이만 비교할 수 있습니다.</span>
           <SeekRow t={t}/>
           <div className="dialog-actions pp-dialog-actions">
