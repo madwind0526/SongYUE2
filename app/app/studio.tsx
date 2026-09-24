@@ -3496,7 +3496,7 @@ function AdapterPage({ notify }: { notify: (text: string, error?: boolean) => vo
                 const done = entry.paths.every(path => installedKeys.has(`${detail.id}::${path}`));
                 const key = `entry:${entry.id}`;
                 return <div key={entry.id} className={`adapter-unit${done ? ' done' : ''}`}>
-                  <div><strong>{entry.label}{entry.version && <span className="adapter-chip version" title="버전 (파일 이름에서 읽은 숫자)">{entry.version}</span>}</strong><small>{STAGE_LABEL[entry.stage] || entry.stage}{entry.size ? ` · ${formatSize(entry.size)}` : ''} · {entry.detail}</small></div>
+                  <div><strong>{entry.label}</strong><small>{STAGE_LABEL[entry.stage] || entry.stage}{entry.size ? ` · ${formatSize(entry.size)}` : ''} · {entry.detail}</small></div>
                   {done
                     ? (deleting === key
                       ? <button type="button" className="adapter-icon-btn danger confirm" aria-label={`${entry.label} 삭제 확인`} onClick={() => void removeEntry(detail.id, entry)}><Trash2 size={14}/>삭제?</button>
