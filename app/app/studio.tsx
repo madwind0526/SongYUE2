@@ -3068,7 +3068,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
             const shown = title.length > 28 ? `${title.slice(0, 28)}…` : title;
             return <div key={voice.id} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
               <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#7ee787', fontWeight: 600 }} title={`${voice.name}
-${voice.repo}${voice.hasIndex ? ' · 블렌딩 가능' : ' · 블렌딩 불가'}`}>{shown}</span>
+${voice.repo}`}>{shown}</span>
               <Button variant="outline" size="sm" aria-label="삭제" title="이 목소리 삭제" onClick={() => void deleteRvcOnline(voice.id)} disabled={busy}><Trash2 size={13}/></Button>
             </div>;
           })}
