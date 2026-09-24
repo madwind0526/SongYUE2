@@ -267,3 +267,16 @@
 .polish-slider { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: #a9b8a4; }
 .polish-slider > span { display: flex; justify-content: space-between; }
 .polish-slider b { color: #e4ece0; font-weight: 600; }
+
+/* 가사 싱크 */
+.lyric-sync-dialog { max-width: 640px; }
+.lyric-sync-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0; }
+.lyric-sync-list { display: flex; flex-direction: column; max-height: 300px; overflow: auto; border: 1px solid #3b493d; border-radius: 10px; background: #1a211a; margin-top: 8px; }
+.lyric-sync-line { display: flex; gap: 12px; text-align: left; padding: 7px 12px; font-size: 13px; color: #a9b8a4; border: 0; background: transparent; border-bottom: 1px solid #263026; cursor: pointer; }
+.lyric-sync-line:hover { background: #222c22; }
+.lyric-sync-line.current { color: #f0f7ea; background: #2a3a2a; }
+.lyric-sync-line.weak { color: #c9a86a; }
+.lyric-sync-time { flex: none; width: 52px; font-variant-numeric: tabular-nums; color: #7f917b; }
+.player-lyric { display: flex; flex-direction: column; align-items: center; gap: 2px; min-height: 36px; padding: 2px 8px; text-align: center; }
+.player-lyric .current { font-size: 14px; font-weight: 600; color: #e8f2e2; }
+.player-lyric .next { font-size: 11px; color: #6f806c; }

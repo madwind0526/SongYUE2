@@ -113,6 +113,18 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 | POST `/api/postprocess-settings` | `{name,params:{...}}` → 저장된 프리셋(같은 이름이면 덮어씀). `params`가 객체가 아니면 400 |
 | DELETE `/api/postprocess-settings?name=` | 프리셋 삭제 → `{ok:true}`. 없으면 404 |
 
+## 가사 싱크 (LRC / 재생 중 가사 표시)
+
+곡의 가사를 소리에 맞춰 줄 단위 시간으로 만든다. 방식: ① Mel-Band RoFormer로 보컬 분리 → ② Qwen3-ASR(+ Qwen3 Forced Aligner, `--words-out`)로 들린 단어의 시간을 구함(단독 정렬기는 긴 오디오를 못 받아 `max_source_positions` 오류가 나므로 ASR이 오디오를 나눠 각 조각을 정렬하는 이 경로를 쓴다) → ③ 들린 글자와 곡의 가사 글자를 편집거리 정렬(`backend/lyricsync.mjs`)로 맞춰 줄 시작 시각을 얻음. 인식이 조금 틀려도(앞의 대사 누락, 허밍 환각, 철자 차이) 동작하며, 인식되지 않은 줄은 이웃 줄 사이에서 추정한다(`estimated: true`). 가사의 `[Verse]` 같은 태그 줄과 빈 줄은 제외한다.
+
+| 엔드포인트 | 설명 |
+|---|---|
+| POST `/api/projects/:id/lyrics-sync` | 싱크를 만들어 `{language, coverage, lines:[{text,start,end,confidence,estimated,words:[{text,start,end}]}], stale:false}`를 돌려주고 곡 옆에 `<이름>.lyrics.json`, `<이름>.lrc`로 저장. 가사가 없으면 400, Qwen3-ASR 또는 Forced Aligner 모델이 없으면 409(받는 방법 안내), 다른 작업 중이면 409 |
+| GET `/api/projects/:id/lyrics-sync` | 저장된 싱크. 없으면 404. `stale`은 곡 파일이 더 새롭거나 가사가 바뀐 경우 true |
+| GET `/api/projects/:id/lrc` | LRC 텍스트(`[mm:ss.xx]가사`, `[ti:]`, `[length:]` 포함) |
+
+곡 목록은 `.notes.json`과 `.lyrics.json`을 곡으로 읽지 않는다. 곡 이름을 바꾸면 두 부속 파일도 같이 이동하고, 곡을 지우면 함께 지워진다. `GET /api/projects/:id/audio`는 HTTP Range(`bytes=a-b`, `bytes=a-`)에 206으로 답한다(플레이어가 재생 위치를 옮기는 데 필요, 범위 밖은 416). 실측(2분대 곡 3곡): 영어 글자 일치율 92%·26줄 중 23줄이 보컬 위, 한국어 100%·25/25, 일본어 96%·24/25, 처리 약 20~25초(보컬 분리 약 11초 + 인식 약 7초).
+
 ## AI 곡 다듬기 (노이즈 제거 · Spectral Lifter · 보컬 자연화 · 기준곡 마스터링)
 
 완성곡의 메뉴 "AI 곡 다듬기"가 쓰는 후처리 체인이다. 알고리듬은 YuE2 Studio(MIT)의 `audio-post` 크레이트를 Node로 옮긴 것이며(`backend/postfx/`), 순수 DSP라 같은 입력·설정이면 결과가 같다. 무거운 계산은 워커 스레드(`postfx/worker.mjs`)에서 돌려 API 서버가 멈추지 않는다. 처리 순서는 고정: 노이즈 제거 → Spectral Lifter → 보컬 자연화 → 기준곡 마스터링. 사용자가 단계를 켜고 시작해야 하며(자동 적용 아님), 결과는 미리듣기로만 만들어지고 사용자가 저장해야 라이브러리에 추가된다.

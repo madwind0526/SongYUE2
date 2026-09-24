@@ -2115,3 +2115,101 @@ test('AI 곡 다듬기: 완성곡을 처리기에 넘겨 미리듣기를 만들�
   assert.equal((await callJson('/api/polish/not-a-preview/save', 'POST', {})).status, 404);
   assert.deepEqual((await readdir(path.join(root, 'runs'))).filter(name => name.startsWith('polish-')), []);
 });
+
+test('가사 싱크: 보컬 분리 -> 인식(단어 시간) -> 가사 줄 매칭 결과를 곡 옆에 캐시하고, LRC를 내려주며, 이름을 바꾸거나 지우면 함께 움직인다', async t => {
+  resetEnv();
+  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-lyrsync-'));
+  const { enginePath } = await setUpEngine(root);
+  const fakeSpawn = makeFakeSpawn();
+  const asrCalls = [];
+  // the recognizer stub answers with word times for the lyrics below; everything else goes to the shared fake
+  const spawnImpl = (engine, args, options) => {
+    if (Array.isArray(args) && args.includes('asr') && args.includes('--words-out')) {
+      asrCalls.push(args);
+      const words = [['안녕하세요', 2, 3], ['반갑습니다', 3.2, 4.4], ['다시', 8, 8.5], ['만나요', 8.5, 9.3]].map(([word, start, end]) => ({ word, start_sample: Math.round(start * 16000), end_sample: Math.round(end * 16000), confidence: 0 }));
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.kill = () => {};
+      (async () => { await writeFile(args[args.indexOf('--words-out') + 1], JSON.stringify(words)); await new Promise(resolve => setTimeout(resolve, 0)); child.emit('close', 0, null); })();
+      return child;
+    }
+    return fakeSpawn.spawnImpl(engine, args, options);
+  };
+  const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}), spawnImpl });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const callJson = async (route, method = 'GET', payload) => { const response = await fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) }); return { status: response.status, data: await response.json() }; };
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+  await callJson('/api/settings', 'PUT', { enginePath });
+
+  // a finished song with lyrics in the library
+  const musicDir = path.join(root, 'library', 'Music');
+  await mkdir(musicDir, { recursive: true });
+  const songId = '7a511ed9-2754-41b4-8c19-312fd7df30b7';
+  const song = { id: songId, title: '싱크 곡', lyrics: '[Verse 1]\n안녕하세요\n반갑습니다\n\n[Chorus]\n다시\n만나요\n', style: 'test', status: 'completed', audioPath: '싱크 곡.flac', durationMs: 12000, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  await writeFile(path.join(musicDir, '싱크 곡.json'), JSON.stringify(song));
+  await writeFile(path.join(musicDir, '싱크 곡.flac'), 'fake-audio');
+  const noLyrics = '11111111-2222-4333-8444-555555555555';
+  await writeFile(path.join(musicDir, '가사 없음.json'), JSON.stringify({ ...song, id: noLyrics, title: '가사 없음', lyrics: '[Intro]\n', audioPath: '가사 없음.flac' }));
+  await writeFile(path.join(musicDir, '가사 없음.flac'), 'fake-audio');
+
+  assert.equal((await callJson(`/api/projects/${songId}/lyrics-sync`)).status, 404, 'no sync yet');
+  assert.equal((await callJson(`/api/projects/${noLyrics}/lyrics-sync`, 'POST', {})).status, 400);
+  // models are required: the recognizer first, then the aligner
+  const asrDir = path.join(root, 'models', 'audio-cpp', 'audio.cpp-gguf', 'Qwen3-ASR-1.7B-GGUF');
+  const alignDir = path.join(root, 'models', 'audio-cpp', 'audio.cpp-gguf', 'Qwen3-ForcedAligner-0.6B-GGUF');
+  const noAsr = await callJson(`/api/projects/${songId}/lyrics-sync`, 'POST', {});
+  assert.equal(noAsr.status, 409);
+  assert.match(noAsr.data.error, /Qwen3-ASR/);
+  await mkdir(asrDir, { recursive: true });
+  await writeFile(path.join(asrDir, 'qwen3-asr-1.7b-q8_0.gguf'), 'stub');
+  const noAlign = await callJson(`/api/projects/${songId}/lyrics-sync`, 'POST', {});
+  assert.equal(noAlign.status, 409);
+  assert.match(noAlign.data.error, /Forced Aligner/);
+  await mkdir(alignDir, { recursive: true });
+  await writeFile(path.join(alignDir, 'qwen3-forced-aligner-0.6b-q8_0.gguf'), 'stub');
+
+  const made = await callJson(`/api/projects/${songId}/lyrics-sync`, 'POST', {});
+  assert.equal(made.status, 200);
+  assert.equal(made.data.language, 'ko');
+  assert.equal(made.data.coverage, 1);
+  assert.deepEqual(made.data.lines.map(line => line.text), ['안녕하세요', '반갑습니다', '다시', '만나요']);
+  assert.ok(Math.abs(made.data.lines[0].start - 2.02) < 0.1 && Math.abs(made.data.lines[2].start - 8.02) < 0.1);
+  assert.ok(fakeSpawn.calls.some(c => c.args.includes('mel_band_roformer')), 'vocals are separated first');
+  assert.ok(asrCalls[0].includes('Korean') && asrCalls[0].some(arg => String(arg).startsWith('qwen3_asr.forced_aligner_model_path=')));
+  assert.ok(asrCalls[0].some(arg => String(arg).includes('16k')) || asrCalls[0].includes('--audio'));
+  // cached next to the song; the sidecar json is not mistaken for a song
+  const cached = await callJson(`/api/projects/${songId}/lyrics-sync`);
+  assert.equal(cached.status, 200);
+  assert.equal(cached.data.stale, false);
+  assert.deepEqual((await readdir(musicDir)).sort(), ['가사 없음.flac', '가사 없음.json', '싱크 곡.flac', '싱크 곡.json', '싱크 곡.lrc', '싱크 곡.lyrics.json']);
+  assert.equal((await callJson('/api/projects')).data.length, 2);
+  const lrc = await (await fetch(`${base}/api/projects/${songId}/lrc`)).text();
+  assert.match(lrc, /^\[ti:싱크 곡\]\n\[length:00:12\]\n\[00:02\.\d\d\]안녕하세요\n\[00:03\.\d\d\]반갑습니다\n\[00:08\.\d\d\]다시\n\[00:08\.\d\d\]만나요\n$/);
+
+  // changing the lyrics makes the cache stale
+  await writeFile(path.join(musicDir, '싱크 곡.json'), JSON.stringify({ ...song, lyrics: '안녕하세요\n새로운 가사\n' }));
+  assert.equal((await callJson(`/api/projects/${songId}/lyrics-sync`)).data.stale, true);
+  await writeFile(path.join(musicDir, '싱크 곡.json'), JSON.stringify(song));
+
+  // the audio route answers byte-range requests (needed to seek in the player and in this dialog)
+  const whole = await fetch(`${base}/api/projects/${songId}/audio`);
+  assert.equal(whole.status, 200);
+  assert.equal(whole.headers.get('accept-ranges'), 'bytes');
+  assert.equal(await whole.text(), 'fake-audio');
+  const part = await fetch(`${base}/api/projects/${songId}/audio`, { headers: { Range: 'bytes=5-8' } });
+  assert.equal(part.status, 206);
+  assert.equal(part.headers.get('content-range'), 'bytes 5-8/10');
+  assert.equal(await part.text(), 'audi');
+  const tail = await fetch(`${base}/api/projects/${songId}/audio`, { headers: { Range: 'bytes=7-' } });
+  assert.equal(tail.status, 206);
+  assert.equal(await tail.text(), 'dio');
+  assert.equal((await fetch(`${base}/api/projects/${songId}/audio`, { headers: { Range: 'bytes=99-' } })).status, 416);
+
+  // renaming the song keeps its sync files with it, deleting the song removes them
+  const renamed = await callJson(`/api/projects/${songId}`, 'PATCH', { title: '새 이름' });
+  assert.equal(renamed.status, 200);
+  assert.ok((await readdir(musicDir)).includes('새 이름.lrc') && (await readdir(musicDir)).includes('새 이름.lyrics.json'));
+  assert.equal((await callJson(`/api/projects/${songId}/lyrics-sync`)).status, 200);
+  assert.equal((await callJson(`/api/projects/${songId}`, 'DELETE', {})).status, 200);
+  assert.deepEqual((await readdir(musicDir)).filter(name => name.startsWith('새 이름')), []);
+});

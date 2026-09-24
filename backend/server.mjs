@@ -2,7 +2,7 @@ import http from 'node:http';
 import { mkdir, readFile, writeFile, rename, readdir, access, unlink, rm, stat, copyFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomInt, randomUUID } from 'node:crypto';
+import { createHash, randomInt, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
 import { comfyUiAlive, execute as executeComfyUi } from './comfyui.mjs';
@@ -11,6 +11,7 @@ import { startDdspJob, killDdspJob } from './ddsp-svc.mjs';
 import { searchRvcVoices, downloadRvcVoice, listInstalledRvcVoices, resolveUserRvcVoice, deleteRvcVoice } from './rvcvoices.mjs';
 import { TYPECAST_LANGUAGES, typecastSubscription, listTypecastVoices, typecastSpeak, recommendTypecastVoice, cloneTypecastVoice, deleteTypecastVoice, TypecastError } from './typecast.mjs';
 import { Worker } from 'node:worker_threads';
+import { lyricLines, detectLanguage, alignLyrics, toLrc } from './lyricsync.mjs';
 import { runPolishChain, normalizePolishSettings, enabledStages } from './postfx/chain.mjs';
 import { startRealtimeVcProcess, REALTIME_CHUNK_SAMPLES, REALTIME_INPUT_RATE } from './realtimevc.mjs';
 import { readWavPcm16, wavFromPcm16, findSpeechSegments, spliceSegments, locateWords, planWindows, snapToQuietPoint } from './speechedit.mjs';
@@ -305,7 +306,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const entries = [];
     for (const dir of [settingDir(), musicDir()]) {
       const files = await readdir(dir).catch(() => []);
-      for (const name of files.filter((entry) => entry.endsWith('.json') && !entry.endsWith('.notes.json'))) {
+      for (const name of files.filter((entry) => entry.endsWith('.json') && !entry.endsWith('.notes.json') && !entry.endsWith('.lyrics.json'))) {
         const project = await readJson(path.join(dir, name), null);
         if (project) entries.push({ project, file: path.join(dir, name) });
       }
@@ -1195,6 +1196,65 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   }
   // "음원 비교" 다이얼로그처럼 프로젝트와 무관하게 브라우저에서 이미 완성된(원본 그대로거나
   // 클라이언트 측 후처리를 거친) WAV 버퍼를 그대로 라이브러리에 추가할 때 쓰는 범용 저장 경로.
+  // ---- lyric sync (karaoke / LRC) ----
+  // Vocals are separated, Qwen3-ASR (with the forced aligner) times the words it hears, and those words are matched
+  // to the song's own lyric lines (backend/lyricsync.mjs). The result is cached next to the song as <name>.lyrics.json
+  // and <name>.lrc.
+  const lyricSidecarPaths = (audioFile) => { const base = audioFile.slice(0, audioFile.length - path.extname(audioFile).length); return { json: `${base}.lyrics.json`, lrc: `${base}.lrc` }; };
+  async function moveLyricSidecars(oldAudio, newAudio) {
+    const from = lyricSidecarPaths(oldAudio);
+    const to = newAudio ? lyricSidecarPaths(newAudio) : null;
+    for (const key of ['json', 'lrc']) {
+      if (!(await exists(from[key]))) continue;
+      if (to) await rename(from[key], to[key]).catch(() => {}); else await unlink(from[key]).catch(() => {});
+    }
+  }
+  async function readLyricSync(entry) {
+    if (!entry.project.audioPath) return null;
+    const audioFile = path.join(path.dirname(entry.file), entry.project.audioPath);
+    const { json } = lyricSidecarPaths(audioFile);
+    const cached = await readJson(json, null);
+    if (!cached?.lines) return null;
+    const [audioStat, cacheStat] = await Promise.all([stat(audioFile).catch(() => null), stat(json).catch(() => null)]);
+    return { ...cached, stale: !!(audioStat && cacheStat && audioStat.mtimeMs > cacheStat.mtimeMs + 1000) || cached.lyricsHash !== lyricsHash(entry.project.lyrics) };
+  }
+  const lyricsHash = (lyrics) => createHash('sha1').update(String(lyrics || '')).digest('hex').slice(0, 12);
+  async function syncLyrics(entry) {
+    const lines = lyricLines(entry.project.lyrics);
+    if (!lines.length) throw fail(400, '이 곡에는 가사가 없어 싱크를 만들 수 없습니다.');
+    if (!entry.project.audioPath) throw fail(404, '완성된 음원을 찾을 수 없습니다.');
+    const audioFile = path.join(path.dirname(entry.file), entry.project.audioPath);
+    if (!(await exists(audioFile))) throw fail(404, '음원 파일을 찾을 수 없습니다.');
+    let asrModel = null;
+    for (const size of ['1.7B', '0.6B']) for (const precision of ['q8_0', 'f16']) {
+      const candidate = findTtsModel('qwen3asr', 'asr', size, precision);
+      if (!asrModel && candidate && await isTtsModelInstalled(root, candidate)) asrModel = candidate;
+    }
+    if (!asrModel) throw fail(409, "가사 싱크에는 Qwen3-ASR 음성 인식 모델이 필요합니다. Audio Tools의 음성 인식(STT)에서 '모델 받기'를 눌러 내려받아 주세요.");
+    const alignModel = findTtsModel('qwen3align', 'align', '0.6B', 'q8_0');
+    if (!(await isTtsModelInstalled(root, alignModel))) throw fail(409, "가사 싱크에는 단어 정렬 모델(Qwen3 Forced Aligner)이 필요합니다. Audio Tools의 대사 편집에서 '단어 단위 정밀 편집'의 '모델 받기'를 눌러 내려받아 주세요.");
+    const language = detectLanguage(lines.join(' '));
+    const workDir = path.join(outputDirectory, `lyrics-sync-${randomUUID()}`);
+    try {
+      await separateStemsCore(audioFile, workDir, 'vocal');
+      const vocals16 = path.join(workDir, 'vocals-16k.wav');
+      await runFfmpegCli(['-y', '-i', path.join(workDir, 'vocals.wav'), '-ar', '16000', '-ac', '1', vocals16], '보컬 변환');
+      const wordsFile = path.join(workDir, 'words.json');
+      const languageName = asrModel.family.languages[language];
+      await runTtsCli(['--task', 'asr', '--family', asrModel.family.cliFamily, '--model', path.join(root, asrModel.relativePath), '--audio', vocals16, ...(languageName ? ['--language', languageName] : []), '--text', '', '--text-out', path.join(workDir, 'heard.txt'), '--words-out', wordsFile, '--session-option', `qwen3_asr.forced_aligner_model_path=${path.join(root, alignModel.relativePath)}`, '--session-option', 'qwen3_asr.vad_model_path=assets/framework/models/silero_vad'], wordsFile);
+      let heard;
+      try { heard = JSON.parse(await readFile(wordsFile, 'utf8')); } catch { throw fail(502, '가사 싱크에 실패했습니다. 인식 결과를 읽지 못했습니다.'); }
+      let aligned;
+      try { aligned = alignLyrics(lines, Array.isArray(heard) ? heard : []); } catch (error) { throw fail(422, error.message); }
+      const result = { version: 1, generatedAt: new Date().toISOString(), language, lyricsHash: lyricsHash(entry.project.lyrics), coverage: aligned.coverage, lines: aligned.lines };
+      const { json, lrc } = lyricSidecarPaths(audioFile);
+      await writeFile(json, JSON.stringify(result, null, 1), 'utf8');
+      await writeFile(lrc, toLrc(aligned, { title: entry.project.title, durationMs: entry.project.durationMs || 0 }), 'utf8');
+      return { ...result, stale: false };
+    } finally {
+      await rm(workDir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
   // ---- AI song polish (noise reduction, Spectral Lifter, vocal naturalizer, mastering to a reference) ----
   // The DSP runs in a worker thread on raw float32 stereo files; ffmpeg decodes the song (and the reference, at the
   // song's sample rate) and encodes the preview as 24-bit FLAC. Previews are temporary until the user saves one.
@@ -1841,7 +1901,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           const entry = await findEntry(projectMatch[1]);
           if (!entry) throw fail(404, '프로젝트를 찾을 수 없습니다.');
           await unlink(entry.file);
-          if (entry.project.status === 'completed' && entry.project.audioPath) await unlink(path.join(path.dirname(entry.file), entry.project.audioPath)).catch(() => {});
+          if (entry.project.status === 'completed' && entry.project.audioPath) { const audioFile = path.join(path.dirname(entry.file), entry.project.audioPath); await unlink(audioFile).catch(() => {}); await moveLyricSidecars(audioFile, null); }
           if (entry.project.coverPath) await unlink(path.join(coversDir(), entry.project.coverPath)).catch(() => {});
           await rm(path.join(outputDirectory, entry.project.id), { recursive: true, force: true });
           return { ok: true, id: entry.project.id };
@@ -1864,7 +1924,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
                   const ext = path.extname(project.audioPath);
                   const oldAudio = path.join(path.dirname(file), project.audioPath);
                   const newAudio = target.replace(/\.json$/, ext);
-                  if (await exists(oldAudio)) { await rename(oldAudio, newAudio); project.audioPath = path.basename(newAudio); }
+                  if (await exists(oldAudio)) { await rename(oldAudio, newAudio); project.audioPath = path.basename(newAudio); await moveLyricSidecars(oldAudio, newAudio); }
                 }
                 file = target;
               }
@@ -2318,9 +2378,22 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           audioFile = cached;
         }
         const data = await readFile(audioFile);
+        // HTTP Range support: the player seeks by asking for a byte range (a 200 with the whole file cannot be seeked reliably)
+        let status = 200;
+        let body = data;
+        const rangeHeaders = { 'Accept-Ranges': 'bytes' };
+        const range = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range || ''));
+        if (range && (range[1] || range[2])) {
+          const start = range[1] ? Number(range[1]) : Math.max(0, data.length - Number(range[2]));
+          const end = range[1] && range[2] ? Math.min(Number(range[2]), data.length - 1) : data.length - 1;
+          if (start >= data.length || start > end) { res.writeHead(416, { 'Content-Range': `bytes */${data.length}` }); return res.end(); }
+          status = 206;
+          body = data.subarray(start, end + 1);
+          rangeHeaders['Content-Range'] = `bytes ${start}-${end}/${data.length}`;
+        }
         const disposition = requestUrl.searchParams.get('download') ? `attachment; filename="${encodeURIComponent(path.basename(audioFile))}"` : 'inline';
-        res.writeHead(200, { 'Content-Type': AUDIO_MIME_TYPES[path.extname(audioFile)] || 'application/octet-stream', 'Content-Length': String(data.length), 'Content-Disposition': disposition, 'Cache-Control': 'no-store' });
-        return res.end(data);
+        res.writeHead(status, { ...rangeHeaders, 'Content-Type': AUDIO_MIME_TYPES[path.extname(audioFile)] || 'application/octet-stream', 'Content-Length': String(body.length), 'Content-Disposition': disposition, 'Cache-Control': 'no-store' });
+        return res.end(body);
       }
       const midiNotesMatch = pathname.match(/^\/api\/projects\/([^/]+)\/midi\/notes$/);
       if (midiNotesMatch && req.method === 'GET') {
@@ -2587,6 +2660,31 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         if (req.method === 'POST' && realtimeMatch[2] === 'stop') {
           await stopRealtime();
           return send(200, { ok: true });
+        }
+      }
+      const lyricSyncMatch = pathname.match(/^\/api\/projects\/([^/]+)\/(lyrics-sync|lrc)$/);
+      if (lyricSyncMatch) {
+        const entry = await findEntry(lyricSyncMatch[1]);
+        if (!entry || entry.project.status !== 'completed' || !entry.project.audioPath) throw fail(404, '완성된 곡을 찾을 수 없습니다.');
+        if (req.method === 'GET' && lyricSyncMatch[2] === 'lyrics-sync') {
+          const cached = await readLyricSync(entry);
+          if (!cached) throw fail(404, '아직 가사 싱크가 없습니다.');
+          return send(200, cached);
+        }
+        if (req.method === 'GET' && lyricSyncMatch[2] === 'lrc') {
+          const { lrc } = lyricSidecarPaths(path.join(path.dirname(entry.file), entry.project.audioPath));
+          if (!(await exists(lrc))) throw fail(404, '아직 가사 싱크가 없습니다.');
+          const data = await readFile(lrc);
+          res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Content-Length': String(data.length), 'Cache-Control': 'no-store' });
+          return res.end(data);
+        }
+        if (req.method === 'POST' && lyricSyncMatch[2] === 'lyrics-sync') {
+          await body(req, 4 * 1024);
+          if (generating) throw fail(409, '이미 다른 작업을 실행 중입니다. 완료 후 다시 시도해 주세요.');
+          generating = true;
+          generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 30000 };
+          try { return send(200, await syncLyrics(entry)); }
+          finally { generating = false; generationStatus = null; }
         }
       }
       const polishStartMatch = pathname.match(/^\/api\/projects\/([^/]+)\/polish$/);

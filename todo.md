@@ -140,5 +140,5 @@ DDSP-SVC 탭은 실제 GPU로 목표 스텝을 작게 잡아(`targetStep: 300`) 
 
 ## 개선 계획 (2026-09-25, YuE2 Studio 비교 결과) — 순서 1 → 2 → 3
 - [x] **1. 곡 후처리 확장: AI 곡 다듬기** (완료): `backend/postfx/`(FFT/STFT, 노이즈 제거, Spectral Lifter, 보컬 자연화, 기준곡 마스터링·리미터), 워커 스레드, `/api/projects/:id/polish`·`/api/polish/:previewId/*`, 화면 `AiPolishDialog`(곡 메뉴 "AI 곡 다듬기"). 원본 Rust 테스트의 성질 9개 + API 테스트 통과, 125초 곡 전체 체인 6.5초. **품질은 실제 곡으로 들어 보고 판단 필요**. 남은 것: VST3 단계(선택), 자연화 세부 항목(비브라토 등) 노출 여부.
-- [ ] **2. 가사 싱크(LRC)**: 보컬 분리 + 곡 가사 + Qwen3 Forced Aligner로 단어별 시간 → LRC 저장, 플레이어 가사 표시.
+- [x] **2. 가사 싱크(LRC)** (완료): `backend/lyricsync.mjs`(편집거리 매칭), `/api/projects/:id/lyrics-sync`·`/lrc`, 화면 `LyricsSyncDialog`(곡 메뉴 "가사 싱크 (LRC)") + 플레이어 하단 현재 가사. 3곡 실측 한국어 100%·영어 92%·일본어 96%. 음원 응답에 HTTP Range 지원 추가. 남은 것: 단어 단위 하이라이트(데이터는 `words`에 이미 있음), 화자/듀엣 구분.
 - [ ] **3. LoRA**: 먼저 Studio의 `yue-server`에 이 앱의 Q8 GGUF가 로드되는지, 공개 LoRA가 실제로 들리는지 시험 → 되면 두 번째 YuE2 엔진으로 통합.
