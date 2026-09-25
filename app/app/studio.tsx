@@ -3664,14 +3664,14 @@ type TrainStatus = { readiness: { ready: boolean; checks: Record<string, { ok: b
 type TrainScan = { dir: string; count: number; bytes: number; minutes: number; seconds: number; captions: number; files: { name: string; bytes: number; seconds: number }[] };
 // end condition: a number of steps, or a number of passes over all the chosen material (1 step = one random clip; a pass = all clips once)
 const TRAIN_PACE_SECONDS_PER_STEP = 0.85;
-const TRAIN_CLIP_CHOICES = [3, 4, 5, 6];
 // "찾기" for the training folder: walks the drives and folders of this PC (the app runs locally); the chosen folder's path goes back to the form
 type FolderListing = { path: string; parent: string | null; dirs: { name: string; path: string }[]; songs: number };
 function FolderBrowser({ start, onPick, onClose }: { start: string; onPick: (path: string) => void; onClose: () => void }) {
   const [listing, setListing] = useState<FolderListing | null>(null);
   const [error, setError] = useState('');
+  const [selected, setSelected] = useState('');
   const open = async (target: string) => {
-    setError('');
+    setError(''); setSelected('');
     try { setListing(await api<FolderListing>(`/lora-train/browse?path=${encodeURIComponent(target)}`)); }
     catch (failure) { setError((failure as Error).message); }
   };
@@ -3679,17 +3679,17 @@ function FolderBrowser({ start, onPick, onClose }: { start: string; onPick: (pat
   return <Dialog open onOpenChange={next => { if (!next) onClose(); }}>
     <DialogContent className="studio-dialog folder-browser">
       <DialogTitle>곡이 들어 있는 폴더 찾기</DialogTitle>
-      <DialogDescription>{listing?.path ? listing.path : '드라이브를 고르세요.'}</DialogDescription>
+      <DialogDescription>{selected ? `선택: ${selected}` : listing?.path ? `현재 폴더: ${listing.path}` : '드라이브를 고르세요.'} (한 번 클릭하면 선택, 더블 클릭하면 안으로 들어갑니다)</DialogDescription>
       {error && <p className="field-hint warning">{error}</p>}
       <div className="folder-list">
         {listing && listing.path && <button type="button" className="folder-row up" onClick={() => void open(listing.parent || '')}><ChevronLeft size={14}/>위로 ({listing.parent || '드라이브 목록'})</button>}
-        {listing?.dirs.map(dir => <button type="button" key={dir.path} className="folder-row" onClick={() => void open(dir.path)}><FolderOpen size={14}/>{dir.name}</button>)}
+        {listing?.dirs.map(dir => <button type="button" key={dir.path} className={`folder-row${selected === dir.path ? ' selected' : ''}`} onClick={() => setSelected(dir.path)} onDoubleClick={() => void open(dir.path)}><FolderOpen size={14}/>{dir.name}</button>)}
         {listing && listing.dirs.length === 0 && listing.path && <p className="field-hint">하위 폴더가 없습니다.</p>}
       </div>
       <div className="dialog-actions">
-        <span className="field-hint folder-songs">{listing?.path ? `이 폴더의 곡: ${listing.songs}개(mp3, wav, flac)` : ''}</span>
+        <span className="field-hint folder-songs">{listing?.path ? `열려 있는 폴더의 곡: ${listing.songs}개(mp3, wav, flac)` : ''}</span>
         <Button variant="outline" onClick={onClose}>취소</Button>
-        <Button disabled={!listing?.path} onClick={() => { if (listing?.path) { onPick(listing.path); onClose(); } }}><Check size={15}/>이 폴더 선택</Button>
+        <Button disabled={!selected && !listing?.path} onClick={() => { const target = selected || listing?.path; if (target) { onPick(target); onClose(); } }}><Check size={15}/>이 폴더 선택</Button>
       </div>
     </DialogContent>
   </Dialog>;
@@ -3706,7 +3706,9 @@ function LoraTrainTab({ notify, onInstalled }: { notify: (text: string, error?: 
   const [endMode, setEndMode] = useState<'steps' | 'passes'>('steps');
   const [passes, setPasses] = useState(3);
   const [rank, setRank] = useState(16);
-  const [clip, setClip] = useState(6);
+  const [clipText, setClipText] = useState('');
+  const clipValue = Number(clipText);
+  const clip = clipText.trim() && Number.isFinite(clipValue) ? Math.min(10, Math.max(2, clipValue)) : 6;
   const [chosen, setChosen] = useState<string[]>([]);
   const [browsing, setBrowsing] = useState(false);
   const [caption, setCaption] = useState('');
@@ -3783,7 +3785,7 @@ function LoraTrainTab({ notify, onInstalled }: { notify: (text: string, error?: 
         </div>}
         <label className="train-field">LoRA 이름<Input value={name} maxLength={60} placeholder="예: 지수 음색" onChange={event => setName(event.target.value)}/></label>
         <label className="train-field">트리거 단어 (영문)<Input value={trigger} maxLength={30} placeholder="예: jisoo_voice" onChange={event => setTrigger(event.target.value)}/><small>곡을 만들 때 스타일 맨 앞에 이 단어를 넣으면 이 LoRA가 반응합니다.</small></label>
-        <label className="train-field">조각 길이 (곡을 자르는 길이)<select value={clip} onChange={event => setClip(Number(event.target.value))} aria-label="조각 길이">{TRAIN_CLIP_CHOICES.map(item => <option key={item} value={item}>{item}초{item === 6 ? ' (기본, 12 GB 카드 한계)' : item < 5 ? ' (메모리 여유, 짧은 단위)' : ''}</option>)}</select><small>곡을 이 길이로 잘라 학습합니다. 길수록 곡의 흐름을 더 배우지만 메모리를 더 씁니다. 이 PC(12 GB)는 6초까지 됩니다.</small></label>
+        <label className="train-field">조각 길이 (곡을 자르는 길이, 2~10초)<Input type="number" min={2} max={10} step={0.5} value={clipText} placeholder="6초 (기본, 12G GPU 한계)" aria-label="조각 길이" onChange={event => setClipText(event.target.value)} onBlur={() => { if (clipText.trim()) setClipText(String(clip)); }}/><small>곡을 이 길이로 잘라 학습합니다. 길수록 곡의 흐름을 더 배우지만 메모리를 더 씁니다. 이 PC(12 GB)는 6초까지 확인했고, 그보다 길면 메모리 부족으로 실패할 수 있습니다.</small></label>
         <label className="train-field">크기 (rank)<select value={rank} onChange={event => setRank(Number(event.target.value))} aria-label="LoRA rank"><option value={16}>16 · 작게 (약 107 MB)</option><option value={32}>32 · 보통 (약 213 MB)</option></select><small>작으면 파일이 반으로 줄고 학습도 조금 가볍습니다.</small></label>
         <div className="train-field wide train-end"><span>끝내는 조건</span>
           <div className="train-end-row">

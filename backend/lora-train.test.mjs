@@ -26,7 +26,9 @@ test('the training request is cleaned and limited', () => {
   assert.equal(ok.trigger, 'jisoo_voice');
   assert.equal(ok.steps, 20000);
   assert.equal(ok.rank, 32, 'an unknown rank falls back to 32');
-  assert.equal(ok.clipSeconds, 6, 'the clip length is at most 6 s (12 GB cards)');
+  assert.equal(ok.clipSeconds, 10, 'the clip length is between 2 and 10 s');
+  assert.equal(cleanTrainRequest({ name: 'a', triggerWord: 'a', clipSeconds: 0.5 }).clipSeconds, 2);
+  assert.equal(cleanTrainRequest({ name: 'a', triggerWord: 'a' }).clipSeconds, 6, 'default 6 s');
   assert.equal(ok.learningRate, 1e-4);
   assert.throws(() => cleanTrainRequest({ triggerWord: 'a' }), /이름/);
   assert.throws(() => cleanTrainRequest({ name: 'a', triggerWord: '한글' }), /트리거/);

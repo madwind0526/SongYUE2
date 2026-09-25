@@ -57,7 +57,7 @@ export function cleanTrainRequest(input = {}) {
     name, trigger,
     steps: Math.round(number(input.steps, 50, 20000, 1500)),
     rank: [8, 16, 32, 64].includes(Number(input.rank)) ? Number(input.rank) : 32,
-    clipSeconds: number(input.clipSeconds, 3, 6, 6),
+    clipSeconds: number(input.clipSeconds, 2, 10, 6),
     learningRate: number(input.learningRate, 1e-6, 1e-3, 1e-4),
     caption: String(input.caption || '').trim().slice(0, 500),
   };
