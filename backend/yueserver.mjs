@@ -51,7 +51,7 @@ export async function listAdapters(adapterDir) {
       categories: meta?.categories || [], tags: meta?.tags || [], languages: meta?.languages || [],
       license: meta?.license || '', commercialUse: meta?.commercialUse ?? null,
       source: meta?.source || null, samples: meta?.samples || [], note: meta?.note || '', verified: meta?.verified || null,
-      installedAt: meta?.installedAt || '',
+      installedAt: meta?.installedAt || '', favorite: meta?.favorite === true,
       stage: meta?.verified?.ar && meta?.verified?.nar ? 'both' : meta?.verified ? (meta.verified.ar ? 'ar' : 'nar') : (meta?.stage && meta.stage !== 'unknown' ? meta.stage : config.ar === true ? 'ar' : 'nar'),
       rank: Number.isFinite(config.rank) ? config.rank : null,
       bytes,

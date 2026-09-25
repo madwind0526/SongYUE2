@@ -2189,6 +2189,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         const patch = {};
         if (typeof input.displayName === 'string') patch.displayName = text(input.displayName, 120).trim() || name;
         if (typeof input.note === 'string') patch.note = text(input.note, 2000);
+        if (typeof input.favorite === 'boolean') patch.favorite = input.favorite;
         await updateMeta(path.join(paths.adapters, name), patch);
         return send(200, (await listAdapters(paths.adapters)).find((item) => item.name === name));
       }

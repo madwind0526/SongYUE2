@@ -193,3 +193,7 @@ button.adapter-card, label.adapter-card { cursor: pointer; }
 
 .adapter-refresh-btn { margin-left: 6px; }
 .adapter-badge.new { margin-left: 8px; background: #e6c84f; color: #1a1d10; border-color: #e6c84f; font-weight: 700; }
+
+/* favorite heart on an installed card */
+.adapter-icon-btn.fav { color: #8b978a; }.adapter-icon-btn.fav:hover { color: #f0a0b8; }.adapter-icon-btn.fav.on { color: #f0688f; }
+.adapter-chiprow > span:first-child + .adapter-sortbar { margin-left: auto; }

@@ -1,12 +1,12 @@
 'use client';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import './audio-compare.css';
 import './timbre-transform.css';
 import './audio-tools.css';
 import './adapters.css';
 import * as ABCJS from 'abcjs';
-import { ChevronUp, AudioLines, ArrowDownAZ, ArrowDownZA, ArrowDownToLine, Clock, ArrowRight, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Combine, Cpu, Dices, Disc3, Download, FastForward, FileText, Folder, FolderOpen, GitCompare, Guitar, Headphones, Heart, Home, Image as ImageIcon, Layers, LayoutGrid, ListMusic, ListPlus, LoaderCircle, Menu, Mic, MoreVertical, Music2, Pause, Pencil, Play, Plus, Power, RefreshCw, Rewind, RotateCcw, Save, Search, Settings2, ShieldCheck, SkipBack, SkipForward, SlidersHorizontal, Sparkles, Square, Trash2, Upload, Volume2, WandSparkles, X } from 'lucide-react';
+import { HardDrive, ChevronUp, AudioLines, ArrowDownAZ, ArrowDownZA, ArrowDownToLine, Clock, ArrowRight, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Combine, Cpu, Dices, Disc3, Download, FastForward, FileText, Folder, FolderOpen, GitCompare, Guitar, Headphones, Heart, Home, Image as ImageIcon, Layers, LayoutGrid, ListMusic, ListPlus, LoaderCircle, Menu, Mic, MoreVertical, Music2, Pause, Pencil, Play, Plus, Power, RefreshCw, Rewind, RotateCcw, Save, Search, Settings2, ShieldCheck, SkipBack, SkipForward, SlidersHorizontal, Sparkles, Square, Trash2, Upload, Volume2, WandSparkles, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -3557,7 +3557,7 @@ type AdapterItem = {
   name: string; displayName: string; description: string; kind: string; trigger: string; tip: string; scales: { ar: number; nar: number };
   categories: string[]; tags: string[]; languages: string[]; license: string; commercialUse: boolean | null; source: { repo: string; path: string; url: string; catalogId?: string } | null;
   samples: { name: string; url: string }[]; note: string; verified: { ok: boolean; ar: boolean; nar: boolean; at: string } | null;
-  installedAt: string; stage: string; rank: number | null; bytes: number; baseModel: string;
+  installedAt: string; stage: string; rank: number | null; bytes: number; baseModel: string; favorite?: boolean;
 };
 type AdapterList = { adapters: AdapterItem[]; engineReady: boolean; missing: string[] };
 type CatalogEntry = { id: string; stage: string; kind: string; kindLabel: string; name: string; description: string; tip: string; trigger: string; author: string; page: string; license: string; scales: { ar: number; nar: number }; bytes: number; files: number; installed: boolean };
@@ -3578,6 +3578,16 @@ const formatSize = (bytes: number) => (bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1
 const LICENSE_NAMES: Record<string, string> = { 'cc-by-nc-4.0': 'CC BY-NC 4.0 · 비상업 전용', 'cc-by-4.0': 'CC BY 4.0', 'cc-by-sa-4.0': 'CC BY-SA 4.0', 'cc0-1.0': 'CC0 (공개)', 'apache-2.0': 'Apache 2.0', mit: 'MIT', 'openrail': 'OpenRAIL', other: '기타 조건' };
 const licenseLabel = (license: string) => (license ? LICENSE_NAMES[license.toLowerCase()] || license : '라이선스 표기 없음');
 const REPO_LINK = /huggingface\.co\/([\w.-]+\/[\w.-]+)/i;
+
+// Sort icons + refresh, the same bar the Hugging Face tab has; `options` are the sort keys this list offers
+type SortOption = { key: string; label: string; icon: ReactNode };
+function AdapterSortBar({ options, value, onChange, onRefresh }: { options: SortOption[]; value: string; onChange: (key: string) => void; onRefresh?: () => void }) {
+  return <span className="adapter-sortbar" role="group" aria-label="정렬">
+    {onRefresh && <><button type="button" aria-label="새로고침" title="새로고침" onClick={onRefresh}><RefreshCw size={15}/></button><i className="adapter-sortbar-sep" aria-hidden="true"/></>}
+    {options.map(option => <button key={option.key} type="button" className={value === option.key ? 'active' : ''} aria-label={option.label} aria-pressed={value === option.key} title={option.label} onClick={() => onChange(option.key)}>{option.icon}</button>)}
+  </span>;
+}
+const byText = (a: string, b: string) => a.localeCompare(b, 'en', { numeric: true, sensitivity: 'base' });
 
 function AdapterCard({ item, onChanged, notify, running, setRunning }: { item: AdapterItem; onChanged: () => void; notify: (text: string, error?: boolean) => void; running: boolean; setRunning: (value: boolean) => void }) {
   const [editing, setEditing] = useState(false);
@@ -3600,6 +3610,10 @@ function AdapterCard({ item, onChanged, notify, running, setRunning }: { item: A
     } catch (error) { notify((error as Error).message, true); }
     finally { setBusy(false); setRunning(false); }
   }
+  async function toggleFavorite() {
+    try { await api(`/adapters/${encodeURIComponent(item.name)}`, 'PATCH', { favorite: !item.favorite }); onChanged(); }
+    catch (error) { notify((error as Error).message, true); }
+  }
   async function remove() {
     try { await api(`/adapters/${encodeURIComponent(item.name)}`, 'DELETE'); notify('LoRA를 삭제했습니다.'); onChanged(); }
     catch (error) { notify((error as Error).message, true); }
@@ -3608,6 +3622,7 @@ function AdapterCard({ item, onChanged, notify, running, setRunning }: { item: A
     <div className="adapter-card-head">
       {editing ? <Input value={title} maxLength={120} onChange={event => setTitle(event.target.value)} aria-label="LoRA 이름"/> : <strong>{item.displayName}</strong>}
       <span className="adapter-card-tools">{item.kind && <span className="adapter-badge kind">{KIND_LABEL[item.kind] || item.kind}</span>}
+        <button type="button" className={`adapter-icon-btn fav${item.favorite ? ' on' : ''}`} aria-label={`${item.displayName} ${item.favorite ? '즐겨찾기 해제' : '즐겨찾기'}`} aria-pressed={!!item.favorite} title={item.favorite ? '즐겨찾기 해제' : '즐겨찾기'} onClick={() => void toggleFavorite()}><Heart size={15} fill={item.favorite ? 'currentColor' : 'none'}/></button>
         {confirming
           ? <button type="button" className="adapter-icon-btn danger confirm" aria-label={`${item.displayName} 삭제 확인`} autoFocus onBlur={() => setConfirming(false)} onClick={() => void remove()}><Trash2 size={14}/>삭제?</button>
           : <button type="button" className="adapter-icon-btn danger" aria-label={`${item.displayName} 삭제`} title="삭제" onClick={() => setConfirming(true)} onBlur={() => setConfirming(false)}><Trash2 size={15}/></button>}</span>
@@ -3643,6 +3658,9 @@ function InstallBar({ job, label }: { job: InstallJob | null; label: string }) {
 type AdapterPickMode = { selected: string[]; onApply: (names: string[]) => void; onClose: () => void };
 function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolean) => void; picker?: AdapterPickMode }) {
   const [tab, setTab] = useState<'mine' | 'catalog' | 'hub'>('mine');
+  // sorting of the Installed and Preset lists (favorites first / A-Z by default)
+  const [mineSort, setMineSort] = useState('favorite');
+  const [presetSort, setPresetSort] = useState('az');
   const [picked, setPicked] = useState<string[]>(picker?.selected || []);
   const [mine, setMine] = useState<AdapterList | null>(null);
   const [catalog, setCatalog] = useState<CatalogEntry[] | null>(null);
@@ -3779,7 +3797,7 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
     && (!needle || [item.id, item.title, ...item.tags, ...item.categories, ...item.languages].join(' ').toLowerCase().includes(needle)))
     .sort((a, b) => sort === 'az' ? a.title.localeCompare(b.title) : sort === 'za' ? b.title.localeCompare(a.title) : sort === 'likes' ? b.likes - a.likes : sort === 'samples' ? b.sampleCount - a.sampleCount : b.updatedAt.localeCompare(a.updatedAt));
   const catalogKinds = [...new Set((catalog || []).map(entry => entry.kind))];
-  const catalogShown = (catalog || []).filter(entry => !kind || entry.kind === kind);
+  const catalogShown = (catalog || []).filter(entry => !kind || entry.kind === kind).sort((a, b) => (presetSort === 'za' ? byText(b.name, a.name) : presetSort === 'size' ? b.bytes - a.bytes : presetSort === 'installed' ? Number(b.installed) - Number(a.installed) : 0) || byText(a.name, b.name));
 
   return <section className={`adapter-page${picker ? ' picking' : ' page-scroll'}`}>
     {picker ? null : <div className="page-heading"><span className="eyebrow">노래의 색깔을 바꾸는 작은 모델</span><h1>LoRA 관리</h1><p>스타일, 아티스트, 사운드를 가르치는 작은 추가 모델입니다. Preset이나 허깅페이스에서 받고, 곡을 만들 때 "LoRA 선택"으로 골라 각 부분의 강도를 조절합니다.</p></div>}
@@ -3806,7 +3824,10 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
         <Button variant="outline" className="adapter-import-go" disabled={!importPicked.some(file => /\.safetensors$/i.test(file.name)) || Boolean(importing)} onClick={() => void importFiles()}>{importing ? <LoaderCircle className="spin" size={22}/> : <Upload size={22}/>}가져오기</Button>
         <span className="adapter-sub">{importing || '작곡용과 사운드용이 따로 있으면 두 파일을 함께 선택하세요. adapter_config.json이 있으면 같이 선택하면 됩니다.'}</span>
       </div>
-      {mine ? (mine.adapters.length ? <div className="adapter-grid">{mine.adapters.map(item => <div key={item.name} className={`adapter-pickwrap${picker ? ' pickable' : ''}${picked.includes(item.name) ? ' picked' : ''}`}>
+      {mine && mine.adapters.length > 0 && <div className="adapter-chiprow"><span>정렬</span><AdapterSortBar value={mineSort} onChange={setMineSort} onRefresh={() => void reload()} options={[
+        { key: 'az', label: '이름 A→Z', icon: <ArrowDownAZ size={15}/> }, { key: 'za', label: '이름 Z→A', icon: <ArrowDownZA size={15}/> },
+        { key: 'favorite', label: '즐겨찾기 먼저', icon: <Heart size={15}/> }, { key: 'newest', label: '최근 받은 순', icon: <Clock size={15}/> }, { key: 'samples', label: '샘플 많은 순', icon: <Headphones size={15}/> }]}/></div>}
+      {mine ? (mine.adapters.length ? <div className="adapter-grid">{[...mine.adapters].sort((a, b) => (mineSort === 'za' ? byText(b.displayName, a.displayName) : mineSort === 'newest' ? (b.installedAt || '').localeCompare(a.installedAt || '') : mineSort === 'samples' ? b.samples.length - a.samples.length : mineSort === 'favorite' ? Number(!!b.favorite) - Number(!!a.favorite) : 0) || byText(a.displayName, b.displayName)).map(item => <div key={item.name} className={`adapter-pickwrap${picker ? ' pickable' : ''}${picked.includes(item.name) ? ' picked' : ''}`}>
           {picker && <label className="adapter-pickbox"><input type="checkbox" checked={picked.includes(item.name)} onChange={event => setPicked(event.target.checked ? [...picked, item.name] : picked.filter(name => name !== item.name))}/><span>{picked.includes(item.name) ? '선택됨' : '선택'}</span></label>}
           <AdapterCard item={item} onChanged={() => void reload()} notify={notify} running={running} setRunning={setRunning}/></div>)}</div>
         : <div className="empty-library"><h2>받은 LoRA가 아직 없어요</h2><p>Preset에서 마음에 드는 것을 받거나, 가지고 있는 파일을 가져오세요.</p><Button variant="outline" className="soft-button" onClick={() => setTab('catalog')}><Search/>Preset 보기</Button></div>)
@@ -3815,7 +3836,7 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
 
     {tab === 'catalog' && <>
       <p className="field-hint">받고 싶은 카드의 다운로드 아이콘을 누르세요. 받은 카드는 파란색이고, 휴지통 아이콘으로 지웁니다. 작곡은 곡의 구조·멜로디를, 사운드는 악기와 음색을 바꿉니다.</p>
-      {catalogKinds.length > 0 && <div className="adapter-chiprow"><span>종류</span><button className={!kind ? 'active' : ''} onClick={() => setKind('')}>전체</button>{catalogKinds.map(item => <button key={item} className={kind === item ? 'active' : ''} onClick={() => setKind(kind === item ? '' : item)}>{KIND_LABEL[item] || item}</button>)}</div>}
+      {catalogKinds.length > 0 && <div className="adapter-chiprow"><span>종류</span><button className={!kind ? 'active' : ''} onClick={() => setKind('')}>전체</button>{catalogKinds.map(item => <button key={item} className={kind === item ? 'active' : ''} onClick={() => setKind(kind === item ? '' : item)}>{KIND_LABEL[item] || item}</button>)}<AdapterSortBar value={presetSort} onChange={setPresetSort} onRefresh={() => void reloadCatalog()} options={[{ key: 'az', label: '이름 A→Z', icon: <ArrowDownAZ size={15}/> }, { key: 'za', label: '이름 Z→A', icon: <ArrowDownZA size={15}/> }, { key: 'size', label: '용량 큰 순', icon: <HardDrive size={15}/> }, { key: 'installed', label: '받은 것 먼저', icon: <Check size={15}/> }]}/></div>}
       {!catalog && <p className="field-hint"><LoaderCircle className="spin" size={14}/> 불러오는 중…</p>}
       <div className="adapter-grid catalog">{catalogShown.map(entry => <article key={entry.id} className={`adapter-card catalog${entry.installed ? ' installed' : ''}`}>
         <div className="adapter-card-head"><strong>{entry.name}</strong><span className="adapter-card-tools"><span className="adapter-badge kind">{entry.kindLabel}</span>{entry.installed

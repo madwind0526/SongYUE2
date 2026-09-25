@@ -221,6 +221,10 @@ test('API: adapters are listed, edited and deleted; songs with adapters are made
   const patched = await call('/api/adapters/rock', 'PATCH', { displayName: '내 록', note: '메모' });
   assert.equal(patched.data.displayName, '내 록');
   assert.equal(patched.data.note, '메모');
+  // favorite (the heart on an installed card) is kept in the adapter's metadata
+  assert.equal((await call('/api/adapters/rock', 'PATCH', { favorite: true })).data.favorite, true);
+  assert.equal((await call('/api/adapters')).data.adapters.find((item) => item.name === 'rock').favorite, true);
+  assert.equal((await call('/api/adapters/rock', 'PATCH', { favorite: false })).data.favorite, false);
   assert.equal((await call('/api/adapters/nope', 'PATCH', { displayName: 'x' })).status, 404);
   assert.equal((await call('/api/adapters/import', 'POST', { name: 'x', paths: ['relative.safetensors'] })).status, 400);
   assert.equal((await call('/api/adapters/catalog')).data.entries.length >= 20, true);
