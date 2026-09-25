@@ -3802,8 +3802,10 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
   const shown = (hub || []).filter(item => matchesCategory(item) && matchesLanguage(item)
     && (!needle || [item.id, item.title, ...item.tags, ...item.categories, ...item.languages].join(' ').toLowerCase().includes(needle)))
     .sort((a, b) => sort === 'az' ? a.title.localeCompare(b.title) : sort === 'za' ? b.title.localeCompare(a.title) : sort === 'likes' ? b.likes - a.likes : sort === 'samples' ? b.sampleCount - a.sampleCount : b.updatedAt.localeCompare(a.updatedAt));
-  const catalogKinds = [...new Set((catalog || []).map(entry => entry.kind))];
-  const catalogShown = (catalog || []).filter(entry => !kind || entry.kind === kind).sort((a, b) => (presetSort === 'za' ? byText(b.name, a.name) : presetSort === 'size' ? b.bytes - a.bytes : presetSort === 'installed' ? Number(b.installed) - Number(a.installed) : 0) || byText(a.name, b.name));
+  // the kinds in ascending order of their (Korean) names, then 미분류 (an entry without a known kind)
+  const NO_KIND = '__none';
+  const catalogKinds = [...new Set((catalog || []).map(entry => entry.kind).filter(item => item && KIND_LABEL[item]))].sort((a, b) => byText(KIND_LABEL[a], KIND_LABEL[b]));
+  const catalogShown = (catalog || []).filter(entry => !kind || (kind === NO_KIND ? !entry.kind || !KIND_LABEL[entry.kind] : entry.kind === kind)).sort((a, b) => (presetSort === 'za' ? byText(b.name, a.name) : presetSort === 'size' ? b.bytes - a.bytes : presetSort === 'installed' ? Number(b.installed) - Number(a.installed) : 0) || byText(a.name, b.name));
 
   return <section className={`adapter-page${picker ? ' picking' : ' page-scroll'}`}>
     {picker ? null : <div className="page-heading"><span className="eyebrow">노래의 색깔을 바꾸는 작은 모델</span><h1>LoRA 관리</h1><p>스타일, 아티스트, 사운드를 가르치는 작은 추가 모델입니다. Preset이나 허깅페이스에서 받고, 곡을 만들 때 "LoRA 선택"으로 골라 각 부분의 강도를 조절합니다.</p></div>}
@@ -3841,9 +3843,10 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
     </>}
 
     {tab === 'catalog' && <>
-      <p className="field-hint">받고 싶은 카드의 다운로드 아이콘을 누르세요. 받은 카드는 파란색이고, 휴지통 아이콘으로 지웁니다. 작곡은 곡의 구조·멜로디를, 사운드는 악기와 음색을 바꿉니다.</p>
-      {catalogKinds.length > 0 && <div className="adapter-chiprow"><span>종류</span><button className={!kind ? 'active' : ''} onClick={() => setKind('')}>전체</button>{catalogKinds.map(item => <button key={item} className={kind === item ? 'active' : ''} onClick={() => setKind(kind === item ? '' : item)}>{KIND_LABEL[item] || item}</button>)}<AdapterSortBar value={presetSort} onChange={setPresetSort} onRefresh={() => void reloadCatalog()} options={[{ key: 'az', label: '이름 A→Z', icon: <ArrowDownAZ size={15}/> }, { key: 'za', label: '이름 Z→A', icon: <ArrowDownZA size={15}/> }, { key: 'size', label: '용량 큰 순', icon: <HardDrive size={15}/> }, { key: 'installed', label: '받은 것 먼저', icon: <Check size={15}/> }]}/></div>}
+      <p className="field-hint">받고 싶은 카드의 다운로드 아이콘을 누르세요. 받은 카드는 검은 바탕이고, 휴지통 아이콘으로 지웁니다. 작곡은 곡의 구조·멜로디를, 사운드는 악기와 음색을 바꿉니다.</p>
+      {catalogKinds.length > 0 && <div className="adapter-chiprow"><span>분류</span><button className={!kind ? 'active' : ''} onClick={() => setKind('')}>전체</button>{catalogKinds.map(item => <button key={item} className={kind === item ? 'active' : ''} onClick={() => setKind(kind === item ? '' : item)}>{KIND_LABEL[item] || item}</button>)}<button className={kind === NO_KIND ? 'active' : ''} onClick={() => setKind(kind === NO_KIND ? '' : NO_KIND)}>미분류</button><AdapterSortBar value={presetSort} onChange={setPresetSort} onRefresh={() => void reloadCatalog()} options={[{ key: 'az', label: '이름 A→Z', icon: <ArrowDownAZ size={15}/> }, { key: 'za', label: '이름 Z→A', icon: <ArrowDownZA size={15}/> }, { key: 'size', label: '용량 큰 순', icon: <HardDrive size={15}/> }, { key: 'installed', label: '받은 것 먼저', icon: <Check size={15}/> }]}/></div>}
       {!catalog && <p className="field-hint"><LoaderCircle className="spin" size={14}/> 불러오는 중…</p>}
+      {catalog && catalogShown.length === 0 && <p className="field-hint">이 분류에 해당하는 Preset이 없습니다.</p>}
       <div className="adapter-grid catalog">{catalogShown.map(entry => <article key={entry.id} className={`adapter-card catalog${entry.installed ? ' installed' : ''}`}>
         <div className="adapter-card-head"><strong>{entry.name}</strong><span className="adapter-card-tools"><span className="adapter-badge kind">{entry.kindLabel}</span>{entry.installed
           ? (deleting === entry.id
