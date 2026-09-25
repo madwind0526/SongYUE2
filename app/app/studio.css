@@ -87,7 +87,7 @@
 
 /* FX panel: the 3x3 knobs (closer together on x) and the Compressor 3x2 next to it, same knob style */
 .pp-fx-body{display:flex;gap:10px;align-items:flex-start}
-.pp-fx-body .pp-knob-grid{grid-template-columns:repeat(3,66px);gap:14px 8px;justify-items:center}
+.pp-fx-body .pp-knob-grid{grid-template-columns:repeat(3,66px);gap:14px 16px;justify-items:center}
 .pp-fx-body .knob{width:66px}
 .pp-fx-body .pp-comp-block{padding-left:10px;border-left:1px solid #384038}
 .pp-legend-comp{background:#c9a35a}
@@ -101,4 +101,4 @@
 .pp-fx-panel:not(.pp-extra-panel) .pp-fx-header{display:flex;align-items:center;justify-content:space-between;gap:8px}
 
 /* wider dialog so the knobs have room on x */
-.postprocess-dialog{width:980px!important}
+.postprocess-dialog{width:1060px!important}
