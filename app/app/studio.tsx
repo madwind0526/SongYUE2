@@ -3785,7 +3785,11 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
   const installedKeys = new Set((mine?.adapters || []).filter(item => item.source).flatMap(item => item.source!.path.split(' + ').map(file => `${item.source!.repo}::${file}`)));
   const repoInstalled = (item: HubRepo) => Boolean(item.defaultPaths) && item.defaultPaths!.every(path => installedKeys.has(`${item.id}::${path}`));
   const categories = [...new Set((hub || []).flatMap(item => item.categories))];
-  const languages = [...new Set((hub || []).flatMap(item => item.languages))];
+  // the main languages get their own chip; every other language (and a repo that names none) is found under "기타"
+  const MAIN_LANGUAGES = ['한국어', '영어', '일본어', '중국어'];
+  const OTHER_LANGUAGE = '기타';
+  const languages = [...MAIN_LANGUAGES.filter(label => (hub || []).some(item => item.languages.includes(label))).sort(byText), ...((hub || []).some(item => item.languages.length === 0 || item.languages.some(label => !MAIN_LANGUAGES.includes(label))) ? [OTHER_LANGUAGE] : [])];
+  const matchesLanguage = (item: HubRepo) => !language || (language === OTHER_LANGUAGE ? item.languages.length === 0 || item.languages.some(label => !MAIN_LANGUAGES.includes(label)) : item.languages.includes(language));
   const needle = query.trim().toLowerCase();
   function runSearch() {
     const text = queryText.trim();
@@ -3793,7 +3797,9 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
     if (pasted) void openDetail(pasted);
     setQuery(pasted ? '' : text);
   }
-  const shown = (hub || []).filter(item => (!category || item.categories.includes(category)) && (!language || item.languages.includes(language))
+  const HUB_CLASSES: Record<string, (item: HubRepo) => boolean> = { '작곡': item => item.stage === 'ar' || item.stage === 'both', '사운드': item => item.stage === 'nar' || item.stage === 'both', '미분류': item => item.categories.length === 0 };
+  const matchesCategory = (item: HubRepo) => !category || (HUB_CLASSES[category] ? HUB_CLASSES[category](item) : item.categories.includes(category));
+  const shown = (hub || []).filter(item => matchesCategory(item) && matchesLanguage(item)
     && (!needle || [item.id, item.title, ...item.tags, ...item.categories, ...item.languages].join(' ').toLowerCase().includes(needle)))
     .sort((a, b) => sort === 'az' ? a.title.localeCompare(b.title) : sort === 'za' ? b.title.localeCompare(a.title) : sort === 'likes' ? b.likes - a.likes : sort === 'samples' ? b.sampleCount - a.sampleCount : b.updatedAt.localeCompare(a.updatedAt));
   const catalogKinds = [...new Set((catalog || []).map(entry => entry.kind))];
@@ -3857,7 +3863,7 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
         <Button variant="outline" className="adapter-find-btn" onClick={runSearch}><Search size={15}/>찾기</Button>
         <Button variant="outline" className="adapter-find-btn adapter-refresh-btn" disabled={hubLoading} title="허깅페이스를 다시 확인해서 새로 올라온 LoRA를 가져옵니다" onClick={() => void loadHub(true)}><RefreshCw size={15} className={hubLoading ? 'spin' : ''}/>새로고침</Button>
       </div>
-      {categories.length > 0 && <div className="adapter-chiprow"><span>분류</span><button className={!category ? 'active' : ''} onClick={() => setCategory('')}>전체</button>{categories.map(label => <button key={label} className={category === label ? 'active' : ''} onClick={() => setCategory(category === label ? '' : label)}>{label}</button>)}</div>}
+      {(hub || []).length > 0 && <div className="adapter-chiprow"><span>분류</span><button className={!category ? 'active' : ''} onClick={() => setCategory('')}>전체</button>{[...['작곡', '사운드', ...categories.filter(label => !(label in HUB_CLASSES))].sort(byText), '미분류'].map(label => <button key={label} className={category === label ? 'active' : ''} onClick={() => setCategory(category === label ? '' : label)}>{label}</button>)}</div>}
       <div className="adapter-chiprow">{languages.length > 0 && <><span>언어</span><button className={!language ? 'active' : ''} onClick={() => setLanguage('')}>전체</button>{languages.map(label => <button key={label} className={language === label ? 'active' : ''} onClick={() => setLanguage(language === label ? '' : label)}>{label}</button>)}</>}<span className="adapter-sortbar" role="group" aria-label="정렬과 새로고침"><button type="button" aria-label="새로고침" title="새로고침" disabled={hubLoading} onClick={() => void loadHub(true)}><RefreshCw size={15} className={hubLoading ? 'spin' : ''}/></button><i className="adapter-sortbar-sep" aria-hidden="true"/><button type="button" className={sort === 'az' ? 'active' : ''} aria-label="이름 A→Z" aria-pressed={sort === 'az'} title="이름 A→Z" onClick={() => setSort('az')}><ArrowDownAZ size={15}/></button><button type="button" className={sort === 'za' ? 'active' : ''} aria-label="이름 Z→A" aria-pressed={sort === 'za'} title="이름 Z→A" onClick={() => setSort('za')}><ArrowDownZA size={15}/></button><button type="button" className={sort === 'likes' ? 'active' : ''} aria-label="좋아요 순" aria-pressed={sort === 'likes'} title="좋아요 순" onClick={() => setSort('likes')}><Heart size={15}/></button><button type="button" className={sort === 'updated' ? 'active' : ''} aria-label="최신 순" aria-pressed={sort === 'updated'} title="최신 순" onClick={() => setSort('updated')}><Clock size={15}/></button><button type="button" className={sort === 'samples' ? 'active' : ''} aria-label="샘플 많은 순" aria-pressed={sort === 'samples'} title="샘플 많은 순" onClick={() => setSort('samples')}><Headphones size={15}/></button></span></div>
       {hubLoading && <p className="field-hint"><LoaderCircle className="spin" size={14}/> 허깅페이스에서 목록을 읽는 중…</p>}
       {hubError && <p className="field-hint warning">{hubError}</p>}
