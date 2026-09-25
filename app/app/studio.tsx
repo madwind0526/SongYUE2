@@ -2212,6 +2212,9 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
   const micDeviceInUseRef = useRef('');
   const audioBlobRef = useRef<Blob | null>(null);
   const resultDataUrlRef = useRef<string | null>(null);
+  const [audioPolishOpen, setAudioPolishOpen] = useState(false);
+  const beforePolishRef = useRef<string | null>(null);
+  const [canUndoPolish, setCanUndoPolish] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const resultBuffer = t.bufferForKey('output');
   const sourceBuffer = t.bufferForKey('source');
@@ -2340,6 +2343,17 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
     if (!response.ok) throw new Error('결과 오디오를 내려받지 못했습니다.');
     t.setBuffer('output', await t.ensureAudioContext().decodeAudioData(await response.arrayBuffer()));
     resultDataUrlRef.current = dataUrl;
+  }
+  // "AI 처리" replaces the result; the previous one is kept so "되돌리기" can bring it back
+  async function applyPolished(dataUrl: string) {
+    const previous = resultDataUrlRef.current;
+    await showResult(dataUrl);
+    beforePolishRef.current = previous; setCanUndoPolish(!!previous);
+  }
+  async function undoPolish() {
+    if (!beforePolishRef.current) return;
+    await showResult(beforePolishRef.current);
+    beforePolishRef.current = null; setCanUndoPolish(false);
   }
   function applyPickedReference(file: Blob, name: string) {
     refBlobRef.current = file;
@@ -3015,6 +3029,10 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
             <TransportControls t={t} disabled={!sourceBuffer && !resultBuffer}/>
             <div className="pp-dialog-actions-right">
               <Button variant="outline" onClick={handleCancel} disabled={saving}>취소</Button>
+              {!isAsr && resultBuffer && <>
+                {canUndoPolish && <Button variant="outline" onClick={() => void undoPolish()} disabled={saving}><RotateCcw size={15}/>처리 전으로</Button>}
+                <Button variant="outline" onClick={() => setAudioPolishOpen(true)} disabled={saving || !resultDataUrlRef.current}><WandSparkles size={15}/>AI 처리</Button>
+              </>}
               {isVc && sourceFromMic && <Button variant="outline" onClick={() => void handleSaveSource()} disabled={saving}><Save size={15}/>원본 저장</Button>}
               <Button onClick={() => void handleSave()} disabled={!canSave}>{saving ? <LoaderCircle className="spin"/> : <Save size={15}/>}저장</Button>
             </div>
@@ -3022,6 +3040,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
         </>}
       </div>
     </div>
+    {audioPolishOpen && resultDataUrlRef.current && <AudioPolishDialog audioDataUrl={resultDataUrlRef.current} onClose={() => setAudioPolishOpen(false)} onApply={applyPolished}/>}
     <MultiFileLibraryPicker open={refPickerOpen} onClose={() => setRefPickerOpen(false)} onConfirm={paths => paths[0] && void pickReferenceFromLibrary(paths[0])} title="참조 목소리 선택" description="목표 음색이 되는 참조 오디오를 라이브러리에서 고릅니다."/>
     <MultiFileLibraryPicker open={audioPickerOpen} onClose={() => setAudioPickerOpen(false)} onConfirm={paths => paths[0] && void pickFromLibrary(paths[0])} title={`${audioLabel} 선택`} description="라이브러리에서 오디오 파일을 고릅니다."/>
   </section>;
@@ -3590,6 +3609,60 @@ function PolishReportPanel({ report }: { report: PolishReport }) {
     <div className="polish-bands">{report.bands.map(band => <div key={band.label} className="polish-band"><span>{band.label}</span><div className="polish-band-bar"><i style={band.deltaDb >= 0 ? { left: '50%', width: scale(band.deltaDb) } : { right: '50%', width: scale(band.deltaDb) }} className={band.deltaDb >= 0 ? 'up' : 'down'}/></div><b>{band.deltaDb > 0 ? '+' : ''}{band.deltaDb} dB</b></div>)}</div>
     <p className="field-hint">조용한 구간의 소리 {report.quietDb.before} → {report.quietDb.after} dB · 전체 음량 {report.loudnessDb.before} → {report.loudnessDb.after} dB · 최고점 {report.peakDb.before} → {report.peakDb.after} dB</p>
   </div>;
+}
+
+// "AI 처리" for sound made in Audio Tools (speech, effects, converted voices): the same chain as "AI 곡 다듬기", with speech-friendly
+// defaults (denoise + vocal naturalize on, spectral lifter off; no reference mastering). The result replaces the tool's result on "적용".
+const AUDIO_POLISH_DEFAULT: PolishSettings = { denoise: { enabled: true, strength: 0.3 }, lifter: { enabled: false, gate: 0.3, shimmerDb: 4, hfMix: 0, punch: 0 }, naturalize: { enabled: true, amount: 0.5 }, master: { enabled: false } };
+function AudioPolishDialog({ audioDataUrl, onClose, onApply }: { audioDataUrl: string; onClose: () => void; onApply: (dataUrl: string) => Promise<void> }) {
+  const [settings, setSettings] = useState<PolishSettings>(AUDIO_POLISH_DEFAULT);
+  const [running, setRunning] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [result, setResult] = useState<{ dataUrl: string; report: PolishReport | null } | null>(null);
+  const [errorText, setErrorText] = useState('');
+  const patch = <K extends keyof PolishSettings>(key: K, value: Partial<PolishSettings[K]>) => { setResult(null); setSettings(previous => ({ ...previous, [key]: { ...previous[key], ...value } })); };
+  const anyStage = settings.denoise.enabled || settings.lifter.enabled || settings.naturalize.enabled;
+  async function start() {
+    setRunning(true); setErrorText(''); setResult(null);
+    try { setResult(await api<{ dataUrl: string; report: PolishReport | null }>('/audio-tools/polish', 'POST', { audioDataUrl, settings })); }
+    catch (error) { setErrorText((error as Error).message); }
+    finally { setRunning(false); }
+  }
+  async function apply() {
+    if (!result) return;
+    setApplying(true);
+    try { await onApply(result.dataUrl); onClose(); }
+    catch (error) { setErrorText((error as Error).message); setApplying(false); }
+  }
+  return <Dialog open onOpenChange={next => { if (!next && !running && !applying) onClose(); }}>
+    <DialogContent className="studio-dialog audio-polish-dialog">
+      <DialogTitle>AI 처리</DialogTitle>
+      <DialogDescription>만들어진 음성의 잡음과 기계적인 느낌을 다듬습니다. 결과를 확인한 뒤 "적용"을 누르면 처리본이 바뀌고, 언제든 되돌릴 수 있습니다.</DialogDescription>
+      <div className="polish-step">
+        <label className="at-function"><input type="checkbox" checked={settings.denoise.enabled} onChange={event => patch('denoise', { enabled: event.target.checked })} disabled={running}/>노이즈 제거</label>
+        <p className="field-hint">음성 밑에 깔린 지속적인 쉬익·지지직 소리를 줄입니다.</p>
+        {settings.denoise.enabled && <PolishSlider label="세기" value={settings.denoise.strength} min={0.05} max={1} step={0.05} onChange={value => patch('denoise', { strength: value })} disabled={running}/>}
+      </div>
+      <div className="polish-step">
+        <label className="at-function"><input type="checkbox" checked={settings.naturalize.enabled} onChange={event => patch('naturalize', { enabled: event.target.checked })} disabled={running}/>보컬 자연화</label>
+        <p className="field-hint">기계적인 억양과 일정한 음 높이를 사람이 말하는 것처럼 다듬습니다.</p>
+        {settings.naturalize.enabled && <PolishSlider label="세기" value={settings.naturalize.amount} min={0.05} max={1} step={0.05} onChange={value => patch('naturalize', { amount: value })} disabled={running}/>}
+      </div>
+      <div className="polish-step">
+        <label className="at-function"><input type="checkbox" checked={settings.lifter.enabled} onChange={event => patch('lifter', { enabled: event.target.checked })} disabled={running}/>반짝임 줄이기</label>
+        <p className="field-hint">날카롭게 들리는 고음과 치찰음("ㅅ" 소리)을 가라앉힙니다. 필요할 때만 켜세요.</p>
+        {settings.lifter.enabled && <PolishSlider label="줄이는 정도" value={settings.lifter.shimmerDb} min={0} max={12} step={1} unit=" dB" onChange={value => patch('lifter', { shimmerDb: value })} disabled={running}/>}
+      </div>
+      {errorText && <p className="field-hint warning">{errorText}</p>}
+      {result?.report && <PolishReportPanel report={result.report}/>}
+      {result && !result.report && <p className="field-hint">처리를 마쳤습니다.</p>}
+      <div className="dialog-actions">
+        <Button variant="outline" onClick={onClose} disabled={running || applying}>닫기</Button>
+        <Button variant="outline" onClick={() => void start()} disabled={!anyStage || running || applying}>{running ? <LoaderCircle className="spin" size={15}/> : <WandSparkles size={15}/>}{result ? '다시 처리' : '처리 시작'}</Button>
+        <Button onClick={() => void apply()} disabled={!result || running || applying}>{applying ? <LoaderCircle className="spin" size={15}/> : <Check size={15}/>}적용</Button>
+      </div>
+    </DialogContent>
+  </Dialog>;
 }
 
 // "AI 곡 다듬기": AI로 만든 곡의 결함(잡음, 반짝임, 기계적인 보컬)을 다듬는 후처리 체인. 사용자가 단계를 켜고

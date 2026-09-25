@@ -2924,6 +2924,33 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           throw error;
         } finally { generating = false; generationStatus = null; }
       }
+      if (req.method === 'POST' && pathname === '/api/audio-tools/polish') {
+        // "AI 처리" for the sound Audio Tools made (speech, effects ...): same chain as the song polish, on a data URL instead of a saved song.
+        const input = await body(req, 60 * 1024 * 1024);
+        if (!(typeof input.audioDataUrl === 'string' && input.audioDataUrl.length)) throw fail(400, '처리할 오디오가 필요합니다.');
+        const settings = normalizePolishSettings({ ...input.settings, master: { enabled: false } });
+        if (!enabledStages(settings).length) throw fail(400, '적용할 단계를 하나 이상 켜 주세요.');
+        if (generating) throw fail(409, '이미 다른 작업을 실행 중입니다. 완료 후 다시 시도해 주세요.');
+        generating = true;
+        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 8000, progress: 0, detail: '준비 중' };
+        const dir = path.join(outputDirectory, `audio-polish-${randomUUID()}`);
+        try {
+          await mkdir(dir, { recursive: true });
+          const inputFile = await normalizeInputAudio(dir, input.audioDataUrl);
+          const flacFile = path.join(dir, 'polished.flac');
+          const onProgress = (percent, label) => { if (generationStatus) { generationStatus.progress = percent; generationStatus.detail = label; } };
+          let report = null;
+          try { report = (await (polishRunner || defaultPolishRunner)({ inputFile, referenceFile: null, outputFile: flacFile, settings, workDir: dir, onProgress }))?.report || null; }
+          catch (error) { throw error?.status ? error : fail(502, `AI 처리에 실패했습니다. ${error?.message || ''}`.trim()); }
+          if (!(await exists(flacFile))) throw fail(502, 'AI 처리 결과가 만들어지지 않았습니다.');
+          const wavFile = path.join(dir, 'polished.wav');
+          await runFfmpegCli(['-y', '-i', flacFile, '-c:a', 'pcm_s16le', wavFile], '결과 변환');
+          return send(200, { dataUrl: `data:audio/wav;base64,${(await readFile(wavFile)).toString('base64')}`, report, stages: enabledStages(settings) });
+        } finally {
+          generating = false; generationStatus = null;
+          await rm(dir, { recursive: true, force: true }).catch(() => {});
+        }
+      }
       const polishItemMatch = pathname.match(/^\/api\/polish\/([^/]+)(?:\/(audio|save))?$/);
       if (polishItemMatch) {
         const preview = uuidPattern.test(polishItemMatch[1]) ? polishPreviews.get(polishItemMatch[1]) : null;

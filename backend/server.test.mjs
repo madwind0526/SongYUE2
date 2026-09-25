@@ -2089,6 +2089,7 @@ test('AI 곡 다듬기: 완성곡을 처리기에 넘겨 미리듣기를 만들�
   const songId = saved.data.id;
 
   assert.equal((await callJson('/api/projects/not-an-id/polish', 'POST', { settings: { denoise: { enabled: true } } })).status, 404);
+
   const none = await callJson(`/api/projects/${songId}/polish`, 'POST', { settings: {} });
   assert.equal(none.status, 400);
   assert.match(none.data.error, /단계/);
@@ -2129,6 +2130,19 @@ test('AI 곡 다듬기: 완성곡을 처리기에 넘겨 미리듣기를 만들�
   assert.equal((await fetch(`${base}/api/polish/${previewId}/audio`)).status, 404);
   assert.equal((await callJson('/api/polish/not-a-preview/save', 'POST', {})).status, 404);
   assert.deepEqual((await readdir(path.join(root, 'runs'))).filter(name => name.startsWith('polish-')), []);
+  // Audio Tools "AI 처리": the same chain on a data URL; no reference mastering, at least one stage, a wav data URL comes back
+  const toolAudio = `data:audio/wav;base64,${Buffer.from('fake-speech').toString('base64')}`;
+  assert.equal((await callJson('/api/audio-tools/polish', 'POST', { settings: { denoise: { enabled: true } } })).status, 400);
+  const noStage = await callJson('/api/audio-tools/polish', 'POST', { audioDataUrl: toolAudio, settings: {} });
+  assert.equal(noStage.status, 400);
+  assert.match(noStage.data.error, /단계/);
+  const runsBefore = runs.length;
+  const toolPolish = await callJson('/api/audio-tools/polish', 'POST', { audioDataUrl: toolAudio, settings: { denoise: { enabled: true, strength: 0.3 }, naturalize: { enabled: true }, master: { enabled: true } } });
+  assert.equal(toolPolish.status, 200, JSON.stringify(toolPolish.data));
+  assert.match(toolPolish.data.dataUrl, /^data:audio\/wav;base64,/);
+  assert.deepEqual(toolPolish.data.stages, ['denoise', 'naturalize']);
+  assert.equal(runs.length, runsBefore + 1);
+  assert.equal(runs.at(-1).settings.master.enabled, false, 'reference mastering is never used for tool audio');
 });
 
 test('가사 싱크: 보컬 분리 -> 인식(단어 시간) -> 가사 줄 매칭 결과를 곡 옆에 캐시하고, LRC를 내려주며, 이름을 바꾸거나 지우면 함께 움직인다', async t => {

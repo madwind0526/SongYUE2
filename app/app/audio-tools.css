@@ -69,3 +69,5 @@
 
 /* STT result: the recognized text lines up with the plot area of the waveform above (x = 0.00 edge on the left, plot end on the right) */
 .audio-tools-result .at-field:has(> .at-textarea) { margin-left: var(--chart-left); margin-right: var(--chart-right); }
+
+.audio-polish-dialog { width: min(560px, 94vw) !important; max-height: 88vh; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
