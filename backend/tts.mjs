@@ -38,6 +38,20 @@ export const TTS_FAMILIES = [
     ],
   },
   {
+    // Reference cloning only (no voice description); Korean is a Tier-2 language. INT8 is the practical size.
+    id: 'fish', label: 'Fish Audio S2 Pro', cliFamily: 'fish_audio',
+    variants: [{ mode: 'ref', size: '기본', files: {
+      q8_0: ['Fish-Audio-S2-Pro-GGUF', 'fish-audio-s2-pro-q8_0.gguf', 6318],
+      bf16: ['Fish-Audio-S2-Pro-GGUF', 'fish-audio-s2-pro-bf16.gguf', 10229] } }],
+  },
+  {
+    // Disabled (2026-09-25): reads digits and abbreviations badly and is not needed next to Fish Audio; the model file was deleted.
+    id: 'chatterbox', label: 'Chatterbox', cliFamily: 'chatterbox', disabled: true,
+    variants: [{ mode: 'ref', size: '기본', files: {
+      q8_0: ['Chatterbox-GGUF', 'chatterbox-q8_0.gguf', 2088],
+      f16: ['Chatterbox-GGUF', 'chatterbox-f16.gguf', 3744] } }],
+  },
+  {
     // Clone only: --instruct accepts just a fixed attribute vocabulary (no free-text voice description),
     // and cloning requires the reference transcript (auto-filled with ASR when left empty).
     id: 'omnivoice', label: 'OmniVoice', cliFamily: 'omnivoice',
@@ -45,13 +59,6 @@ export const TTS_FAMILIES = [
       q8_0: ['OmniVoice-GGUF', 'omnivoice-q8_0.gguf', 1350],
       f16: ['OmniVoice-GGUF', 'omnivoice-f16.gguf', 1640],
       bf16: ['OmniVoice-GGUF', 'omnivoice-bf16.gguf', 1640] } })),
-  },
-  {
-    // Reference cloning only (no voice description); Korean is a Tier-2 language. INT8 is the practical size.
-    id: 'fish', label: 'Fish Audio S2 Pro', cliFamily: 'fish_audio',
-    variants: [{ mode: 'ref', size: '기본', files: {
-      q8_0: ['Fish-Audio-S2-Pro-GGUF', 'fish-audio-s2-pro-q8_0.gguf', 6318],
-      bf16: ['Fish-Audio-S2-Pro-GGUF', 'fish-audio-s2-pro-bf16.gguf', 10229] } }],
   },
   {
     // Preset-voice TTS (no cloning, no description): voices M1-M5 / F1-F5, 30+ languages incl. Korean.
@@ -69,12 +76,6 @@ export const TTS_FAMILIES = [
     variants: [{ mode: 'preset', size: '357M', files: {
       q8_0: ['MagpieTTS-Multilingual-357M-GGUF', 'magpie-tts-multilingual-357m-q8_0.gguf', 1562],
       orig: ['MagpieTTS-Multilingual-357M-GGUF', 'magpie-tts-multilingual-357m-orig.gguf', 1912] } }],
-  },
-  {
-    id: 'chatterbox', label: 'Chatterbox', cliFamily: 'chatterbox',
-    variants: [{ mode: 'ref', size: '기본', files: {
-      q8_0: ['Chatterbox-GGUF', 'chatterbox-q8_0.gguf', 2088],
-      f16: ['Chatterbox-GGUF', 'chatterbox-f16.gguf', 3744] } }],
   },
 ];
 
@@ -216,7 +217,7 @@ export async function listTtsModels(root, downloads = new Map(), catalog = TTS_F
       }
       variants.push({ mode: variant.mode, size: variant.size, precisions });
     }
-    families.push({ id: family.id, label: family.label, languages: family.languages ? Object.keys(family.languages) : undefined, voices: family.voices, variants });
+    families.push({ id: family.id, label: family.label, disabled: family.disabled === true ? true : undefined, languages: family.languages ? Object.keys(family.languages) : undefined, voices: family.voices, variants });
   }
   return families;
 }

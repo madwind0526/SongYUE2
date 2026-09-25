@@ -1538,27 +1538,31 @@ test('Tools 메뉴 - audio.cpp TTS: 모델 목록/설치 확인, 문장 분할 �
 
   const listed = await callJson('/api/audio-tools/tts/models');
   assert.equal(listed.status, 200);
-  assert.deepEqual(listed.data.families.map(f => f.id), ['qwen3', 'omnivoice', 'fish', 'supertonic', 'magpie', 'chatterbox']);
+  assert.deepEqual(listed.data.families.map(f => f.id), ['qwen3', 'fish', 'chatterbox', 'omnivoice', 'supertonic', 'magpie']);
   assert.ok(listed.data.families.every(f => f.variants.every(v => v.precisions.every(p => p.installed === false))));
 
   // not installed -> 409 with guidance, engine never spawned
-  const missing = await callJson('/api/audio-tools/tts', 'POST', { family: 'chatterbox', mode: 'ref', size: '기본', precision: 'q8_0', text: '안녕하세요', referenceDataUrl: refAudio });
+  const missing = await callJson('/api/audio-tools/tts', 'POST', { family: 'fish', mode: 'ref', size: '기본', precision: 'q8_0', text: '안녕하세요', referenceDataUrl: refAudio });
   assert.equal(missing.status, 409);
+  // Chatterbox is disabled: refused even if a file were there
+  const disabled = await callJson('/api/audio-tools/tts', 'POST', { family: 'chatterbox', mode: 'ref', size: '기본', precision: 'q8_0', text: '안녕하세요', referenceDataUrl: refAudio });
+  assert.equal(disabled.status, 400);
+  assert.match(disabled.data.error, /비활성화/);
+  assert.equal((await callJson('/api/audio-tools/tts/models')).data.families.find(f => f.id === 'chatterbox').disabled, true);
   assert.equal((await callJson('/api/audio-tools/tts', 'POST', { family: 'nope', mode: 'ref', size: 'x', precision: 'y', text: 'a' })).status, 400);
 
-  await install('Chatterbox-GGUF', 'chatterbox-q8_0.gguf');
+  await install('Fish-Audio-S2-Pro-GGUF', 'fish-audio-s2-pro-q8_0.gguf');
   await install('Qwen3-TTS-12Hz-1.7B-VoiceDesign-GGUF', 'qwen3-tts-12hz-1.7b-voicedesign-q8_0.gguf');
   const after = await callJson('/api/audio-tools/tts/models');
-  assert.equal(after.data.families[5].variants[0].precisions[0].installed, true);
+  assert.equal(after.data.families[1].variants[0].precisions[0].installed, true);
 
-  // chatterbox: Korean text -> --language ko, clon task with the reference clip
+  // fish: reference clone with the reference clip
   const cli = () => fakeSpawn.calls.filter(c => !['ffmpeg', 'ffprobe'].includes(c.engine));
-  const chatter = await callJson('/api/audio-tools/tts', 'POST', { family: 'chatterbox', mode: 'ref', size: '기본', precision: 'q8_0', text: '안녕하세요. 반갑습니다.', referenceDataUrl: refAudio });
-  assert.equal(chatter.status, 200);
-  assert.match(chatter.data.dataUrl, /^data:audio\/wav;base64,/);
-  const chatterArgs = cli().at(-1).args;
-  assert.ok(chatterArgs.includes('clon') && chatterArgs.includes('chatterbox'));
-  assert.equal(chatterArgs[chatterArgs.indexOf('--language') + 1], 'ko');
+  const fish = await callJson('/api/audio-tools/tts', 'POST', { family: 'fish', mode: 'ref', size: '기본', precision: 'q8_0', text: '안녕하세요. 반갑습니다.', referenceDataUrl: refAudio });
+  assert.equal(fish.status, 200);
+  assert.match(fish.data.dataUrl, /^data:audio\/wav;base64,/);
+  const fishArgs = cli().at(-1).args;
+  assert.ok(fishArgs.includes('fish_audio') && fishArgs.includes('--voice-ref'));
 
   // qwen3 base without a transcript falls back to speaker-embedding-only cloning
   await install('Qwen3-TTS-12Hz-1.7B-Base-GGUF', 'qwen3-tts-12hz-1.7b-base-q8_0_v2.gguf');
@@ -1586,7 +1590,7 @@ test('Tools 메뉴 - audio.cpp TTS: 모델 목록/설치 확인, 문장 분할 �
 
   await install('OmniVoice-GGUF', 'omnivoice-q8_0.gguf');
   // style instruction: models without style support ignore it
-  await callJson('/api/audio-tools/tts', 'POST', { family: 'chatterbox', mode: 'ref', size: '기본', precision: 'q8_0', text: 'Hello there.', referenceDataUrl: refAudio, style: 'ignored' });
+  await callJson('/api/audio-tools/tts', 'POST', { family: 'fish', mode: 'ref', size: '기본', precision: 'q8_0', text: 'Hello there.', referenceDataUrl: refAudio, style: 'ignored' });
   assert.ok(!cli().at(-1).args.some(a => String(a).includes('ignored')));
 
   // Supertonic: preset voice, no reference/description needed; language follows the text
@@ -1615,12 +1619,12 @@ test('Tools 메뉴 - audio.cpp TTS: 모델 목록/설치 확인, 문장 분할 �
   assert.equal(previewAgain.data.cached, true);
   assert.equal(cli().length - previewBefore, 1, 'expected the second preview to come from the cache');
 
-  // design tab + Chatterbox: Qwen3 VoiceDesign renders a stand-in reference clip first, then the clone runs
+  // design tab + Fish: Qwen3 VoiceDesign renders a stand-in reference clip first, then the clone runs
   const designBefore = cli().length;
-  const viaChatter = await callJson('/api/audio-tools/tts', 'POST', { family: 'chatterbox', mode: 'design', size: '기본', precision: 'q8_0', text: 'Hello there.', description: 'calm woman' });
-  assert.equal(viaChatter.status, 200);
+  const viaFish = await callJson('/api/audio-tools/tts', 'POST', { family: 'fish', mode: 'design', size: '기본', precision: 'q8_0', text: 'Hello there.', description: 'calm woman' });
+  assert.equal(viaFish.status, 200);
   const designCalls = cli().slice(designBefore).map(c => c.args[c.args.indexOf('--family') + 1]);
-  assert.deepEqual(designCalls, ['qwen3_tts', 'chatterbox']);
+  assert.deepEqual(designCalls, ['qwen3_tts', 'fish_audio']);
 });
 
 test('Tools 메뉴 - 음성 인식(Qwen3-ASR)과 조절(ffmpeg): 모델 미설치 409, 전사 텍스트 반환, 조절 값 검증', async t => {
