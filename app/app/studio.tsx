@@ -3656,8 +3656,112 @@ function InstallBar({ job, label }: { job: InstallJob | null; label: string }) {
 }
 
 type AdapterPickMode = { selected: string[]; onApply: (names: string[]) => void; onClose: () => void };
+// LoRA training tab: pick the folder with the songs, set the name / trigger word / steps, follow the progress, then choose between the
+// EMA and the raw result (the app measures how much they differ and only asks for listening when they do). The chosen one is filed into
+// library/Lora and installed; the other one is deleted.
+type TrainJob = { id: string; status: string; request: { name: string; trigger: string; steps: number; rank: number }; sourceDir: string; songs: number; step: number; total: number; startedAt: number; trainStartedAt?: number; message: string; error: string; difference: number | null; verdict: { same: boolean; recommend: string; needsListening: boolean } | null; ab: { status: string; error?: string } | null; result?: { installedName: string; mode: string; bytes: number } };
+type TrainStatus = { readiness: { ready: boolean; checks: Record<string, { ok: boolean; hint: string }> }; job: TrainJob | null; busy: boolean };
+type TrainScan = { dir: string; count: number; bytes: number; minutes: number; captions: number; files: { name: string; bytes: number }[] };
+const TRAIN_PRESETS = [{ label: '빠르게 (500스텝, 약 4분)', steps: 500 }, { label: '보통 (1500스텝, 약 9분)', steps: 1500 }, { label: '꼼꼼히 (3000스텝, 약 18분)', steps: 3000 }];
+function LoraTrainTab({ notify, onInstalled }: { notify: (text: string, error?: boolean) => void; onInstalled: () => void }) {
+  const [status, setStatus] = useState<TrainStatus | null>(null);
+  const [dir, setDir] = useState('');
+  const [scan, setScan] = useState<TrainScan | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [name, setName] = useState('');
+  const [trigger, setTrigger] = useState('');
+  const [steps, setSteps] = useState(1500);
+  const [rank, setRank] = useState(32);
+  const [caption, setCaption] = useState('');
+  const [busy, setBusy] = useState('');
+  const [library, setLibrary] = useState<{ name: string; bytes: number; hasRecord: boolean }[]>([]);
+  const job = status?.job || null;
+  const reloadStatus = () => api<TrainStatus>('/lora-train/status').then(setStatus).catch(() => {});
+  const reloadLibrary = () => api<{ items: { name: string; bytes: number; hasRecord: boolean }[] }>('/lora-train/library').then(result => setLibrary(result.items)).catch(() => {});
+  useEffect(() => { void reloadStatus(); void reloadLibrary(); }, []);
+  // follow a running job every 2 s
+  useEffect(() => {
+    if (!job || !['starting', 'training', 'finalizing'].includes(job.status) && !(job.ab?.status === 'making')) return;
+    const timer = window.setInterval(() => void reloadStatus(), 2000);
+    return () => window.clearInterval(timer);
+  }, [job?.status, job?.ab?.status]); // eslint-disable-line react-hooks/exhaustive-deps
+  async function scanFolder() {
+    setScanning(true); setScan(null);
+    try { setScan(await api<TrainScan>('/lora-train/scan', 'POST', { dir })); }
+    catch (error) { notify((error as Error).message, true); }
+    finally { setScanning(false); }
+  }
+  async function act(kind: string, path: string, payload: unknown = {}, done?: string) {
+    setBusy(kind);
+    try { await api(path, 'POST', payload); if (done) notify(done); await reloadStatus(); }
+    catch (error) { notify((error as Error).message, true); await reloadStatus(); }
+    finally { setBusy(''); }
+  }
+  const startTraining = () => act('start', '/lora-train/start', { name, triggerWord: trigger, steps, rank, caption, sourceDir: dir });
+  async function finalize(choice: 'ema' | 'raw') {
+    setBusy('finalize');
+    try { await api('/lora-train/finalize', 'POST', { choice }); notify(`"${job?.request.name}"을(를) 보관함에 넣고 설치했습니다.`); onInstalled(); await reloadStatus(); void reloadLibrary(); }
+    catch (error) { notify((error as Error).message, true); await reloadStatus(); }
+    finally { setBusy(''); }
+  }
+  const running = !!job && ['starting', 'training', 'finalizing'].includes(job.status);
+  const percent = job && job.total ? Math.min(100, Math.round(job.step / job.total * 100)) : 0;
+  // the remaining time counts from the first training step (reading the songs is not part of the pace)
+  const minutesLeft = job && running && job.step > 2 && job.trainStartedAt ? Math.max(1, Math.round((Date.now() - job.trainStartedAt) / 60000 * (job.total - job.step) / job.step)) : null;
+  const notReady = status && !status.readiness.ready ? Object.values(status.readiness.checks).filter(check => !check.ok) : [];
+  const canStart = !!status?.readiness.ready && !status.busy && !running && job?.status !== 'review' && !!scan && scan.count > 0 && name.trim() && trigger.trim() && !busy;
+  const gb = (bytes: number) => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
+  return <div className="train-tab">
+    {notReady.length > 0 && <div className="train-warn">{notReady.map(check => <p key={check.hint}>{check.hint}</p>)}</div>}
+    {(!job || job.status === 'failed' || job.status === 'cancelled' || job.status === 'done') && <>
+      <p className="field-hint">내 곡(mp3, wav, flac)이 들어 있는 폴더를 고르면 그 곡들의 음색과 질감을 배운 LoRA를 만듭니다. 폴더의 곡은 복사하거나 바꾸지 않고 그 자리에서 읽습니다. 학습하는 동안에는 GPU를 거의 다 쓰므로 곡 만들기 등은 끝난 뒤에 해 주세요.</p>
+      <div className="train-form">
+        <label className="train-field wide">곡이 들어 있는 폴더<span className="train-row"><Input value={dir} placeholder="예: D:\Music\지수" aria-label="곡 폴더 경로" onChange={event => { setDir(event.target.value); setScan(null); }} onKeyDown={event => { if (event.key === 'Enter') void scanFolder(); }}/><Button variant="outline" disabled={!dir.trim() || scanning} onClick={() => void scanFolder()}>{scanning ? <LoaderCircle className="spin" size={14}/> : <FolderOpen size={14}/>}확인</Button></span></label>
+        {scan && <p className="train-scan">곡 {scan.count}개 · 약 {scan.minutes}분 · {gb(scan.bytes)}{scan.captions > 0 ? ` · 설명 파일 ${scan.captions}개(곡과 같은 이름의 .txt를 스타일 설명으로 씁니다)` : ''}{scan.count < 3 ? ' — 곡이 3개보다 적으면 효과가 약할 수 있습니다.' : ''}</p>}
+        <label className="train-field">LoRA 이름<Input value={name} maxLength={60} placeholder="예: 지수 음색" onChange={event => setName(event.target.value)}/></label>
+        <label className="train-field">트리거 단어 (영문)<Input value={trigger} maxLength={30} placeholder="예: jisoo_voice" onChange={event => setTrigger(event.target.value)}/><small>곡을 만들 때 스타일 맨 앞에 이 단어를 넣으면 이 LoRA가 반응합니다.</small></label>
+        <label className="train-field">학습 정도<select value={steps} onChange={event => setSteps(Number(event.target.value))} aria-label="학습 스텝">{TRAIN_PRESETS.map(item => <option key={item.steps} value={item.steps}>{item.label}</option>)}</select></label>
+        <label className="train-field">크기 (rank)<select value={rank} onChange={event => setRank(Number(event.target.value))} aria-label="LoRA rank"><option value={16}>작게 16 (약 107 MB)</option><option value={32}>보통 32 (약 213 MB)</option></select></label>
+        <label className="train-field wide">곡 전체에 붙일 스타일 설명 (선택)<Input value={caption} maxLength={300} placeholder="예: korean pop ballad, soft female vocal (폴더에 .txt 설명 파일이 있으면 그것을 씁니다)" onChange={event => setCaption(event.target.value)}/></label>
+      </div>
+      {job?.status === 'failed' && <p className="field-hint warning">지난 학습이 실패했습니다: {job.error}</p>}
+      {job?.status === 'done' && job.result && <p className="train-done"><Check size={14}/> "{job.request.name}" 완료 — Installed 탭에 있습니다({job.result.mode === 'link' ? '보관함 파일과 같은 파일을 가리켜 용량을 더 쓰지 않습니다' : '보관함에 한 벌, 설치본에 한 벌'}, {gb(job.result.bytes)}).</p>}
+      <div className="train-actions"><Button disabled={!canStart} onClick={() => void startTraining()}>{busy === 'start' ? <LoaderCircle className="spin" size={15}/> : <Sparkles size={15}/>}학습 시작</Button>{status?.busy && !running && <span className="field-hint">다른 작업이 끝나면 시작할 수 있습니다.</span>}</div>
+    </>}
+    {running && job && <div className="train-progress">
+      <h3>"{job.request.name}" 학습 중</h3>
+      <Progress value={percent}/>
+      <p>{job.message}{job.status === 'training' && job.step > 0 ? ` — ${job.step} / ${job.total} 스텝 (${percent}%)${minutesLeft ? `, 남은 시간 약 ${minutesLeft}분` : ''}` : ''}</p>
+      <p className="field-hint">곡 {job.songs}개 · 트리거 {job.request.trigger} · {job.request.steps}스텝. 창을 닫아도 계속됩니다.</p>
+      {job.status !== 'finalizing' && <Button variant="outline" disabled={!!busy} onClick={() => void act('cancel', '/lora-train/cancel', {}, '학습을 취소했습니다.')}><X size={14}/>취소</Button>}
+    </div>}
+    {job?.status === 'review' && <div className="train-review">
+      <h3>"{job.request.name}" 학습이 끝났습니다 — 쓸 결과를 고르세요</h3>
+      <p>학습은 두 가지 결과를 만듭니다. <b>EMA</b>는 학습 도중의 값을 부드럽게 평균 낸 것(안정적)이고, <b>raw</b>는 마지막 스텝의 값 그대로입니다. 고르지 않은 쪽은 삭제됩니다.</p>
+      {job.verdict?.same
+        ? <p className="train-verdict same"><Check size={14}/> 두 결과의 차이는 {(job.difference! * 100).toFixed(3)}%로, 사실상 같습니다. <b>EMA를 추천</b>합니다. 들어 보지 않아도 됩니다.</p>
+        : <p className="train-verdict diff">두 결과의 차이가 {job.difference != null ? `${(job.difference * 100).toFixed(2)}%로 ` : ''}작지 않습니다. 같은 가사로 만든 곡 두 개를 들어 보고 고르세요. (EMA가 기본 추천입니다)</p>}
+      {(job.verdict?.needsListening || job.ab) && <div className="train-ab">
+        <Button variant="outline" disabled={!!busy || job.ab?.status === 'making'} onClick={() => void act('ab', '/lora-train/ab', {})}>{job.ab?.status === 'making' || busy === 'ab' ? <LoaderCircle className="spin" size={14}/> : <Headphones size={14}/>}{job.ab?.status === 'ready' ? '비교곡 다시 만들기' : '비교곡 만들기 (약 1분)'}</Button>
+        {job.ab?.status === 'ready' && <div className="train-ab-players"><label>EMA<audio controls preload="none" src={`/api/lora-train/ab/ema?v=${job.id}`}/></label><label>raw<audio controls preload="none" src={`/api/lora-train/ab/raw?v=${job.id}`}/></label></div>}
+        {job.ab?.status === 'failed' && <p className="field-hint warning">{job.ab.error}</p>}
+      </div>}
+      <div className="train-actions">
+        <Button disabled={!!busy} onClick={() => void finalize('ema')}>{busy === 'finalize' ? <LoaderCircle className="spin" size={15}/> : <Check size={15}/>}EMA로 확정{job.verdict?.same ? ' (추천)' : ''}</Button>
+        <Button variant="outline" disabled={!!busy} onClick={() => void finalize('raw')}>raw로 확정</Button>
+        <Button variant="outline" disabled={!!busy} onClick={() => { if (window.confirm('이번 학습 결과를 둘 다 버립니다. 계속할까요?')) void act('discard', '/lora-train/discard', {}, '학습 결과를 버렸습니다.'); }}><Trash2 size={14}/>둘 다 버리기</Button>
+      </div>
+    </div>}
+    <div className="train-library">
+      <h3>보관함 <small>library/Lora</small></h3>
+      {library.length === 0 ? <p className="field-hint">아직 학습해서 만든 LoRA가 없습니다.</p> : <ul>{library.map(item => <li key={item.name}><strong>{item.name}</strong><span>{gb(item.bytes)}{item.hasRecord ? ' · 학습 기록 있음' : ''}</span></li>)}</ul>}
+      {library.length > 0 && <p className="field-hint">합계 {gb(library.reduce((sum, item) => sum + item.bytes, 0))}. 설치된 LoRA는 보관함 파일과 같은 파일이라 용량이 두 번 들지 않습니다(같은 디스크일 때).</p>}
+    </div>
+  </div>;
+}
+
 function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolean) => void; picker?: AdapterPickMode }) {
-  const [tab, setTab] = useState<'mine' | 'catalog' | 'hub'>('mine');
+  const [tab, setTab] = useState<'mine' | 'catalog' | 'hub' | 'train'>('mine');
   // sorting of the Installed and Preset lists (favorites first / A-Z by default)
   const [mineSort, setMineSort] = useState('favorite');
   const [mineCategory, setMineCategory] = useState('');
@@ -3831,6 +3935,7 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
       <button role="tab" aria-selected={tab === 'mine'} className={tab === 'mine' ? 'active' : ''} onClick={() => setTab('mine')}>Installed{mine ? ` (${mine.adapters.length})` : ''}</button>
       <button role="tab" aria-selected={tab === 'catalog'} className={tab === 'catalog' ? 'active' : ''} onClick={() => setTab('catalog')}>Preset{catalog ? ` (${catalog.filter(entry => !entry.installed).length}/${catalog.length})` : ''}</button>
       <button role="tab" aria-selected={tab === 'hub'} className={tab === 'hub' ? 'active' : ''} onClick={() => setTab('hub')}>허깅페이스{hub ? ` (${hub.filter(item => !repoInstalled(item)).length}/${hub.length})` : ''}</button>
+      {!picker && <button role="tab" aria-selected={tab === 'train'} className={tab === 'train' ? 'active' : ''} onClick={() => setTab('train')}>학습</button>}
     </div>
     {mine && !mine.engineReady && <p className="field-hint warning">LoRA로 곡을 만들려면 엔진 파일이 더 필요합니다 (없는 것: {mine.missing.join(', ')}). docs/models.md의 "LoRA 엔진"을 확인해 주세요.</p>}
     <InstallBar job={job} label="받는 중"/>
@@ -3882,6 +3987,8 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
         <div className="adapter-foot"><a href={entry.page} target="_blank" rel="noreferrer" onClick={event => event.stopPropagation()}><span title={entry.license ? `허깅페이스에 적힌 라이선스: ${entry.license}` : '저장소에 라이선스가 적혀 있지 않습니다'}>{licenseLabel(entry.license)}</span> · 원본 페이지</a><span>{entry.installed ? <b className="adapter-done"><Check size={13}/>받음</b> : formatSize(entry.bytes)}</span></div>
       </article>)}</div>
     </>}
+
+    {tab === 'train' && !picker && <LoraTrainTab notify={notify} onInstalled={() => void reload()}/>}
 
     {tab === 'hub' && <>
       <p className="field-hint">허깅페이스에서 YuE2용 LoRA를 찾습니다. 카드의 다운로드 아이콘으로 바로 받고, 카드를 누르면 샘플을 듣고 받을 파일을 고를 수 있습니다. 주소를 붙여 넣어도 됩니다.</p>

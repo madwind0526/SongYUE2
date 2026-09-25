@@ -16,7 +16,8 @@ export function createLoraTrainer(context) {
   const jobDir = (id) => path.join(outputDirectory, `lora-train-${id}`);
   const lorasDir = () => path.join(comfyEnginePath(), 'models', 'loras');
   const save = async () => { if (job) await writeFile(path.join(jobDir(job.id), 'job.json'), JSON.stringify(job, null, 2), 'utf8').catch(() => {}); };
-  const touch = (patch) => { Object.assign(job, patch, { updatedAt: now() }); void save(); };
+  // a cancelled or discarded run has no job any more: late events of its ComfyUI run are ignored
+  const touch = (patch) => { if (!job) return; Object.assign(job, patch, { updatedAt: now() }); void save(); };
 
   // What is needed before a run can start (each item: { ok, hint })
   async function readiness() {
@@ -66,7 +67,8 @@ export function createLoraTrainer(context) {
     const loraName = `songyue-${id.slice(0, 8)}`;
     job = { id, status: 'starting', request: cleaned, sourceDir: source.dir, songs: source.count, step: 0, total: cleaned.steps, startedAt: now(), updatedAt: now(), loraName, error: '', message: 'ComfyUI를 준비하는 중', verdict: null, difference: null, ab: null };
     setBusy(true, 'LoRA 학습 중');
-    void run(source);
+    // the run never rejects into the server: failures end up in the job
+    void run(source).catch((error) => touch({ status: 'failed', error: error?.message || String(error), message: '학습 실패' }));
     return publicJob();
   }
 
@@ -89,7 +91,7 @@ export function createLoraTrainer(context) {
           try { message = JSON.parse(event.data); } catch { return; }
           if (message.type === 'progress' && message.data?.max > 1 && job?.status === 'training') {
             // the encoder reports its own small counter (one step per song) before the training steps start
-            if (message.data.max === job.request.steps) touch({ step: message.data.value, total: message.data.max, message: '학습 중' });
+            if (message.data.max === job.request.steps) touch({ step: message.data.value, total: message.data.max, message: '학습 중', trainStartedAt: job.trainStartedAt || now() });
             else touch({ step: 0, message: `곡을 읽는 중 (${message.data.value}/${message.data.max})` });
           }
         };
@@ -101,7 +103,7 @@ export function createLoraTrainer(context) {
       // wait for the run to end (the progress comes over the WebSocket; the history says how it ended)
       for (;;) {
         await sleep(2000);
-        if (job?.status === 'cancelled') return;
+        if (!job || job.status === 'cancelled') return;
         const history = await (await fetchImpl(`${endpoint}/history/${body.prompt_id}`)).json().catch(() => ({}));
         const entry = history[body.prompt_id];
         if (!entry) continue;
@@ -111,14 +113,16 @@ export function createLoraTrainer(context) {
         }
         if (entry.status?.completed || entry.status?.status_str === 'success') break;
       }
+      if (!job) return;
       const emaFile = path.join(lorasDir(), `${job.loraName}.safetensors`);
       const rawFile = path.join(lorasDir(), `${job.loraName}_raw.safetensors`);
       if (!(await exists(emaFile))) throw new Error('학습이 끝났지만 결과 파일을 찾지 못했습니다.');
-      touch({ message: 'EMA와 raw의 차이를 재는 중', step: job.total });
+      touch({ message: 'EMA와 raw의 차이를 재는 중', step: job?.total });
       const relative = (await exists(rawFile)) ? await compare(emaFile, rawFile) : 0;
+      if (!job) return;
       touch({ status: 'review', message: '결과를 고르세요', emaFile, rawFile, difference: relative, verdict: emaRawVerdict(relative) });
     } catch (error) {
-      if (job?.status !== 'cancelled') touch({ status: 'failed', error: error.message || String(error), message: '학습 실패' });
+      if (job && job.status !== 'cancelled') touch({ status: 'failed', error: error.message || String(error), message: '학습 실패' });
     } finally {
       try { socket?.close(); } catch { /* already closed */ }
       socket = null;
