@@ -171,8 +171,8 @@ type PostProcessParams = { eq: number[]; masterVolume: number; eqEnabled: boolea
   volumeOn: boolean; gainDb: number; normalizeDb: number; limiterDb: number; // Normalize / Limiter: -13 = Off (left end of the slider)
   silenceOn: boolean; silenceDb: number;
   fadeOn: boolean; fadeInSec: number; fadeOutSec: number;
-  playOn: boolean; speedPct: number; reverseOn: boolean };
-const PP_EXTRA_DEFAULTS = { volumeOn: true, gainDb: 0, normalizeDb: -13, limiterDb: -13, silenceOn: false, silenceDb: -50, fadeOn: true, fadeInSec: 0, fadeOutSec: 0, playOn: true, speedPct: 0, reverseOn: false };
+  playOn: boolean; speed: number; reverseOn: boolean }; // speed: 0.1 .. 5.0, 1.0 = unchanged
+const PP_EXTRA_DEFAULTS = { volumeOn: true, gainDb: 0, normalizeDb: -13, limiterDb: -13, silenceOn: false, silenceDb: -50, fadeOn: true, fadeInSec: 0, fadeOutSec: 0, playOn: true, speed: 1, reverseOn: false };
 const PP_DEFAULT_PARAMS: PostProcessParams = { eq: Array(10).fill(0), masterVolume: 100, eqEnabled: true, fxEnabled: true, reverbEchoEnabled: true, clarity: 0, spaciousness: 0, surround: 0, dynamicBoost: 0, bassBoost: 0, reverbAmount: 0, reverbLength: 50, echoAmount: 0, echoDelayMs: 300, ...PP_EXTRA_DEFAULTS };
 async function loadPostprocessPresets(): Promise<Record<string, PostProcessParams>> {
   try {
@@ -274,7 +274,7 @@ function buildProcessingGraph(ctx: BaseAudioContext, source: AudioNode, params: 
 function finishBuffer(input: AudioBuffer, p: PostProcessParams): AudioBuffer {
   const useVolume = p.volumeOn && (p.gainDb !== 0 || p.normalizeDb > -13 || p.limiterDb > -13);
   const useFade = p.fadeOn && (p.fadeInSec > 0 || p.fadeOutSec > 0);
-  const useSpeed = p.playOn && p.speedPct !== 0;
+  const useSpeed = p.playOn && p.speed !== 1;
   const useReverse = p.playOn && p.reverseOn;
   if (!(useVolume || useFade || useSpeed || useReverse || p.silenceOn)) return input;
   const rate = input.sampleRate;
@@ -313,7 +313,7 @@ function finishBuffer(input: AudioBuffer, p: PostProcessParams): AudioBuffer {
   let outRate = rate;
   if (useSpeed) {
     // playback speed (tape style): the sound is read faster or slower, so the pitch follows the speed
-    const factor = 1 + p.speedPct / 100;
+    const factor = Math.max(0.1, Math.min(5, p.speed));
     const outLength = Math.max(1, Math.round(length / factor));
     data = data.map(channel => { const next = new Float32Array(outLength); for (let i = 0; i < outLength; i++) { const pos = i * factor; const i0 = Math.floor(pos); const frac = pos - i0; const a0 = channel[i0] ?? 0; const a1 = channel[Math.min(length - 1, i0 + 1)] ?? a0; next[i] = a0 + (a1 - a0) * frac; } return next; });
     length = outLength;
@@ -597,12 +597,22 @@ const snapToStep = (value: number, step: number) => Math.round(value / step) * s
 
 // horizontal slider row for the post-process dialog ("음량 · 시간"): label, slider, value + unit
 function PpSlider({ label, unit, value, min, max, step, onChange, off, offAtMin }: { label: string; unit: string; value: number; min: number; max: number; step: number; onChange: (next: number) => void; off?: boolean; offAtMin?: boolean }) {
-  const isOff = off || (offAtMin && value <= min);
   const shown = offAtMin && value <= min ? 'Off' : unit === '%' && value > 0 ? `+${value} %` : `${Number.isInteger(value) ? value : value.toFixed(1)} ${unit}`;
-  return <label className={`pp-slider${isOff ? ' pp-off' : ''}`}>
+  return <label className={`pp-slider${off ? ' pp-off' : ''}`}>
     <span className="pp-slider-label">{label}</span>
     <input type="range" min={min} max={max} step={step} value={value} aria-label={`${label} (${unit})`} onChange={event => onChange(Number(event.target.value))}/>
     <span className="pp-slider-value">{shown}</span>
+  </label>;
+}
+
+// Playback speed 0.1x .. 5.0x with 1.0x exactly in the middle of the slider (left half 0.1..1.0, right half 1.0..5.0)
+const speedFromPos = (pos: number) => Math.round((pos <= 50 ? 0.1 + (pos / 50) * 0.9 : 1 + ((pos - 50) / 50) * 4) * 100) / 100;
+const posFromSpeed = (speed: number) => Math.round(speed <= 1 ? (speed - 0.1) / 0.9 * 50 : 50 + (speed - 1) / 4 * 50);
+function PpSpeedSlider({ value, onChange, off }: { value: number; onChange: (next: number) => void; off?: boolean }) {
+  return <label className={`pp-slider${off ? ' pp-off' : ''}`}>
+    <span className="pp-slider-label">재생 속도</span>
+    <input type="range" min={0} max={100} step={1} value={posFromSpeed(value)} aria-label="재생 속도 (배)" onChange={event => { const pos = Number(event.target.value); onChange(pos === 50 ? 1 : speedFromPos(pos)); }}/>
+    <span className="pp-slider-value">{value.toFixed(2).replace(/0$/, '')}x</span>
   </label>;
 }
 
@@ -1207,9 +1217,7 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
             <PpSlider off={!params.fadeOn} label="Fade In" unit="초" value={params.fadeInSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeInSec', value)}/>
             <PpSlider off={!params.volumeOn} offAtMin label="Limiter (상한)" unit="dB" value={params.limiterDb} min={-13} max={0} step={1} onChange={value => updateParam('limiterDb', value)}/>
             <PpSlider off={!params.fadeOn} label="Fade Out" unit="초" value={params.fadeOutSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeOutSec', value)}/>
-          </div>
-          <div className={`pp-extra-play${params.playOn ? '' : ' pp-off'}`}>
-            <PpSlider off={!params.playOn} label="재생 속도" unit="%" value={params.speedPct} min={-50} max={100} step={5} onChange={value => updateParam('speedPct', value)}/>
+            <PpSpeedSlider off={!params.playOn} value={params.speed} onChange={value => updateParam('speed', value)}/>
           </div>
         </div>
         <div className={`pp-waveform-row${activeTrack === 'original' && isPlaying ? ' pp-row-playing-original' : ''}`}>
