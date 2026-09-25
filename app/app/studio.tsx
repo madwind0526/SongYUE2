@@ -1006,7 +1006,7 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
     <DialogContent className="studio-dialog postprocess-dialog">
       <DialogTitle>{titleOverride ? `후처리 / EQ — ${titleOverride}` : '후처리 / EQ'}</DialogTitle>
       <div className="pp-description-row">
-        <DialogDescription>{onSaveOverride ? `"${titleOverride}" STEM에 EQ와 효과를 적용합니다. "저장"을 누르면 STEM 분리 화면으로 돌아가 이 상태가 반영됩니다.` : `"${project.title}"의 사본에 EQ와 효과를 적용한 뒤 원하는 위치에 저장하세요. 원본 파일은 바뀌지 않습니다.`}</DialogDescription>
+        <DialogDescription>{onSaveOverride ? `"${titleOverride}"에 EQ와 효과를 적용합니다. "저장"을 누르면 이 창을 닫고 처리한 소리가 반영됩니다(원본은 바뀌지 않습니다).` : `"${project.title}"의 사본에 EQ와 효과를 적용한 뒤 원하는 위치에 저장하세요. 원본 파일은 바뀌지 않습니다.`}</DialogDescription>
         <div className="pp-settings-io">
           <select className="pp-preset-select" value={postprocessPreset} onChange={event => applyPostprocessPreset(event.target.value)} aria-label="전체 설정 프리셋">
             <option value="">전체 설정 불러오기</option>
@@ -2212,9 +2212,6 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
   const micDeviceInUseRef = useRef('');
   const audioBlobRef = useRef<Blob | null>(null);
   const resultDataUrlRef = useRef<string | null>(null);
-  const [audioPolishOpen, setAudioPolishOpen] = useState(false);
-  const beforePolishRef = useRef<string | null>(null);
-  const [canUndoPolish, setCanUndoPolish] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const resultBuffer = t.bufferForKey('output');
   const sourceBuffer = t.bufferForKey('source');
@@ -2344,16 +2341,10 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
     t.setBuffer('output', await t.ensureAudioContext().decodeAudioData(await response.arrayBuffer()));
     resultDataUrlRef.current = dataUrl;
   }
-  // "AI 처리" replaces the result; the previous one is kept so "되돌리기" can bring it back
-  async function applyPolished(dataUrl: string) {
-    const previous = resultDataUrlRef.current;
-    await showResult(dataUrl);
-    beforePolishRef.current = previous; setCanUndoPolish(!!previous);
-  }
-  async function undoPolish() {
-    if (!beforePolishRef.current) return;
-    await showResult(beforePolishRef.current);
-    beforePolishRef.current = null; setCanUndoPolish(false);
+  // the shared "AI 처리" / "후처리" buttons hand back the new sound as a buffer
+  async function replaceResult(next: AudioBuffer) {
+    resultDataUrlRef.current = await readFileAsDataUrl(audioBufferToWavBlob(next));
+    t.setBuffer('output', next);
   }
   function applyPickedReference(file: Blob, name: string) {
     refBlobRef.current = file;
@@ -3029,10 +3020,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
             <TransportControls t={t} disabled={!sourceBuffer && !resultBuffer}/>
             <div className="pp-dialog-actions-right">
               <Button variant="outline" onClick={handleCancel} disabled={saving}>취소</Button>
-              {!isAsr && resultBuffer && <>
-                {canUndoPolish && <Button variant="outline" onClick={() => void undoPolish()} disabled={saving}><RotateCcw size={15}/>처리 전으로</Button>}
-                <Button variant="outline" onClick={() => setAudioPolishOpen(true)} disabled={saving || !resultDataUrlRef.current}><WandSparkles size={15}/>AI 처리</Button>
-              </>}
+              {!isAsr && <ResultEnhanceButtons buffer={resultBuffer} onReplace={replaceResult} notify={notify} title={isTts ? tool.label : isVc ? '음색 변조' : isEdit ? '대사 편집' : isSfx ? '효과음 생성' : '음성 조절'} disabled={saving}/>}
               {isVc && sourceFromMic && <Button variant="outline" onClick={() => void handleSaveSource()} disabled={saving}><Save size={15}/>원본 저장</Button>}
               <Button onClick={() => void handleSave()} disabled={!canSave}>{saving ? <LoaderCircle className="spin"/> : <Save size={15}/>}저장</Button>
             </div>
@@ -3040,7 +3028,6 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
         </>}
       </div>
     </div>
-    {audioPolishOpen && resultDataUrlRef.current && <AudioPolishDialog audioDataUrl={resultDataUrlRef.current} onClose={() => setAudioPolishOpen(false)} onApply={applyPolished}/>}
     <MultiFileLibraryPicker open={refPickerOpen} onClose={() => setRefPickerOpen(false)} onConfirm={paths => paths[0] && void pickReferenceFromLibrary(paths[0])} title="참조 목소리 선택" description="목표 음색이 되는 참조 오디오를 라이브러리에서 고릅니다."/>
     <MultiFileLibraryPicker open={audioPickerOpen} onClose={() => setAudioPickerOpen(false)} onConfirm={paths => paths[0] && void pickFromLibrary(paths[0])} title={`${audioLabel} 선택`} description="라이브러리에서 오디오 파일을 고릅니다."/>
   </section>;
@@ -3686,6 +3673,57 @@ function AudioPolishDialog({ audioDataUrl, onClose, onApply }: { audioDataUrl: s
   </Dialog>;
 }
 
+// "AI 처리" + "후처리" (+ "처리 전으로") for a sound result held as an AudioBuffer: Audio Tools, the timbre-transform popup, audio restore.
+// The processed sound replaces the result through onReplace; the sound before the last change is kept so it can be brought back.
+function ResultEnhanceButtons({ buffer, onReplace, notify, title, disabled }: { buffer: AudioBuffer | null; onReplace: (next: AudioBuffer) => void | Promise<void>; notify: (text: string, error?: boolean) => void; title: string; disabled?: boolean }) {
+  const [polishUrl, setPolishUrl] = useState<string | null>(null);
+  const [postOpen, setPostOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [canUndo, setCanUndo] = useState(false);
+  const previousRef = useRef<AudioBuffer | null>(null);
+  const ownRef = useRef<AudioBuffer | null>(null);
+  const paramsRef = useRef<PostProcessParams>(PP_DEFAULT_PARAMS);
+  // a result that did not come from here (a new run) starts a fresh history
+  useEffect(() => { if (buffer !== ownRef.current) { previousRef.current = null; paramsRef.current = PP_DEFAULT_PARAMS; setCanUndo(false); } }, [buffer]);
+  async function replace(next: AudioBuffer) {
+    previousRef.current = buffer; ownRef.current = next; setCanUndo(!!buffer);
+    await onReplace(next);
+  }
+  async function undo() {
+    const previous = previousRef.current;
+    if (!previous) return;
+    ownRef.current = previous; previousRef.current = null; setCanUndo(false);
+    await onReplace(previous);
+  }
+  async function openPolish() {
+    if (!buffer) return;
+    setBusy(true);
+    try { setPolishUrl(await readFileAsDataUrl(audioBufferToWavBlob(buffer))); }
+    catch (error) { notify((error as Error).message, true); }
+    finally { setBusy(false); }
+  }
+  async function applyPolished(dataUrl: string) {
+    const bytes = await (await fetch(dataUrl)).arrayBuffer();
+    await replace(await new OfflineAudioContext(1, 1, 44100).decodeAudioData(bytes));
+  }
+  if (!buffer) return null;
+  return <>
+    {canUndo && <Button variant="outline" onClick={() => void undo()} disabled={disabled}><RotateCcw size={15}/>처리 전으로</Button>}
+    <Button variant="outline" onClick={() => void openPolish()} disabled={disabled || busy}>{busy ? <LoaderCircle className="spin" size={15}/> : <WandSparkles size={15}/>}AI 처리</Button>
+    <Button variant="outline" onClick={() => setPostOpen(true)} disabled={disabled}><SlidersHorizontal size={15}/>후처리</Button>
+    {polishUrl && <AudioPolishDialog audioDataUrl={polishUrl} onClose={() => setPolishUrl(null)} onApply={applyPolished}/>}
+    {postOpen && <PostProcessDialog
+      project={{ id: 'result-enhance', title } as unknown as Project}
+      onClose={() => setPostOpen(false)}
+      notify={notify}
+      visualizerEnabled={false} visualizerRingCount={1} visualizerHue={0} visualizerLineWidth={1} visualizerTrail={0} visualizerSpiral={0} visualizerRingMode="radial" visualizerTimeStep={0.1} visualizerTimeSkew={1} visualizerRingStep={1} visualizerAmplitude={1}
+      titleOverride={title}
+      sourceOverride={{ buffer, params: paramsRef.current }}
+      onSaveOverride={(next, params) => { paramsRef.current = params; setPostOpen(false); void replace(next); }}
+    />}
+  </>;
+}
+
 // "AI 곡 다듬기": AI로 만든 곡의 결함(잡음, 반짝임, 기계적인 보컬)을 다듬는 후처리 체인. 사용자가 단계를 켜고
 // 시작하면 서버가 미리듣기를 만들고, 원본과 같은 위치에서 번갈아 들어 본 뒤 새 곡으로 저장하거나 버린다.
 type PolishSettings = {
@@ -4271,6 +4309,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
               <TransportControls t={t} disabled={!t.peaksForKey('source').length}/>
               <div className="pp-dialog-actions-right">
                 <Button variant="outline" onClick={onClose} disabled={saving}>닫기</Button>
+                <ResultEnhanceButtons buffer={resultBuffer} onReplace={next => t.setBuffer('result', next)} notify={notify} title="변환곡" disabled={saving}/>
                 <Button onClick={() => void handleSave()} disabled={!resultBuffer || saving}>{saving ? <LoaderCircle className="spin"/> : <Save size={15}/>}저장</Button>
               </div>
             </div>
@@ -4348,6 +4387,8 @@ function AudioRestoreDialog({ file, onClose, notify, onCreated }: { file: File; 
   const previewGainRef = useRef<GainNode | null>(null);
   const originalBufferRef = useRef<AudioBuffer | null>(null);
   const restoredBufferRef = useRef<AudioBuffer | null>(null);
+  // set once "AI 처리" / "후처리" changed the restored sound: saving then sends this buffer instead of the server's preview file
+  const enhancedRef = useRef(false);
   const previewIdRef = useRef<string | null>(null);
   const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const playStartCtxTimeRef = useRef(0);
@@ -4507,12 +4548,22 @@ function AudioRestoreDialog({ file, onClose, notify, onCreated }: { file: File; 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPlaying]);
 
+  function replaceRestored(next: AudioBuffer) {
+    stopPlayback();
+    restoredBufferRef.current = next;
+    enhancedRef.current = true;
+    setRestoredPeaks(computeWaveformPeaks(next, 300));
+  }
   async function handleSave() {
     if (!previewIdRef.current) return;
     setSaving(true);
     try {
       stopPlayback();
-      const completed = await api<Project>(`/audiosr-restore/preview/${previewIdRef.current}/save`, 'POST', { title: title.trim() });
+      let completed: Project;
+      if (enhancedRef.current && restoredBufferRef.current) {
+        completed = await api<Project>('/audio-save', 'POST', { dataUrl: await readFileAsDataUrl(audioBufferToWavBlob(restoredBufferRef.current)), title: title.trim() || file.name.replace(/\.[^./]+$/, '') });
+        void api(`/audiosr-restore/preview/${previewIdRef.current}`, 'DELETE').catch(() => {});
+      } else completed = await api<Project>(`/audiosr-restore/preview/${previewIdRef.current}/save`, 'POST', { title: title.trim() });
       previewIdRef.current = null;
       onCreated(completed);
       notify('오디오를 복원해 라이브러리에 추가했습니다.');
@@ -4572,6 +4623,7 @@ function AudioRestoreDialog({ file, onClose, notify, onCreated }: { file: File; 
         </div>
         <div className="pp-dialog-actions-right">
           <Button variant="outline" onClick={() => { stopPlayback(); onClose(); }} disabled={saving}>취소</Button>
+          <ResultEnhanceButtons buffer={restoredPeaks.length ? restoredBufferRef.current : null} onReplace={replaceRestored} notify={notify} title="복원본" disabled={saving}/>
           <Button onClick={() => void handleSave()} disabled={!restoredPeaks.length || saving}>{saving ? <LoaderCircle className="spin"/> : <Save size={15}/>}저장</Button>
         </div>
       </div>
