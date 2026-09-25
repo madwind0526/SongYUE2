@@ -3564,7 +3564,7 @@ function AdapterPicker({ selected, onChange, style, onInsertTrigger, notify }: {
         {item.tip && <span className="vocal-gender-hint">{item.tip}</span>}
       </div>;
     })}
-    {chosen.length > 0 && <span className="vocal-gender-hint">강도는 0~2 사이 값을 넣을 수 있습니다(기본 0.7, 1보다 크면 더 강하게, 2가 최대). LoRA를 쓰면 곡이 별도 엔진(yue-server)으로 만들어집니다. 추론 단계는 32 정도를 권장합니다.</span>}
+    {chosen.length > 0 && <span className="vocal-gender-hint">강도는 0~2 사이 값을 넣을 수 있습니다(기본 0.7, 1보다 크면 더 강하게, 2가 최대). LoRA를 쓰면 곡이 별도 엔진(yue-server)으로 만들어집니다.</span>}
     {open && <Dialog open onOpenChange={next => { if (!next) setOpen(false); }}>
       <DialogContent className="studio-dialog adapter-picker-dialog">
         <DialogTitle>LoRA 선택</DialogTitle>
