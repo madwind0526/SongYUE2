@@ -122,3 +122,6 @@
 .pp-fx-presets{justify-content:center}.pp-fx-presets .pp-preset-select{flex:none;width:150px}
 /* Compressor preset controls centred above the compressor knobs */
 .pp-comp-presetbar{justify-content:center}.pp-comp-presetbar .pp-preset-select{flex:none;width:96px}
+
+/* Reverse sits with Reset on the right (it is not one of the four group switches) */
+.pp-extra-right{display:flex;align-items:center;gap:8px}

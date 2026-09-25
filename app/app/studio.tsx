@@ -1386,9 +1386,11 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
               <div className={params.silenceOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" onClick={() => updateParam('silenceOn', !params.silenceOn)}><Power size={12}/>무음제거</button></div>
               <div className={params.fadeOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" onClick={() => updateParam('fadeOn', !params.fadeOn)}><Power size={12}/>Fade</button></div>
               <div className={params.playOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" onClick={() => updateParam('playOn', !params.playOn)}><Power size={12}/>Play</button></div>
-              <div className={params.reverseOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" title="소리를 끝에서 처음으로 뒤집습니다(Play가 켜져 있을 때 적용)" onClick={() => updateParam('reverseOn', !params.reverseOn)}><Power size={12}/>Reverse</button></div>
             </div>
-            <button type="button" className="pp-extra-reset" title="음량 · 무음제거 · Fade · Play 설정을 모두 처음 값으로" onClick={resetExtras}><RotateCcw size={12}/>Reset</button>
+            <div className="pp-extra-right">
+              <div className={params.reverseOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" title="소리를 끝에서 처음으로 뒤집습니다(Play가 켜져 있을 때 적용)" onClick={() => updateParam('reverseOn', !params.reverseOn)}><Power size={12}/>Reverse</button></div>
+              <button type="button" className="pp-extra-reset" title="음량 · 무음제거 · Fade · Play 설정을 모두 처음 값으로" onClick={resetExtras}><RotateCcw size={12}/>Reset</button>
+            </div>
           </div>
           <div className="pp-extra-sliders">
             <PpSlider off={!params.volumeOn} label="Gain (조절값)" unit="dB" value={params.gainDb} min={-12} max={12} step={1} onChange={value => updateParam('gainDb', value)}/>
