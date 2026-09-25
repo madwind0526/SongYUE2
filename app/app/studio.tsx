@@ -3675,7 +3675,7 @@ function FolderBrowser({ start, onPick, onClose }: { start: string; onPick: (pat
     try { setListing(await api<FolderListing>(`/lora-train/browse?path=${encodeURIComponent(target)}`)); }
     catch (failure) { setError((failure as Error).message); }
   };
-  useEffect(() => { void open(start.trim() && /^[A-Za-z]:[\\/]/.test(start.trim()) ? start.trim() : ''); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void open(start.trim() && /^[A-Za-z]:[\\/]/.test(start.trim()) ? start.trim() : '@library'); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   return <Dialog open onOpenChange={next => { if (!next) onClose(); }}>
     <DialogContent className="studio-dialog folder-browser">
       <DialogTitle>곡이 들어 있는 폴더 찾기</DialogTitle>
