@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
-import { scanSourceDir, cleanTrainRequest, buildTrainPrompt, emaRawVerdict, finalizeTrainedLora, listLoraLibrary, safeFolderName } from './lora-train.mjs';
+import { scanSourceDir, cleanTrainRequest, buildTrainPrompt, emaRawVerdict, finalizeTrainedLora, listLoraLibrary, safeFolderName, browseFolders, editLoraLibraryItem, deleteLoraLibraryItem } from './lora-train.mjs';
 
 const temp = async (t) => { const dir = await mkdtemp(path.join(os.tmpdir(), 'songyue-train-')); t.after(() => rm(dir, { recursive: true, force: true })); return dir; };
 
@@ -80,4 +80,36 @@ test('the trainer: the scan lists every song with its length', async (t) => {
   const found = await trainer.scan(dir);
   assert.deepEqual(found.files.map((file) => [file.name, file.seconds]), [['a.mp3', 200], ['b.wav', 100]]);
   assert.equal(found.seconds, 300); assert.equal(found.minutes, 5);
+});
+
+test('the folder browser lists sub-folders with the song count of the folder, and refuses relative paths', async (t) => {
+  const dir = await temp(t);
+  await mkdir(path.join(dir, 'b')); await mkdir(path.join(dir, 'A')); await writeFile(path.join(dir, 'x.mp3'), 'x'); await writeFile(path.join(dir, 'note.txt'), 'n');
+  const listing = await browseFolders(dir);
+  assert.deepEqual(listing.dirs.map((item) => item.name), ['A', 'b']);
+  assert.equal(listing.songs, 1);
+  assert.equal(listing.parent, path.dirname(dir));
+  assert.ok((await browseFolders('')).dirs.length >= 1, 'the drives');
+  await assert.rejects(browseFolders('relative'), /전체 경로/);
+  await assert.rejects(browseFolders(path.join(dir, 'nope')), /찾을 수 없습니다/);
+});
+
+test('library entries: the title and notes are edited in the record and the installed copy, deleting removes both', async (t) => {
+  const dir = await temp(t);
+  const libraryDir = path.join(dir, 'library', 'Lora'); const adapterDir = path.join(dir, 'adapters');
+  await mkdir(adapterDir, { recursive: true }); await mkdir(path.join(dir, 'loras'), { recursive: true });
+  await writeFile(path.join(dir, 'loras', 'a.safetensors'), 'W');
+  const made = await finalizeTrainedLora({ libraryDir, adapterDir, name: '지수 음색', trigger: 'jisoo_voice', chosenFile: path.join(dir, 'loras', 'a.safetensors'), record: { triggerWord: 'jisoo_voice', settings: { steps: 1500, rank: 16 } } });
+  let list = await listLoraLibrary(libraryDir);
+  assert.equal(list[0].title, '지수 음색'); assert.equal(list[0].steps, 1500); assert.equal(list[0].rank, 16); assert.equal(list[0].installedAs, `models/yue-adapters/${made.installedName}`);
+  await editLoraLibraryItem({ libraryDir, adapterRoot: adapterDir, name: '지수 음색', title: '지수 (굵은 톤)', note: '강도 1.0에서 굵은 질감' });
+  list = await listLoraLibrary(libraryDir);
+  assert.equal(list[0].title, '지수 (굵은 톤)'); assert.equal(list[0].note, '강도 1.0에서 굵은 질감');
+  const meta = JSON.parse(await readFile(path.join(adapterDir, made.installedName, 'songyue2-adapter.json'), 'utf8'));
+  assert.equal(meta.displayName, '지수 (굵은 톤)'); assert.equal(meta.note, '강도 1.0에서 굵은 질감');
+  await assert.rejects(editLoraLibraryItem({ libraryDir, adapterRoot: adapterDir, name: 'nope', title: 'x' }), /찾을 수 없습니다/);
+  const removed = await deleteLoraLibraryItem({ libraryDir, adapterRoot: adapterDir, name: '지수 음색' });
+  assert.equal(removed.removedInstalled, true);
+  assert.deepEqual(await listLoraLibrary(libraryDir), []);
+  await assert.rejects(stat(path.join(adapterDir, made.installedName)));
 });

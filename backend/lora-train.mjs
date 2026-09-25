@@ -1,7 +1,7 @@
 // LoRA training (YuE2 sound / NAR adapters) with the ComfyUI-YuE2-Trainer nodes. This module holds the parts that do not need the
 // running server: looking at the source folder, building the ComfyUI request, comparing the EMA and the raw result, and
 // filing the chosen result (library archive + installed copy). server.mjs starts the job and follows its progress.
-import { copyFile, link, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, link, mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 export const TRAIN_AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.flac']);
@@ -107,14 +107,75 @@ export async function finalizeTrainedLora({ libraryDir, adapterDir, existingAdap
   return { installedName, archived, installDir, mode, bytes: (await stat(archived)).size };
 }
 
-// library/Lora: one folder per LoRA with its size (for the "보관함" list)
+// Folder browser for the "찾기" button of the training tab: the drives (empty path) or the sub-folders of a folder, with the number of songs in each.
+export async function browseFolders(target) {
+  if (!target) {
+    const drives = [];
+    for (const letter of 'CDEFGHIJKLMNOPQRSTUVWXYZ') {
+      const root = `${letter}:\\`;
+      if (await exists(root)) drives.push({ name: `${letter}:`, path: root });
+    }
+    return { path: '', parent: null, dirs: drives, songs: 0 };
+  }
+  if (!path.isAbsolute(target)) throw new Error('폴더의 전체 경로가 필요합니다.');
+  const info = await stat(target).catch(() => null);
+  if (!info?.isDirectory()) throw new Error('폴더를 찾을 수 없습니다.');
+  const entries = await readdir(target, { withFileTypes: true }).catch(() => { throw new Error('이 폴더를 열 수 없습니다.'); });
+  const dirs = [];
+  let songs = 0;
+  for (const entry of entries) {
+    if (entry.isFile() && TRAIN_AUDIO_EXTENSIONS.has(path.extname(entry.name).toLowerCase())) songs += 1;
+    else if (entry.isDirectory() && !entry.name.startsWith('$') && entry.name !== 'System Volume Information') dirs.push({ name: entry.name, path: path.join(target, entry.name) });
+  }
+  dirs.sort((a, b) => a.name.localeCompare(b.name, 'en', { numeric: true, sensitivity: 'base' }));
+  const parent = path.dirname(target);
+  return { path: target, parent: parent === target ? '' : parent, dirs, songs };
+}
+
+const readRecord = async (dir) => readFile(path.join(dir, '학습 기록.json'), 'utf8').then(JSON.parse, () => null);
+
+// library/Lora: one folder per LoRA with its size, title and notes (for the "보관함" list)
 export async function listLoraLibrary(libraryDir) {
   const entries = await readdir(libraryDir, { withFileTypes: true }).catch(() => []);
   const items = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const dir = path.join(libraryDir, entry.name);
-    items.push({ name: entry.name, bytes: await dirSize(dir), hasRecord: await exists(path.join(dir, '학습 기록.json')) });
+    const record = await readRecord(dir);
+    items.push({ name: entry.name, title: record?.name || entry.name, note: record?.note || '', trigger: record?.triggerWord || '', steps: record?.settings?.steps || null, rank: record?.settings?.rank || null, songs: record?.songCount || null, trainedAt: record?.trainedAt || '', installedAs: record?.installedAs || '', bytes: await dirSize(dir), hasRecord: !!record });
   }
-  return items.sort((a, b) => a.name.localeCompare(b.name));
+  return items.sort((a, b) => a.title.localeCompare(b.title, 'en', { numeric: true, sensitivity: 'base' }));
+}
+
+// Title / notes of a library entry: kept in its record and copied to the installed adapter so both lists show the same name
+export async function editLoraLibraryItem({ libraryDir, adapterRoot, name, title, note }) {
+  const dir = path.join(libraryDir, safeFolderName(name));
+  const record = await readRecord(dir);
+  if (!record) throw new Error('보관함에서 이 LoRA를 찾을 수 없습니다.');
+  const next = { ...record };
+  if (typeof title === 'string' && title.trim()) next.name = title.trim().slice(0, 120);
+  if (typeof note === 'string') next.note = note.slice(0, 2000);
+  await writeFile(path.join(dir, '학습 기록.json'), JSON.stringify(next, null, 2), 'utf8');
+  const installed = record.installedAs ? path.join(adapterRoot, path.basename(record.installedAs)) : null;
+  if (installed && await exists(path.join(installed, 'songyue2-adapter.json'))) {
+    const meta = JSON.parse(await readFile(path.join(installed, 'songyue2-adapter.json'), 'utf8'));
+    if (typeof title === 'string' && title.trim()) meta.displayName = next.name;
+    if (typeof note === 'string') meta.note = note.slice(0, 2000);
+    await writeFile(path.join(installed, 'songyue2-adapter.json'), JSON.stringify(meta, null, 1), 'utf8');
+  }
+  return { name, title: next.name, note: next.note || '' };
+}
+
+// Deletes a library entry and the installed copy that belongs to it (the installed file is a hard link of the archived one)
+export async function deleteLoraLibraryItem({ libraryDir, adapterRoot, name }) {
+  const dir = path.join(libraryDir, safeFolderName(name));
+  if (!(await exists(dir))) throw new Error('보관함에서 이 LoRA를 찾을 수 없습니다.');
+  const record = await readRecord(dir);
+  let removedInstalled = false;
+  if (record?.installedAs) {
+    const installed = path.join(adapterRoot, path.basename(record.installedAs));
+    if (await exists(installed)) { await rm(installed, { recursive: true, force: true }); removedInstalled = true; }
+  }
+  await rm(dir, { recursive: true, force: true });
+  return { ok: true, removedInstalled };
 }

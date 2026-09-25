@@ -18,7 +18,7 @@ import { Worker } from 'node:worker_threads';
 import { lyricLines, detectLanguage, alignLyrics, toLrc } from './lyricsync.mjs';
 import { YUE_SERVER_PORT, yueServerPaths, yuePrecisionFor, isInstrumentalAdapter, listAdapters, normalizeAdapterSelection, toEngineAdapters, synthesize as yueServerSynthesize, probeAdapters, fileExists as yueFileExists } from './yueserver.mjs';
 import { createLoraTrainer } from './lora-trainer.mjs';
-import { listLoraLibrary } from './lora-train.mjs';
+import { listLoraLibrary, browseFolders, editLoraLibraryItem, deleteLoraLibraryItem } from './lora-train.mjs';
 import { searchHub, hubDetail, installHubUnits, installCatalogEntry, loadCatalog, catalogSummary, importLocalFiles, updateMeta } from './adapters.mjs';
 import { runPolishChain, normalizePolishSettings, enabledStages } from './postfx/chain.mjs';
 import { startRealtimeVcProcess, REALTIME_CHUNK_SAMPLES, REALTIME_INPUT_RATE } from './realtimevc.mjs';
@@ -2207,6 +2207,10 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         const run = async (work) => { try { return send(200, await work()); } catch (error) { if (error?.status) throw fail(error.status, error.message); throw error; } };
         if (req.method === 'GET' && sub === '/status') return run(async () => ({ readiness: await loraTrainer.readiness(), job: await loraTrainer.current(), busy: generating }));
         if (req.method === 'GET' && sub === '/library') return run(async () => ({ items: await listLoraLibrary(loraTrainer.libraryDir()) }));
+        if (req.method === 'GET' && sub === '/browse') return run(() => browseFolders(String(requestUrl.searchParams.get('path') || '').trim()).catch((error) => { throw Object.assign(error, { status: 400 }); }));
+        const libMatch = sub.match(/^\/library\/([^/]+)$/);
+        if (libMatch && req.method === 'PATCH') { const input = await body(req, 16 * 1024); return run(() => editLoraLibraryItem({ libraryDir: loraTrainer.libraryDir(), adapterRoot: yueServerPaths(root).adapters, name: decodeURIComponent(libMatch[1]), title: typeof input.title === 'string' ? text(input.title, 120) : undefined, note: typeof input.note === 'string' ? text(input.note, 2000) : undefined }).catch((error) => { throw Object.assign(error, { status: 404 }); })); }
+        if (libMatch && req.method === 'DELETE') return run(() => deleteLoraLibraryItem({ libraryDir: loraTrainer.libraryDir(), adapterRoot: yueServerPaths(root).adapters, name: decodeURIComponent(libMatch[1]) }).catch((error) => { throw Object.assign(error, { status: 404 }); }));
         if (req.method === 'POST' && sub === '/scan') { const input = await body(req, 16 * 1024); return run(() => loraTrainer.scan(text(input.dir, 1000).trim()).catch((error) => { throw Object.assign(error, { status: 400 }); })); }
         if (req.method === 'POST' && sub === '/start') { const input = await body(req, 16 * 1024); return run(() => loraTrainer.start({ ...input, sourceDir: text(input.sourceDir, 1000), files: Array.isArray(input.files) ? input.files.slice(0, 1000).map((name) => text(name, 300)) : null })); }
         if (req.method === 'POST' && sub === '/cancel') return run(() => loraTrainer.cancel());

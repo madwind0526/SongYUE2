@@ -3665,6 +3665,36 @@ type TrainScan = { dir: string; count: number; bytes: number; minutes: number; s
 // end condition: a number of steps, or a number of passes over all the chosen material (1 step = one random clip; a pass = all clips once)
 const TRAIN_PACE_SECONDS_PER_STEP = 0.85;
 const TRAIN_CLIP_CHOICES = [3, 4, 5, 6];
+// "찾기" for the training folder: walks the drives and folders of this PC (the app runs locally); the chosen folder's path goes back to the form
+type FolderListing = { path: string; parent: string | null; dirs: { name: string; path: string }[]; songs: number };
+function FolderBrowser({ start, onPick, onClose }: { start: string; onPick: (path: string) => void; onClose: () => void }) {
+  const [listing, setListing] = useState<FolderListing | null>(null);
+  const [error, setError] = useState('');
+  const open = async (target: string) => {
+    setError('');
+    try { setListing(await api<FolderListing>(`/lora-train/browse?path=${encodeURIComponent(target)}`)); }
+    catch (failure) { setError((failure as Error).message); }
+  };
+  useEffect(() => { void open(start.trim() && /^[A-Za-z]:[\\/]/.test(start.trim()) ? start.trim() : ''); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  return <Dialog open onOpenChange={next => { if (!next) onClose(); }}>
+    <DialogContent className="studio-dialog folder-browser">
+      <DialogTitle>곡이 들어 있는 폴더 찾기</DialogTitle>
+      <DialogDescription>{listing?.path ? listing.path : '드라이브를 고르세요.'}</DialogDescription>
+      {error && <p className="field-hint warning">{error}</p>}
+      <div className="folder-list">
+        {listing && listing.path && <button type="button" className="folder-row up" onClick={() => void open(listing.parent || '')}><ChevronLeft size={14}/>위로 ({listing.parent || '드라이브 목록'})</button>}
+        {listing?.dirs.map(dir => <button type="button" key={dir.path} className="folder-row" onClick={() => void open(dir.path)}><FolderOpen size={14}/>{dir.name}</button>)}
+        {listing && listing.dirs.length === 0 && listing.path && <p className="field-hint">하위 폴더가 없습니다.</p>}
+      </div>
+      <div className="dialog-actions">
+        <span className="field-hint folder-songs">{listing?.path ? `이 폴더의 곡: ${listing.songs}개(mp3, wav, flac)` : ''}</span>
+        <Button variant="outline" onClick={onClose}>취소</Button>
+        <Button disabled={!listing?.path} onClick={() => { if (listing?.path) { onPick(listing.path); onClose(); } }}><Check size={15}/>이 폴더 선택</Button>
+      </div>
+    </DialogContent>
+  </Dialog>;
+}
+
 function LoraTrainTab({ notify, onInstalled }: { notify: (text: string, error?: boolean) => void; onInstalled: () => void }) {
   const [status, setStatus] = useState<TrainStatus | null>(null);
   const [dir, setDir] = useState('');
@@ -3678,12 +3708,26 @@ function LoraTrainTab({ notify, onInstalled }: { notify: (text: string, error?: 
   const [rank, setRank] = useState(16);
   const [clip, setClip] = useState(6);
   const [chosen, setChosen] = useState<string[]>([]);
+  const [browsing, setBrowsing] = useState(false);
   const [caption, setCaption] = useState('');
   const [busy, setBusy] = useState('');
-  const [library, setLibrary] = useState<{ name: string; bytes: number; hasRecord: boolean }[]>([]);
+  type LibraryItem = { name: string; title: string; note: string; trigger: string; steps: number | null; rank: number | null; songs: number | null; trainedAt: string; installedAs: string; bytes: number; hasRecord: boolean };
+  const [library, setLibrary] = useState<LibraryItem[]>([]);
+  const [editing, setEditing] = useState<{ name: string; title: string; note: string } | null>(null);
+  const [removing, setRemoving] = useState('');
   const job = status?.job || null;
   const reloadStatus = () => api<TrainStatus>('/lora-train/status').then(setStatus).catch(() => {});
-  const reloadLibrary = () => api<{ items: { name: string; bytes: number; hasRecord: boolean }[] }>('/lora-train/library').then(result => setLibrary(result.items)).catch(() => {});
+  const reloadLibrary = () => api<{ items: LibraryItem[] }>('/lora-train/library').then(result => setLibrary(result.items)).catch(() => {});
+  async function saveLibraryItem() {
+    if (!editing) return;
+    try { await api(`/lora-train/library/${encodeURIComponent(editing.name)}`, 'PATCH', { title: editing.title, note: editing.note }); notify('보관함의 이름과 메모를 저장했습니다.'); setEditing(null); await reloadLibrary(); onInstalled(); }
+    catch (error) { notify((error as Error).message, true); }
+  }
+  async function deleteLibraryItem(name: string) {
+    try { await api(`/lora-train/library/${encodeURIComponent(name)}`, 'DELETE'); notify('보관함과 설치본을 함께 삭제했습니다.'); setRemoving(''); await reloadLibrary(); onInstalled(); }
+    catch (error) { notify((error as Error).message, true); }
+  }
+  useEffect(() => { if (!removing) return; const timer = window.setTimeout(() => setRemoving(''), 4000); return () => window.clearTimeout(timer); }, [removing]);
   useEffect(() => { void reloadStatus(); void reloadLibrary(); }, []);
   // follow a running job every 2 s
   useEffect(() => {
@@ -3691,9 +3735,9 @@ function LoraTrainTab({ notify, onInstalled }: { notify: (text: string, error?: 
     const timer = window.setInterval(() => void reloadStatus(), 2000);
     return () => window.clearInterval(timer);
   }, [job?.status, job?.ab?.status]); // eslint-disable-line react-hooks/exhaustive-deps
-  async function scanFolder() {
+  async function scanFolder(target = dir) {
     setScanning(true); setScan(null);
-    try { const found = await api<TrainScan>('/lora-train/scan', 'POST', { dir }); setScan(found); setChosen(found.files.map(file => file.name)); }
+    try { const found = await api<TrainScan>('/lora-train/scan', 'POST', { dir: target }); setScan(found); setChosen(found.files.map(file => file.name)); }
     catch (error) { notify((error as Error).message, true); }
     finally { setScanning(false); }
   }
@@ -3725,11 +3769,12 @@ function LoraTrainTab({ notify, onInstalled }: { notify: (text: string, error?: 
   const canStart = !!status?.readiness.ready && !status.busy && !running && job?.status !== 'review' && !!scan && chosen.length > 0 && name.trim() && trigger.trim() && !busy;
   const gb = (bytes: number) => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
   return <div className="train-tab">
+    {browsing && <FolderBrowser start={dir} onClose={() => setBrowsing(false)} onPick={picked => { setDir(picked); void scanFolder(picked); }}/>}
     {notReady.length > 0 && <div className="train-warn">{notReady.map(check => <p key={check.hint}>{check.hint}</p>)}</div>}
     {(!job || job.status === 'failed' || job.status === 'cancelled' || job.status === 'done') && <>
       <p className="field-hint">내 곡(mp3, wav, flac)이 들어 있는 폴더를 고르면 그 곡들의 음색과 질감을 배운 LoRA를 만듭니다. 폴더의 곡은 복사하거나 바꾸지 않고 그 자리에서 읽습니다. 학습하는 동안에는 GPU를 거의 다 쓰므로 곡 만들기 등은 끝난 뒤에 해 주세요.</p>
       <div className="train-form">
-        <label className="train-field wide">곡이 들어 있는 폴더<span className="train-row"><Input value={dir} placeholder="예: D:\Music\지수" aria-label="곡 폴더 경로" onChange={event => { setDir(event.target.value); setScan(null); }} onKeyDown={event => { if (event.key === 'Enter') void scanFolder(); }}/><Button variant="outline" disabled={!dir.trim() || scanning} onClick={() => void scanFolder()}>{scanning ? <LoaderCircle className="spin" size={14}/> : <FolderOpen size={14}/>}확인</Button></span></label>
+        <label className="train-field wide">곡이 들어 있는 폴더<span className="train-row"><Input value={dir} placeholder="예: D:\Music\지수" aria-label="곡 폴더 경로" onChange={event => { setDir(event.target.value); setScan(null); }} onKeyDown={event => { if (event.key === 'Enter') void scanFolder(); }}/><Button variant="outline" onClick={() => setBrowsing(true)}><Search size={14}/>찾기</Button><Button variant="outline" disabled={!dir.trim() || scanning} onClick={() => void scanFolder()}>{scanning ? <LoaderCircle className="spin" size={14}/> : <Check size={14}/>}곡 읽기</Button></span></label>
         {scan && <div className="train-songs">
           <div className="train-songs-head"><strong>곡 목록</strong><span>{chosen.length} / {scan.count}곡 선택 · 약 {Math.round(chosenSeconds / 60)}분{scan.captions > 0 ? ` · 설명 파일 ${scan.captions}개(곡과 같은 이름의 .txt를 스타일 설명으로 씁니다)` : ''}</span><button type="button" className="link-button" onClick={() => setChosen(scan.files.map(file => file.name))}>모두 선택</button><button type="button" className="link-button" onClick={() => setChosen([])}>모두 해제</button></div>
           <ul>{scan.files.map(file => <li key={file.name}><label><input type="checkbox" checked={chosen.includes(file.name)} onChange={event => setChosen(event.target.checked ? [...chosen, file.name] : chosen.filter(item => item !== file.name))}/><span>{file.name}</span><small>{Math.floor(file.seconds / 60)}:{String(file.seconds % 60).padStart(2, '0')} · {gb(file.bytes)}</small></label></li>)}</ul>
@@ -3745,7 +3790,7 @@ function LoraTrainTab({ notify, onInstalled }: { notify: (text: string, error?: 
             <label><input type="radio" name="train-end" checked={endMode === 'steps'} onChange={() => setEndMode('steps')}/>스텝 수<Input type="number" min={50} max={20000} step={100} value={steps} disabled={endMode !== 'steps'} aria-label="학습 스텝 수" onChange={event => setSteps(Math.max(50, Math.min(20000, Number(event.target.value) || 50)))}/></label>
             <label><input type="radio" name="train-end" checked={endMode === 'passes'} onChange={() => setEndMode('passes')}/>곡 전체 반복<Input type="number" min={1} max={100} step={1} value={passes} disabled={endMode !== 'passes'} aria-label="반복 횟수" onChange={event => setPasses(Math.max(1, Math.min(100, Number(event.target.value) || 1)))}/>번</label>
           </div>
-          <small>= <b>{totalSteps}스텝</b> · 곡 전체를 약 {passesOfSteps.toFixed(1)}번 반복 · 조각 {clipCount}개 · 학습 약 {estimateMinutes}분(이 PC 기준 추정). 너무 적으면 효과가 약하고 너무 많으면 곡을 외워 버립니다. 보통 곡 전체를 2~4번 반복하면 충분합니다.</small>
+          <small>= <b>{totalSteps}스텝</b> · 곡 전체를 약 {passesOfSteps.toFixed(1)}번 반복 · 조각 {clipCount}개 · 학습 약 {estimateMinutes}분(이 PC 기준 추정). {totalSteps < 1000 ? ' ⚠ 스텝이 1000보다 적으면 LoRA의 효과가 약할 수 있습니다(이 도구의 권장은 1000~3000스텝, 잘 되는 경우가 많은 값은 3000~5000).' : passesOfSteps > 30 ? ' ⚠ 곡 전체를 30번 넘게 반복하면 곡을 외워 버릴 수 있습니다.' : ''}</small>
         </div>
         <label className="train-field wide">곡 전체에 붙일 스타일 설명 (선택)<Input value={caption} maxLength={300} placeholder="예: korean pop ballad, soft female vocal (폴더에 .txt 설명 파일이 있으면 그것을 씁니다)" onChange={event => setCaption(event.target.value)}/></label>
       </div>
@@ -3779,8 +3824,24 @@ function LoraTrainTab({ notify, onInstalled }: { notify: (text: string, error?: 
     </div>}
     <div className="train-library">
       <h3>보관함 <small>library/Lora</small></h3>
-      {library.length === 0 ? <p className="field-hint">아직 학습해서 만든 LoRA가 없습니다.</p> : <ul>{library.map(item => <li key={item.name}><strong>{item.name}</strong><span>{gb(item.bytes)}{item.hasRecord ? ' · 학습 기록 있음' : ''}</span></li>)}</ul>}
-      {library.length > 0 && <p className="field-hint">합계 {gb(library.reduce((sum, item) => sum + item.bytes, 0))}. 설치된 LoRA는 보관함 파일과 같은 파일이라 용량이 두 번 들지 않습니다(같은 디스크일 때).</p>}
+      {library.length === 0 ? <p className="field-hint">아직 학습해서 만든 LoRA가 없습니다.</p> : <ul className="train-lib-list">{library.map(item => <li key={item.name}>
+        {editing?.name === item.name
+          ? <div className="train-lib-edit">
+              <Input value={editing.title} maxLength={120} aria-label="이름" onChange={event => setEditing({ ...editing, title: event.target.value })}/>
+              <Textarea value={editing.note} maxLength={2000} placeholder="메모 (예: 강도 1.0에서 굵은 질감, 남성 스타일에 잘 맞음)" onChange={event => setEditing({ ...editing, note: event.target.value })}/>
+              <div className="train-lib-actions"><Button size="sm" onClick={() => void saveLibraryItem()}><Check size={14}/>저장</Button><Button size="sm" variant="outline" onClick={() => setEditing(null)}>취소</Button></div>
+            </div>
+          : <>
+              <div className="train-lib-main"><strong>{item.title}</strong><span>{gb(item.bytes)}{item.rank ? ` · rank ${item.rank}` : ''}{item.steps ? ` · ${item.steps}스텝` : ''}{item.songs ? ` · ${item.songs}곡` : ''}{item.trigger ? ` · 트리거 ${item.trigger}` : ''}{item.trainedAt ? ` · ${item.trainedAt}` : ''}</span>{item.note && <em>{item.note}</em>}</div>
+              <div className="train-lib-actions">
+                <button type="button" className="adapter-icon-btn" title="이름과 메모 수정" aria-label={`${item.title} 수정`} onClick={() => setEditing({ name: item.name, title: item.title, note: item.note })}><Pencil size={15}/></button>
+                {removing === item.name
+                  ? <button type="button" className="adapter-icon-btn danger confirm" autoFocus aria-label={`${item.title} 삭제 확인`} onClick={() => void deleteLibraryItem(item.name)}><Trash2 size={14}/>삭제?</button>
+                  : <button type="button" className="adapter-icon-btn danger" title="보관함과 설치본을 함께 삭제" aria-label={`${item.title} 삭제`} onClick={() => setRemoving(item.name)}><Trash2 size={15}/></button>}
+              </div>
+            </>}
+      </li>)}</ul>}
+      {library.length > 0 && <p className="field-hint">합계 {gb(library.reduce((sum, item) => sum + item.bytes, 0))}. 설치된 LoRA는 보관함 파일과 같은 파일이라 용량이 두 번 들지 않습니다(같은 디스크일 때). 삭제하면 보관함과 설치본이 함께 지워집니다.</p>}
     </div>
   </div>;
 }
@@ -3955,7 +4016,7 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
   const catalogShown = (catalog || []).filter(entry => !kind || (kind === NO_KIND ? !entry.kind || !KIND_LABEL[entry.kind] : entry.kind === kind)).sort((a, b) => (presetSort === 'za' ? byText(b.name, a.name) : presetSort === 'size' ? b.bytes - a.bytes : presetSort === 'installed' ? Number(b.installed) - Number(a.installed) : 0) || byText(a.name, b.name));
 
   return <section className={`adapter-page${picker ? ' picking' : ' page-scroll'}`}>
-    {picker ? null : <div className="page-heading"><span className="eyebrow">노래의 색깔을 바꾸는 작은 모델</span><h1>LoRA 관리</h1><p>스타일, 아티스트, 사운드를 가르치는 작은 추가 모델입니다. Preset이나 허깅페이스에서 받고, 곡을 만들 때 "LoRA 선택"으로 골라 각 부분의 강도를 조절합니다.</p></div>}
+    {picker ? null : <div className="page-heading"><span className="eyebrow">노래의 색깔을 바꾸는 작은 모델</span><h1>LoRA 관리</h1><p>스타일, 아티스트, 사운드를 가르치는 작은 추가 모델입니다. Preset이나 허깅페이스에서 받고, 곡을 만들 때 "LoRA 선택"으로 골라 각 부분의 강도를 조절합니다.</p><p className="adapter-credit">학습 기능은 오픈소스 <a href="https://github.com/Starnodes2024/ComfyUI-YuE2-Trainer" target="_blank" rel="noreferrer">ComfyUI-YuE2-Trainer</a>(Starnodes2024, Apache-2.0)를 사용합니다. 학습 결과는 YuE2 모델의 라이선스(CC BY-NC 4.0)에 따라 비상업용입니다.</p></div>}
     <div className="adapter-tabs" role="tablist">
       <button role="tab" aria-selected={tab === 'mine'} className={tab === 'mine' ? 'active' : ''} onClick={() => setTab('mine')}>Installed{mine ? ` (${mine.adapters.length})` : ''}</button>
       <button role="tab" aria-selected={tab === 'catalog'} className={tab === 'catalog' ? 'active' : ''} onClick={() => setTab('catalog')}>Preset{catalog ? ` (${catalog.filter(entry => !entry.installed).length}/${catalog.length})` : ''}</button>

@@ -238,3 +238,15 @@ button.adapter-card, label.adapter-card { cursor: pointer; }
 .train-songs li input { accent-color: #7fb069; }.train-songs li span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.train-songs li small { color: #7d9884; font-variant-numeric: tabular-nums; }
 .train-end-row { display: flex; gap: 22px; flex-wrap: wrap; }.train-end-row label { display: inline-flex; align-items: center; gap: 8px; }.train-end-row input[type=number] { width: 96px; }
 .train-end small b { color: #eaf3e2; }
+
+.adapter-credit { margin: 6px 0 0; font-size: 11.5px; color: #7d9884; }.adapter-credit a { color: #9fc4e8; }
+.folder-browser { width: min(640px, 94vw) !important; }
+.folder-list { display: flex; flex-direction: column; gap: 2px; max-height: 340px; overflow-y: auto; border: 1px solid #2b332c; border-radius: 10px; background: #12170f; padding: 6px; min-height: 120px; }
+.folder-row { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 7px; border: 0; background: transparent; color: #dfe9dc; font-size: 13px; text-align: left; cursor: pointer; }
+.folder-row:hover { background: #1c241b; }.folder-row.up { color: #9fbda7; }.folder-row svg { color: #7d9884; flex: none; }
+.folder-songs { margin-right: auto; }
+.train-row { align-items: center; }
+.train-lib-list li { align-items: flex-start; }
+.train-lib-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }.train-lib-main span { color: #8b978a; font-size: 11.5px; }.train-lib-main em { font-style: normal; color: #c5d0c4; font-size: 12px; }
+.train-lib-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+.train-lib-edit { display: flex; flex-direction: column; gap: 8px; width: 100%; }.train-lib-edit textarea { min-height: 64px; }
