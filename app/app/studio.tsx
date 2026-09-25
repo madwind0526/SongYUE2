@@ -215,8 +215,9 @@ const EFFECT_KEYS = ['fxEnabled', 'reverbEchoEnabled', 'clarity', 'spaciousness'
 const pickEffectValues = (params: PostProcessParams): EffectValues => Object.fromEntries(EFFECT_KEYS.map(key => [key, params[key]])) as EffectValues;
 // built-in FX · 리버브 presets (starting points, tune by ear): FxSound values + reverb / echo values
 const fxPreset = (clarity: number, spaciousness: number, surround: number, dynamicBoost: number, bassBoost: number, reverbAmount: number, reverbLength: number, echoAmount: number, echoDelayMs: number): EffectValues => ({ fxEnabled: true, reverbEchoEnabled: true, clarity, spaciousness, surround, dynamicBoost, bassBoost, reverbAmount, reverbLength, echoAmount, echoDelayMs });
+const FX_FLAT = 'Flat (초기화)';
 const FX_PRESETS: Record<string, EffectValues> = {
-  'Flat (초기화)': fxPreset(0, 0, 0, 0, 0, 0, 50, 0, 300),
+  [FX_FLAT]: fxPreset(0, 0, 0, 0, 0, 0, 50, 0, 300),
   'Vocal Presence': fxPreset(25, 10, 0, 20, 0, 12, 35, 0, 300),
   'Bright Air': fxPreset(45, 25, 15, 0, -10, 8, 40, 0, 300),
   'Warm Bass': fxPreset(-10, 0, 0, 15, 35, 0, 50, 0, 300),
@@ -747,7 +748,7 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
   const [processedPeaks, setProcessedPeaks] = useState<number[]>([]);
   const [eqPreset, setEqPreset] = useState<string>('평탄');
   const [effectPresets, setEffectPresets] = useState<Record<string, EffectValues>>({});
-  const [effectPreset, setEffectPreset] = useState('');
+  const [effectPreset, setEffectPreset] = useState(FX_FLAT);
   const [compPreset, setCompPreset] = useState<string>(COMPRESSOR_OFF);
   const [customCompPresets, setCustomCompPresets] = useState<Record<string, CompressorValues>>({});
   const [customPresets, setCustomPresets] = useState<Record<string, number[]>>({});
@@ -1021,7 +1022,7 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
     try {
       await api(`/effect-presets?name=${encodeURIComponent(name)}`, 'DELETE');
       setEffectPresets(previous => { const next = { ...previous }; delete next[name]; return next; });
-      setEffectPreset('');
+      setEffectPreset(FX_FLAT);
       notify(`"${name}" 프리셋을 삭제했습니다.`);
     } catch (error) { notify((error as Error).message, true); }
   }
