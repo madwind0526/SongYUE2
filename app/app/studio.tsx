@@ -1421,7 +1421,7 @@ function StemDialog({ project, mode, onClose, notify, visualizerEnabled, visuali
       notify={notify}
       visualizerEnabled={visualizerEnabled} visualizerRingCount={visualizerRingCount} visualizerHue={visualizerHue} visualizerLineWidth={visualizerLineWidth} visualizerTrail={visualizerTrail} visualizerSpiral={visualizerSpiral} visualizerRingMode={visualizerRingMode} visualizerTimeStep={visualizerTimeStep} visualizerTimeSkew={visualizerTimeSkew} visualizerRingStep={visualizerRingStep} visualizerAmplitude={visualizerAmplitude}
       titleOverride={STEM_LABELS[editingStem]}
-      sourceOverride={{ buffer: currentBuffersRef.current[editingStem]!, params: stemParamsRef.current[editingStem] || PP_DEFAULT_PARAMS }}
+      sourceOverride={{ buffer: currentBuffersRef.current[editingStem]!, params: PP_DEFAULT_PARAMS }}
       onSaveOverride={(buffer, params) => handleStemSaved(editingStem, buffer, params)}
     />}
   </>;
@@ -3705,9 +3705,8 @@ function ResultEnhanceButtons({ buffer, onReplace, notify, title, disabled, kind
   const [canUndo, setCanUndo] = useState(false);
   const previousRef = useRef<AudioBuffer | null>(null);
   const ownRef = useRef<AudioBuffer | null>(null);
-  const paramsRef = useRef<PostProcessParams>(PP_DEFAULT_PARAMS);
   // a result that did not come from here (a new run) starts a fresh history
-  useEffect(() => { if (buffer !== ownRef.current) { previousRef.current = null; paramsRef.current = PP_DEFAULT_PARAMS; setCanUndo(false); } }, [buffer]);
+  useEffect(() => { if (buffer !== ownRef.current) { previousRef.current = null; setCanUndo(false); } }, [buffer]);
   async function replace(next: AudioBuffer) {
     previousRef.current = buffer; ownRef.current = next; setCanUndo(!!buffer);
     await onReplace(next);
@@ -3741,8 +3740,8 @@ function ResultEnhanceButtons({ buffer, onReplace, notify, title, disabled, kind
       notify={notify}
       visualizerEnabled={false} visualizerRingCount={1} visualizerHue={0} visualizerLineWidth={1} visualizerTrail={0} visualizerSpiral={0} visualizerRingMode="radial" visualizerTimeStep={0.1} visualizerTimeSkew={1} visualizerRingStep={1} visualizerAmplitude={1}
       titleOverride={title}
-      sourceOverride={{ buffer, params: paramsRef.current }}
-      onSaveOverride={(next, params) => { paramsRef.current = params; setPostOpen(false); void replace(next); }}
+      sourceOverride={{ buffer, params: PP_DEFAULT_PARAMS }}
+      onSaveOverride={next => { setPostOpen(false); void replace(next); }}
     />}
   </>;
 }
@@ -4923,7 +4922,7 @@ function AudioCompareDialog({ onClose, notify, onCreated }: { onClose: () => voi
       visualizerRingStep={1}
       visualizerAmplitude={1}
       titleOverride={editingRow === 1 ? (row1Name || '음원-1') : (row2Name || '음원-2')}
-      sourceOverride={{ buffer: (editingRow === 1 ? row1BufferRef.current : row2BufferRef.current)!, params: editingRow === 1 ? row1ParamsRef.current : row2ParamsRef.current }}
+      sourceOverride={{ buffer: (editingRow === 1 ? row1BufferRef.current : row2BufferRef.current)!, params: PP_DEFAULT_PARAMS }}
       onSaveOverride={(buffer, params) => handleRowProcessed(editingRow, buffer, params)}
     />}
   </>;
