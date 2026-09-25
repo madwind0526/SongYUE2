@@ -58,5 +58,5 @@
 .postprocess-dialog{max-height:calc(100vh - 32px)!important;overflow-y:auto}
 
 /* "음량 · 시간": slider rows (two columns) instead of knobs */
-.pp-extra-sliders{display:grid;grid-template-columns:1fr 1fr;gap:12px 28px}.pp-slider{display:grid;grid-template-columns:96px 1fr 58px;align-items:center;gap:10px;font-size:11px;color:#bec8bc}.pp-slider-label{white-space:nowrap}.pp-slider input[type=range]{width:100%;accent-color:#7fb069}.pp-slider-value{text-align:right;font-variant-numeric:tabular-nums;color:#dfe9dc}
+.pp-extra-sliders{display:grid;grid-template-columns:1fr 1fr;gap:12px 28px}.pp-slider{display:grid;grid-template-columns:120px 1fr 58px;align-items:center;gap:10px;font-size:11px;color:#bec8bc}.pp-slider-label{white-space:nowrap}.pp-slider input[type=range]{width:100%;accent-color:#7fb069}.pp-slider-value{text-align:right;font-variant-numeric:tabular-nums;color:#dfe9dc}
 @media(max-width:950px){.pp-extra-sliders{grid-template-columns:1fr}}

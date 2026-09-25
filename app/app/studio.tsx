@@ -1183,7 +1183,7 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
             <PpSlider label="게인" unit="dB" value={params.gainDb} min={-12} max={12} step={1} onChange={value => updateParam('gainDb', value)}/>
             <PpSlider label="노멀라이즈 목표" unit="dB" value={params.normalizeDb} min={-12} max={0} step={1} onChange={value => updateParam('normalizeDb', value)}/>
             <PpSlider label="리미터 상한" unit="dB" value={params.limiterDb} min={-12} max={0} step={1} onChange={value => updateParam('limiterDb', value)}/>
-            <PpSlider label="무음 기준" unit="dB" value={params.silenceDb} min={-80} max={-20} step={5} onChange={value => updateParam('silenceDb', value)}/>
+            <PpSlider label="무음 제거 (기준)" unit="dB" value={params.silenceDb} min={-80} max={-20} step={5} onChange={value => updateParam('silenceDb', value)}/>
             <PpSlider label="페이드 인" unit="초" value={params.fadeInSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeInSec', value)}/>
             <PpSlider label="페이드 아웃" unit="초" value={params.fadeOutSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeOutSec', value)}/>
           </div>
