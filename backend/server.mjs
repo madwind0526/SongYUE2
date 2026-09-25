@@ -15,7 +15,7 @@ import { searchRvcVoices, downloadRvcVoice, listInstalledRvcVoices, resolveUserR
 import { TYPECAST_LANGUAGES, typecastSubscription, listTypecastVoices, typecastSpeak, recommendTypecastVoice, cloneTypecastVoice, deleteTypecastVoice, TypecastError } from './typecast.mjs';
 import { Worker } from 'node:worker_threads';
 import { lyricLines, detectLanguage, alignLyrics, toLrc } from './lyricsync.mjs';
-import { YUE_SERVER_PORT, yueServerPaths, listAdapters, normalizeAdapterSelection, toEngineAdapters, synthesize as yueServerSynthesize, probeAdapters, fileExists as yueFileExists } from './yueserver.mjs';
+import { YUE_SERVER_PORT, yueServerPaths, yuePrecisionFor, listAdapters, normalizeAdapterSelection, toEngineAdapters, synthesize as yueServerSynthesize, probeAdapters, fileExists as yueFileExists } from './yueserver.mjs';
 import { searchHub, hubDetail, installHubUnits, installCatalogEntry, loadCatalog, catalogSummary, importLocalFiles, updateMeta } from './adapters.mjs';
 import { runPolishChain, normalizePolishSettings, enabledStages } from './postfx/chain.mjs';
 import { startRealtimeVcProcess, REALTIME_CHUNK_SAMPLES, REALTIME_INPUT_RATE } from './realtimevc.mjs';
@@ -463,7 +463,10 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   }
   // Songs with LoRA/LoKr adapters are made by yue-server (audio.cpp cannot load adapters); everything else is untouched.
   async function runYueServer(project, file) {
-    const paths = yueServerPaths(root);
+    // original / BF16 app model -> BF16 backbone (when it is on disk), everything else -> Q8_0
+    let precision = yuePrecisionFor(project.modelId);
+    if (precision === 'bf16' && !(await yueFileExists(yueServerPaths(root, 'bf16').model))) precision = 'q8';
+    const paths = yueServerPaths(root, precision);
     for (const [label, target] of [['yue-server 실행 파일', paths.exe], ['YuE2 모델', paths.model], ['YuE2 VAE', paths.vae]]) {
       if (!(await yueFileExists(target))) throw fail(400, `LoRA 곡 생성에 필요한 ${label}이(가) 없습니다: ${path.relative(root, target)}. docs/models.md의 "LoRA 엔진" 설명을 확인해 주세요.`);
     }
@@ -487,7 +490,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const audioFile = path.join(projectRuns, 'audio.wav');
     await writeFile(audioFile, result.audio);
     const bytesPerSecond = 48000 * 2 * 2;
-    return finalizeToMusic(project, file, audioFile, { durationMs: Math.round(((result.audio.length - 44) / bytesPerSecond) * 1000), rtf: null, engine: 'yue-server' });
+    return finalizeToMusic(project, file, audioFile, { durationMs: Math.round(((result.audio.length - 44) / bytesPerSecond) * 1000), rtf: null, engine: 'yue-server', enginePrecision: precision });
   }
   function stemsDir(projectId) {
     return path.join(outputDirectory, projectId, 'stems');

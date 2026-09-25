@@ -60,6 +60,7 @@ LoRA/LoKr 어댑터는 audio.cpp가 읽지 못해서, **어댑터를 고른 곡�
 |---|---|---|
 | `yue-server.exe` 와 dll (CUDA 빌드, 약 207 MB) | `engine/yue-server/` | YuE2 Studio 포터블의 `resources/yue2-cpp/` 폴더 전체를 복사하거나, `github.com/timoncool/yue2.cpp`를 CMake(CUDA)로 빌드 |
 | `YuE2-3B-Q8_0.gguf` (3.8 GB) | `models/yue-server/` | 허깅페이스 `Serveurperso/YuE2-GGUF` |
+| `YuE2-3B-BF16.gguf` (약 7 GB, 선택) | `models/yue-server/` | 같은 저장소. 화면에서 고른 모델이 "원본" 또는 "BF16"이면 이 파일로 LoRA 곡을 만듭니다(없으면 Q8_0으로 만듭니다). Q4, Q8, INT8 모델은 항상 Q8_0을 씁니다. |
 | `YuE2-Vae-F32.gguf` (0.5 GB) | `models/yue-server/` | 같은 저장소 |
 | LoRA 어댑터 | `models/yue-adapters/<이름>/` | 앱의 "LoRA 관리" 화면에서 받기("Preset" 탭·"허깅페이스" 탭)·가져오기 |
 

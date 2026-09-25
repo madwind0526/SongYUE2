@@ -6,13 +6,16 @@ import path from 'node:path';
 
 export const YUE_SERVER_PORT = 8189;
 export const YUE_SERVER_MODEL = 'YuE2-3B-Q8_0.gguf';
+export const YUE_SERVER_MODEL_BF16 = 'YuE2-3B-BF16.gguf';
 export const YUE_SERVER_VAE = 'YuE2-Vae-F32.gguf';
 const START_TIMEOUT_MS = 60 * 1000;
 
-export function yueServerPaths(root) {
+// The app model picks the yue-server precision: the original / BF16 models use the BF16 backbone, every other (Q4, Q8, INT8 ...) the Q8_0 one.
+export const yuePrecisionFor = (modelId) => (modelId === 'yue2-original' || modelId === 'yue2-bf16' ? 'bf16' : 'q8');
+export function yueServerPaths(root, precision = 'q8') {
   return {
     exe: path.join(root, 'engine', 'yue-server', 'yue-server.exe'),
-    model: path.join(root, 'models', 'yue-server', YUE_SERVER_MODEL),
+    model: path.join(root, 'models', 'yue-server', precision === 'bf16' ? YUE_SERVER_MODEL_BF16 : YUE_SERVER_MODEL),
     vae: path.join(root, 'models', 'yue-server', YUE_SERVER_VAE),
     adapters: path.join(root, 'models', 'yue-adapters'),
   };

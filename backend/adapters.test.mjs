@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { createStudioServer } from './server.mjs';
+import { yuePrecisionFor, yueServerPaths } from './yueserver.mjs';
 import { isYueAdapterRepo, classifyRepo, listUnits, groupUnits, summarizeReadme, installCatalogEntry, installHubUnits, importLocalFiles, loadCatalog, catalogSummary, clearHubCache } from './adapters.mjs';
 import { extractAudioPart, normalizeAdapterSelection, toEngineAdapters, listAdapters, synthesize } from './yueserver.mjs';
 
@@ -269,4 +270,10 @@ test('the detail window lists LoRAs: latest version first, AR + NAR as one entry
   assert.ok(reggae.every((entry) => !entry.older));
   // a repo that only has variants still offers them
   assert.equal(groupUnits(files(['a_comfyui.safetensors'])).length, 1);
+});
+
+test('the app model picks the yue-server precision: original / BF16 -> BF16 backbone, the others -> Q8_0', () => {
+  assert.deepEqual(['yue2-original', 'yue2-bf16', 'yue2-q8', 'yue2-q4', 'comfy-int8'].map(yuePrecisionFor), ['bf16', 'bf16', 'q8', 'q8', 'q8']);
+  assert.match(yueServerPaths('/r', 'bf16').model, /YuE2-3B-BF16\.gguf$/);
+  assert.match(yueServerPaths('/r').model, /YuE2-3B-Q8_0\.gguf$/);
 });
