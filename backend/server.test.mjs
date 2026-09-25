@@ -2246,3 +2246,22 @@ test('가사 싱크: 보컬 분리 -> 인식(단어 시간) -> 가사 줄 매칭
   assert.equal((await callJson(`/api/projects/${songId}`, 'DELETE', {})).status, 200);
   assert.deepEqual((await readdir(musicDir)).filter(name => name.startsWith('새 이름')), []);
 });
+
+test('컴프레서 프리셋: 저장, 목록, 삭제와 값 범위 검사', async t => {
+  resetEnv();
+  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-comp-'));
+  const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}) });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+  const call = async (route, method = 'GET', payload) => { const response = await fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) }); return { status: response.status, data: await response.json() }; };
+  const values = { threshold: -20, ratio: 4, attack: 10, release: 200, makeup: 3 };
+  assert.equal((await call('/api/compressor-presets', 'POST', { name: '', values })).status, 400);
+  assert.equal((await call('/api/compressor-presets', 'POST', { name: '나쁜 값', values: { ...values, ratio: 50 } })).status, 400);
+  assert.equal((await call('/api/compressor-presets', 'POST', { name: '내 컴프레서', values })).status, 200);
+  const list = await call('/api/compressor-presets');
+  assert.deepEqual(list.data, [{ name: '내 컴프레서', values }]);
+  assert.equal((await call('/api/compressor-presets?name=nope', 'DELETE')).status, 404);
+  assert.equal((await call(`/api/compressor-presets?name=${encodeURIComponent('내 컴프레서')}`, 'DELETE')).status, 200);
+  assert.deepEqual((await call('/api/compressor-presets')).data, []);
+});

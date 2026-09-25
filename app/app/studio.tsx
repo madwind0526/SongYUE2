@@ -171,9 +171,28 @@ type PostProcessParams = { eq: number[]; masterVolume: number; eqEnabled: boolea
   volumeOn: boolean; gainDb: number; normalizeDb: number; limiterDb: number; // the 음량 switch turns Gain, Normalize and Limiter on and off together
   silenceOn: boolean; silenceDb: number;
   fadeOn: boolean; fadeInSec: number; fadeOutSec: number;
-  playOn: boolean; speed: number; reverseOn: boolean }; // speed: 0.1 .. 5.0, 1.0 = unchanged
-const PP_EXTRA_DEFAULTS = { volumeOn: false, gainDb: 0, normalizeDb: -1, limiterDb: -1, silenceOn: false, silenceDb: -50, fadeOn: true, fadeInSec: 0, fadeOutSec: 0, playOn: true, speed: 1, reverseOn: false };
+  playOn: boolean; speed: number; reverseOn: boolean;
+  // Compressor (5 knobs; ratio 1:1 = no compression)
+  compOn: boolean; compThreshold: number; compRatio: number; compAttack: number; compRelease: number; compMakeup: number }; // speed: 0.1 .. 5.0, 1.0 = unchanged
+const PP_EXTRA_DEFAULTS = { volumeOn: true, gainDb: 0, normalizeDb: -1, limiterDb: -1, silenceOn: true, silenceDb: -50, fadeOn: true, fadeInSec: 0, fadeOutSec: 0, playOn: true, speed: 1, reverseOn: false, compOn: true, compThreshold: -24, compRatio: 1, compAttack: 10, compRelease: 200, compMakeup: 0 };
 const PP_DEFAULT_PARAMS: PostProcessParams = { eq: Array(10).fill(0), masterVolume: 100, eqEnabled: true, fxEnabled: true, reverbEchoEnabled: true, clarity: 0, spaciousness: 0, surround: 0, dynamicBoost: 0, bassBoost: 0, reverbAmount: 0, reverbLength: 50, echoAmount: 0, echoDelayMs: 300, ...PP_EXTRA_DEFAULTS };
+// Compressor: five values (threshold dB, ratio :1, attack ms, release ms, make-up dB). "끔" = ratio 1:1.
+type CompressorValues = { threshold: number; ratio: number; attack: number; release: number; makeup: number };
+const COMPRESSOR_PRESETS: Record<string, CompressorValues> = {
+  '끔 (1:1)': { threshold: -24, ratio: 1, attack: 10, release: 200, makeup: 0 },
+  '부드럽게': { threshold: -18, ratio: 2, attack: 20, release: 250, makeup: 2 },
+  '보컬': { threshold: -20, ratio: 3, attack: 8, release: 150, makeup: 4 },
+  '단단하게': { threshold: -26, ratio: 6, attack: 5, release: 120, makeup: 6 },
+  '마스터 글루': { threshold: -14, ratio: 2, attack: 30, release: 300, makeup: 1 },
+};
+const COMPRESSOR_KEYS = ['compThreshold', 'compRatio', 'compAttack', 'compRelease', 'compMakeup'] as const;
+async function loadCompressorPresets(): Promise<Record<string, CompressorValues>> {
+  try {
+    const list = await api<{ name: string; values: CompressorValues }[]>('/compressor-presets');
+    return Object.fromEntries(list.map(preset => [preset.name, preset.values]));
+  } catch { return {}; }
+}
+
 async function loadPostprocessPresets(): Promise<Record<string, PostProcessParams>> {
   try {
     const list = await api<{ name: string; params: PostProcessParams }[]>('/postprocess-settings');
@@ -269,14 +288,15 @@ function buildProcessingGraph(ctx: BaseAudioContext, source: AudioNode, params: 
   return master;
 }
 
-// Extra stage on the rendered sound: silence removal -> reverse -> speed -> gain -> peak normalize -> limiter -> fades.
+// Extra stage on the rendered sound: silence removal -> reverse -> speed -> compressor -> gain -> peak normalize -> limiter -> fades.
 // Returns the buffer itself when nothing is switched on, so the original processing path is untouched.
 function finishBuffer(input: AudioBuffer, p: PostProcessParams): AudioBuffer {
   const useVolume = p.volumeOn;
   const useFade = p.fadeOn && (p.fadeInSec > 0 || p.fadeOutSec > 0);
   const useSpeed = p.playOn && p.speed !== 1;
   const useReverse = p.playOn && p.reverseOn;
-  if (!(useVolume || useFade || useSpeed || useReverse || p.silenceOn)) return input;
+  const useComp = p.compOn && p.compRatio > 1;
+  if (!(useVolume || useFade || useSpeed || useReverse || useComp || p.silenceOn)) return input;
   const rate = input.sampleRate;
   const channels = input.numberOfChannels;
   let data = Array.from({ length: channels }, (_, ch) => input.getChannelData(ch).slice());
@@ -317,6 +337,28 @@ function finishBuffer(input: AudioBuffer, p: PostProcessParams): AudioBuffer {
     const outLength = Math.max(1, Math.round(length / factor));
     data = data.map(channel => { const next = new Float32Array(outLength); for (let i = 0; i < outLength; i++) { const pos = i * factor; const i0 = Math.floor(pos); const frac = pos - i0; const a0 = channel[i0] ?? 0; const a1 = channel[Math.min(length - 1, i0 + 1)] ?? a0; next[i] = a0 + (a1 - a0) * frac; } return next; });
     length = outLength;
+  }
+  if (p.compOn && p.compRatio > 1) {
+    // peak envelope follower (attack / release on the level of the loudest channel) -> gain computer with a 6 dB soft knee -> make-up gain
+    const threshold = p.compThreshold;
+    const ratio = p.compRatio;
+    const knee = 6;
+    const attack = Math.exp(-1 / (rate * Math.max(0.0005, p.compAttack / 1000)));
+    const release = Math.exp(-1 / (rate * Math.max(0.005, p.compRelease / 1000)));
+    const makeup = dbToLin(p.compMakeup);
+    let envelope = 0;
+    for (let i = 0; i < length; i++) {
+      let level = 0;
+      for (const channel of data) level = Math.max(level, Math.abs(channel[i]));
+      envelope = level > envelope ? attack * envelope + (1 - attack) * level : release * envelope + (1 - release) * level;
+      const x = 20 * Math.log10(envelope + 1e-9);
+      const over = x - threshold;
+      let reduction = 0;
+      if (2 * over > knee) reduction = (threshold + over / ratio) - x;
+      else if (2 * Math.abs(over) <= knee) reduction = (1 / ratio - 1) * Math.pow(over + knee / 2, 2) / (2 * knee);
+      const gain = dbToLin(reduction) * makeup;
+      for (const channel of data) channel[i] *= gain;
+    }
   }
   if (p.volumeOn && p.gainDb !== 0) { const g = dbToLin(p.gainDb); for (const channel of data) for (let i = 0; i < length; i++) channel[i] *= g; }
   if (p.volumeOn) {
@@ -671,6 +713,9 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
   const [originalPeaks, setOriginalPeaks] = useState<number[]>([]);
   const [processedPeaks, setProcessedPeaks] = useState<number[]>([]);
   const [eqPreset, setEqPreset] = useState<string>('평탄');
+  const [compOpen, setCompOpen] = useState(false);
+  const [compPreset, setCompPreset] = useState<string>('끔 (1:1)');
+  const [customCompPresets, setCustomCompPresets] = useState<Record<string, CompressorValues>>({});
   const [customPresets, setCustomPresets] = useState<Record<string, number[]>>({});
   const [postprocessPreset, setPostprocessPreset] = useState('');
   const [postprocessPresets, setPostprocessPresets] = useState<Record<string, PostProcessParams>>({});
@@ -695,7 +740,7 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
   const debounceRef = useRef<number | null>(null);
   const presetImportInputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => { void loadCustomEqPresets().then(setCustomPresets); void loadPostprocessPresets().then(setPostprocessPresets); }, []);
+  useEffect(() => { void loadCustomEqPresets().then(setCustomPresets); void loadCompressorPresets().then(setCustomCompPresets); void loadPostprocessPresets().then(setPostprocessPresets); }, []);
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
   useEffect(() => {
     let raf = 0;
@@ -921,6 +966,41 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
     });
   }
   // "Reset" at the right end of the extra panel: every group back to neutral
+  // the compressor knobs are a pop-up over the dialog (they do not push the layout down): closed by the row again or a click outside
+  useEffect(() => {
+    if (!compOpen) return;
+    const close = (event: MouseEvent) => { if (!(event.target as HTMLElement).closest('.pp-comp-panel, .pp-comp-row')) setCompOpen(false); };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [compOpen]);
+  // compressor presets: built-in ones, ones saved in Setting/Compressor-preset
+  const compValues = (): CompressorValues => ({ threshold: params.compThreshold, ratio: params.compRatio, attack: params.compAttack, release: params.compRelease, makeup: params.compMakeup });
+  function applyCompPreset(name: string) {
+    setCompPreset(name);
+    const preset = COMPRESSOR_PRESETS[name] || customCompPresets[name];
+    if (!preset) return;
+    setParams(previous => { const next = { ...previous, compThreshold: preset.threshold, compRatio: preset.ratio, compAttack: preset.attack, compRelease: preset.release, compMakeup: preset.makeup }; scheduleRender(next); return next; });
+  }
+  async function saveCompPreset() {
+    const name = window.prompt('저장할 컴프레서 프리셋 이름을 입력하세요', compPreset in COMPRESSOR_PRESETS ? '' : compPreset)?.trim();
+    if (!name) return;
+    if (name in COMPRESSOR_PRESETS) { notify('기본 프리셋과 같은 이름은 사용할 수 없습니다.', true); return; }
+    try {
+      const saved = await api<{ name: string; values: CompressorValues }>('/compressor-presets', 'POST', { name, values: compValues() });
+      setCustomCompPresets(previous => ({ ...previous, [saved.name]: saved.values }));
+      setCompPreset(saved.name);
+      notify(`"${saved.name}" 컴프레서 프리셋으로 저장했습니다.`);
+    } catch (error) { notify((error as Error).message, true); }
+  }
+  async function deleteCompPreset(name: string) {
+    try {
+      await api(`/compressor-presets?name=${encodeURIComponent(name)}`, 'DELETE');
+      setCustomCompPresets(previous => { const next = { ...previous }; delete next[name]; return next; });
+      setCompPreset('끔 (1:1)');
+      applyCompPreset('끔 (1:1)');
+      notify(`"${name}" 프리셋을 삭제했습니다.`);
+    } catch (error) { notify((error as Error).message, true); }
+  }
   function resetExtras() {
     setParams(previous => {
       const next = { ...previous, ...PP_EXTRA_DEFAULTS };
@@ -1217,8 +1297,35 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
             <PpSlider off={!params.fadeOn} label="Fade In" unit="초" value={params.fadeInSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeInSec', value)}/>
             <PpSlider off={!params.volumeOn} label="Limiter (상한)" unit="dB" value={params.limiterDb} min={-12} max={0} step={1} onChange={value => updateParam('limiterDb', value)}/>
             <PpSlider off={!params.fadeOn} label="Fade Out" unit="초" value={params.fadeOutSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeOutSec', value)}/>
+            <button type="button" className={`pp-comp-row${params.compOn ? '' : ' pp-off'}${compOpen ? ' open' : ''}`} aria-expanded={compOpen} onClick={() => setCompOpen(!compOpen)}>
+              <span className="pp-slider-label">Compressor</span>
+              <span className="pp-comp-summary">{params.compRatio > 1 ? `${params.compThreshold} dB · ${params.compRatio}:1` : '1:1 (효과 없음)'}</span>
+              <ChevronDown size={14} className={compOpen ? 'rotated' : ''}/>
+            </button>
             <PpSpeedSlider off={!params.playOn} value={params.speed} onChange={value => updateParam('speed', value)}/>
           </div>
+          {compOpen && <div className={`pp-comp-panel${params.compOn ? '' : ' pp-off'}`}>
+            <div className="pp-comp-head">
+              <span className="pp-panel-title">Compressor</span>
+              <div className="pp-preset-controls">
+                <select className="pp-preset-select" value={compPreset} onChange={event => applyCompPreset(event.target.value)} aria-label="컴프레서 프리셋">
+                  {Object.keys(COMPRESSOR_PRESETS).map(name => <option key={name} value={name}>{name}</option>)}
+                  {Object.keys(customCompPresets).length > 0 && <optgroup label="저장한 프리셋">{Object.keys(customCompPresets).map(name => <option key={name} value={name}>{name}</option>)}</optgroup>}
+                  {!(compPreset in COMPRESSOR_PRESETS) && !(compPreset in customCompPresets) && <option value={compPreset}>{compPreset}</option>}
+                </select>
+                <button type="button" className="pp-preset-btn" title="현재 컴프레서 설정을 프리셋으로 저장" onClick={() => void saveCompPreset()}><Save size={12}/></button>
+                {customCompPresets[compPreset] && <button type="button" className="pp-preset-btn" title={`"${compPreset}" 프리셋 삭제`} onClick={() => void deleteCompPreset(compPreset)}><Trash2 size={12}/></button>}
+                <div className={params.compOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" onClick={() => updateParam('compOn', !params.compOn)}><Power size={12}/>Compressor</button></div>
+              </div>
+            </div>
+            <div className="pp-comp-knobs">
+              <Knob label="Threshold (dB)" off={!params.compOn} value={params.compThreshold} min={-60} max={0} step={1} onChange={value => { setCompPreset(PP_CUSTOM_PRESET); updateParam('compThreshold', value); }} variant="fx"/>
+              <Knob label="Ratio (:1)" off={!params.compOn} value={params.compRatio} min={1} max={20} step={0.5} onChange={value => { setCompPreset(PP_CUSTOM_PRESET); updateParam('compRatio', value); }} variant="fx"/>
+              <Knob label="Attack (ms)" off={!params.compOn} value={params.compAttack} min={1} max={100} step={1} onChange={value => { setCompPreset(PP_CUSTOM_PRESET); updateParam('compAttack', value); }} variant="reverb"/>
+              <Knob label="Release (ms)" off={!params.compOn} value={params.compRelease} min={10} max={1000} step={10} onChange={value => { setCompPreset(PP_CUSTOM_PRESET); updateParam('compRelease', value); }} variant="reverb"/>
+              <Knob label="Makeup (dB)" off={!params.compOn} value={params.compMakeup} min={0} max={24} step={1} onChange={value => { setCompPreset(PP_CUSTOM_PRESET); updateParam('compMakeup', value); }} variant="fx"/>
+            </div>
+          </div>}
         </div>
         <div className={`pp-waveform-row${activeTrack === 'original' && isPlaying ? ' pp-row-playing-original' : ''}`}>
           <button type="button" className="pp-waveform-label" title="원본" aria-label={activeTrack === 'original' && isPlaying ? '원본 일시정지' : '원본 선택 후 재생'} onClick={() => handleTrackButtonClick('original')}>{activeTrack === 'original' && isPlaying ? <Pause size={15}/> : <AudioLines size={15}/>}</button>

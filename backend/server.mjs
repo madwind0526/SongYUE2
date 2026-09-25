@@ -278,6 +278,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   // App-level config, not song data - lives under Setting/ (sibling to library/), not inside
   // library/setting: that folder is scanned as song drafts, and library/ is for song-related content only.
   const eqPresetsDir = () => path.join(root, 'Setting', 'EQ-preset');
+  const compressorPresetsDir = () => path.join(root, 'Setting', 'Compressor-preset');
   const postprocessSettingsDir = () => path.join(root, 'Setting', 'PostProcess');
   const resolveConfigPath = (value, defaultRelative) => path.resolve(root, (value || '').trim() || defaultRelative);
   const resolveOptionalConfigPath = (value) => { const trimmed = (value || '').trim(); return trimmed ? path.resolve(root, trimmed) : ''; };
@@ -2402,6 +2403,31 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         const name = text(requestUrl.searchParams.get('name'), 120).trim();
         if (!name) throw fail(400, '프리셋 이름이 필요합니다.');
         const target = path.join(eqPresetsDir(), `${safeFilename(name)}.json`);
+        if (!(await exists(target))) throw fail(404, '프리셋을 찾을 수 없습니다.');
+        await unlink(target);
+        return send(200, { ok: true });
+      }
+      if (req.method === 'GET' && pathname === '/api/compressor-presets') {
+        const dir = compressorPresetsDir();
+        const files = await readdir(dir).catch(() => []);
+        const presets = await Promise.all(files.filter((name) => name.endsWith('.json')).map((name) => readJson(path.join(dir, name), null)));
+        return send(200, presets.filter(Boolean).sort((a, b) => a.name.localeCompare(b.name)));
+      }
+      if (req.method === 'POST' && pathname === '/api/compressor-presets') {
+        const input = await body(req, 8 * 1024);
+        const name = text(input.name, 120).trim();
+        if (!name) throw fail(400, '프리셋 이름이 필요합니다.');
+        const range = { threshold: [-60, 0], ratio: [1, 20], attack: [1, 100], release: [10, 1000], makeup: [0, 24] };
+        const values = input.values && typeof input.values === 'object' ? input.values : {};
+        for (const [key, [min, max]] of Object.entries(range)) if (!(typeof values[key] === 'number' && Number.isFinite(values[key]) && values[key] >= min && values[key] <= max)) throw fail(400, '컴프레서 값이 올바르지 않습니다.');
+        const preset = { name, values: Object.fromEntries(Object.keys(range).map((key) => [key, values[key]])) };
+        await saveJson(path.join(compressorPresetsDir(), `${safeFilename(name)}.json`), preset);
+        return send(200, preset);
+      }
+      if (req.method === 'DELETE' && pathname === '/api/compressor-presets') {
+        const name = text(requestUrl.searchParams.get('name'), 120).trim();
+        if (!name) throw fail(400, '프리셋 이름이 필요합니다.');
+        const target = path.join(compressorPresetsDir(), `${safeFilename(name)}.json`);
         if (!(await exists(target))) throw fail(404, '프리셋을 찾을 수 없습니다.');
         await unlink(target);
         return send(200, { ok: true });
