@@ -3603,7 +3603,7 @@ type PolishSettings = {
 const POLISH_DEFAULT: PolishSettings = {
   denoise: { enabled: true, strength: 0.4 },
   lifter: { enabled: true, gate: 0.3, shimmerDb: 6, hfMix: 0, punch: 0 },
-  naturalize: { enabled: false, amount: 0.5 },
+  naturalize: { enabled: true, amount: 0.5 },
   master: { enabled: false },
 };
 function PolishSlider({ label, value, min, max, step, unit, onChange, disabled }: { label: string; value: number; min: number; max: number; step: number; unit?: string; onChange: (next: number) => void; disabled?: boolean }) {
