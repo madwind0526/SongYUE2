@@ -671,8 +671,8 @@ function snapTo5(value: number): number { return Math.round(value / 5) * 5; }
 const snapToStep = (value: number, step: number) => Number((Math.round(value / step) * step).toFixed(6));
 
 // horizontal slider row for the post-process dialog ("음량 · 시간"): label, slider, value + unit
-function PpSlider({ label, unit, value, min, max, step, onChange, off, offAtMin }: { label: string; unit: string; value: number; min: number; max: number; step: number; onChange: (next: number) => void; off?: boolean; offAtMin?: boolean }) {
-  const shown = offAtMin && value <= min ? 'Off' : unit === '%' && value > 0 ? `+${value} %` : `${Number.isInteger(value) ? value : value.toFixed(1)} ${unit}`;
+function PpSlider({ label, unit, value, min, max, step, onChange, off, offAtMin, onOff }: { label: string; unit: string; value: number; min: number; max: number; step: number; onChange: (next: number) => void; off?: boolean; offAtMin?: boolean; onOff?: boolean }) {
+  const shown = onOff ? (value ? 'On' : 'Off') : offAtMin && value <= min ? 'Off' : unit === '%' && value > 0 ? `+${value} %` : `${Number.isInteger(value) ? value : value.toFixed(1)} ${unit}`;
   return <label className={`pp-slider${off ? ' pp-off' : ''}`}>
     <span className="pp-slider-label">{label}</span>
     <input type="range" min={min} max={max} step={step} value={value} aria-label={`${label} (${unit})`} onChange={event => onChange(Number(event.target.value))}/>
@@ -1388,7 +1388,6 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
               <div className={params.playOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" onClick={() => updateParam('playOn', !params.playOn)}><Power size={12}/>Play</button></div>
             </div>
             <div className="pp-extra-right">
-              <div className={params.reverseOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" title="소리를 끝에서 처음으로 뒤집습니다(Play가 켜져 있을 때 적용)" onClick={() => updateParam('reverseOn', !params.reverseOn)}><Power size={12}/>Reverse</button></div>
               <button type="button" className="pp-extra-reset" title="음량 · 무음제거 · Fade · Play 설정을 모두 처음 값으로" onClick={resetExtras}><RotateCcw size={12}/>Reset</button>
             </div>
           </div>
@@ -1399,8 +1398,8 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
             <PpSlider off={!params.fadeOn} label="Fade In" unit="초" value={params.fadeInSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeInSec', value)}/>
             <PpSlider off={!params.volumeOn} label="Limiter (상한)" unit="dB" value={params.limiterDb} min={-12} max={0} step={1} onChange={value => updateParam('limiterDb', value)}/>
             <PpSlider off={!params.fadeOn} label="Fade Out" unit="초" value={params.fadeOutSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeOutSec', value)}/>
-            <span className="pp-slider-spacer" aria-hidden="true"/>
             <PpSpeedSlider off={!params.playOn} value={params.speed} onChange={value => updateParam('speed', value)}/>
+            <PpSlider off={!params.playOn} onOff label="Reverse" unit="" value={params.reverseOn ? 1 : 0} min={0} max={1} step={1} onChange={value => updateParam('reverseOn', value === 1)}/>
           </div>
         </div>
         <div className={`pp-waveform-row${activeTrack === 'original' && isPlaying ? ' pp-row-playing-original' : ''}`}>
