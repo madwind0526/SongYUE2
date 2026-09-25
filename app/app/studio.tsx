@@ -168,11 +168,11 @@ async function loadCustomEqPresets(): Promise<Record<string, number[]>> {
 type PostProcessParams = { eq: number[]; masterVolume: number; eqEnabled: boolean; fxEnabled: boolean; reverbEchoEnabled: boolean; clarity: number; spaciousness: number; surround: number; dynamicBoost: number; bassBoost: number; reverbAmount: number; reverbLength: number; echoAmount: number; echoDelayMs: number;
   // four extra groups, each with its own on/off: "음량" (Gain / Normalize / Limiter), "무음제거", "Fade", "Play" (재생 속도 / Reverse).
   // Every value is neutral by default, so nothing changes until a slider is moved or a switch is turned on.
-  volumeOn: boolean; gainDb: number; normalizeDb: number; limiterDb: number; // Normalize / Limiter: -13 = Off (left end of the slider)
+  volumeOn: boolean; gainDb: number; normalizeDb: number; limiterDb: number; // the 음량 switch turns Gain, Normalize and Limiter on and off together
   silenceOn: boolean; silenceDb: number;
   fadeOn: boolean; fadeInSec: number; fadeOutSec: number;
   playOn: boolean; speed: number; reverseOn: boolean }; // speed: 0.1 .. 5.0, 1.0 = unchanged
-const PP_EXTRA_DEFAULTS = { volumeOn: true, gainDb: 0, normalizeDb: -13, limiterDb: -13, silenceOn: false, silenceDb: -50, fadeOn: true, fadeInSec: 0, fadeOutSec: 0, playOn: true, speed: 1, reverseOn: false };
+const PP_EXTRA_DEFAULTS = { volumeOn: false, gainDb: 0, normalizeDb: -1, limiterDb: -1, silenceOn: false, silenceDb: -50, fadeOn: true, fadeInSec: 0, fadeOutSec: 0, playOn: true, speed: 1, reverseOn: false };
 const PP_DEFAULT_PARAMS: PostProcessParams = { eq: Array(10).fill(0), masterVolume: 100, eqEnabled: true, fxEnabled: true, reverbEchoEnabled: true, clarity: 0, spaciousness: 0, surround: 0, dynamicBoost: 0, bassBoost: 0, reverbAmount: 0, reverbLength: 50, echoAmount: 0, echoDelayMs: 300, ...PP_EXTRA_DEFAULTS };
 async function loadPostprocessPresets(): Promise<Record<string, PostProcessParams>> {
   try {
@@ -272,7 +272,7 @@ function buildProcessingGraph(ctx: BaseAudioContext, source: AudioNode, params: 
 // Extra stage on the rendered sound: silence removal -> reverse -> speed -> gain -> peak normalize -> limiter -> fades.
 // Returns the buffer itself when nothing is switched on, so the original processing path is untouched.
 function finishBuffer(input: AudioBuffer, p: PostProcessParams): AudioBuffer {
-  const useVolume = p.volumeOn && (p.gainDb !== 0 || p.normalizeDb > -13 || p.limiterDb > -13);
+  const useVolume = p.volumeOn;
   const useFade = p.fadeOn && (p.fadeInSec > 0 || p.fadeOutSec > 0);
   const useSpeed = p.playOn && p.speed !== 1;
   const useReverse = p.playOn && p.reverseOn;
@@ -319,12 +319,12 @@ function finishBuffer(input: AudioBuffer, p: PostProcessParams): AudioBuffer {
     length = outLength;
   }
   if (p.volumeOn && p.gainDb !== 0) { const g = dbToLin(p.gainDb); for (const channel of data) for (let i = 0; i < length; i++) channel[i] *= g; }
-  if (p.volumeOn && p.normalizeDb > -13) {
+  if (p.volumeOn) {
     let peak = 0;
     for (const channel of data) for (let i = 0; i < length; i++) peak = Math.max(peak, Math.abs(channel[i]));
     if (peak > 1e-6) { const g = dbToLin(p.normalizeDb) / peak; for (const channel of data) for (let i = 0; i < length; i++) channel[i] *= g; }
   }
-  if (p.volumeOn && p.limiterDb > -13) {
+  if (p.volumeOn) {
     // look-ahead peak limiter: the gain needed at every sample is spread 5 ms ahead and released over 80 ms, so peaks are turned down smoothly, not clipped
     const ceiling = dbToLin(p.limiterDb);
     const look = Math.max(1, Math.round(rate * 0.005));
@@ -1213,9 +1213,9 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
           <div className="pp-extra-sliders">
             <PpSlider off={!params.volumeOn} label="Gain (조절값)" unit="dB" value={params.gainDb} min={-12} max={12} step={1} onChange={value => updateParam('gainDb', value)}/>
             <PpSlider off={!params.silenceOn} label="무음 제거 (기준)" unit="dB" value={params.silenceDb} min={-80} max={-20} step={5} onChange={value => updateParam('silenceDb', value)}/>
-            <PpSlider off={!params.volumeOn} offAtMin label="Normalize (목표)" unit="dB" value={params.normalizeDb} min={-13} max={0} step={1} onChange={value => updateParam('normalizeDb', value)}/>
+            <PpSlider off={!params.volumeOn} label="Normalize (목표)" unit="dB" value={params.normalizeDb} min={-12} max={0} step={1} onChange={value => updateParam('normalizeDb', value)}/>
             <PpSlider off={!params.fadeOn} label="Fade In" unit="초" value={params.fadeInSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeInSec', value)}/>
-            <PpSlider off={!params.volumeOn} offAtMin label="Limiter (상한)" unit="dB" value={params.limiterDb} min={-13} max={0} step={1} onChange={value => updateParam('limiterDb', value)}/>
+            <PpSlider off={!params.volumeOn} label="Limiter (상한)" unit="dB" value={params.limiterDb} min={-12} max={0} step={1} onChange={value => updateParam('limiterDb', value)}/>
             <PpSlider off={!params.fadeOn} label="Fade Out" unit="초" value={params.fadeOutSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeOutSec', value)}/>
             <PpSpeedSlider off={!params.playOn} value={params.speed} onChange={value => updateParam('speed', value)}/>
           </div>
