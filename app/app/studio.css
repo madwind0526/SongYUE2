@@ -125,3 +125,6 @@
 
 /* Reverse sits with Reset on the right (it is not one of the four group switches) */
 .pp-extra-right{display:flex;align-items:center;gap:8px}
+
+/* editable slider value: looks like text until it is clicked */
+.pp-slider-edit{display:inline-flex;align-items:baseline;justify-content:flex-end;gap:3px;color:#dfe9dc}.pp-slider-edit input{width:44px;height:20px;padding:0 2px;border:1px solid transparent;border-radius:4px;background:transparent;color:inherit;font:inherit;text-align:right;font-variant-numeric:tabular-nums;cursor:text}.pp-slider-edit input:hover{border-color:#3b453b}.pp-slider-edit input:focus{outline:none;border-color:#7fb069;background:#141a13}.pp-slider-edit em{font-style:normal;color:#9db08d;min-width:14px}

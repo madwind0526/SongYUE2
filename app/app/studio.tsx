@@ -177,7 +177,7 @@ type PostProcessParams = { eq: number[]; masterVolume: number; eqEnabled: boolea
   playOn: boolean; speed: number; reverseOn: boolean;
   // Compressor: the same five values as Studio's audio editor (threshold dB, knee dB, ratio :1, attack s, release s); ratio 1:1 = no compression
   compOn: boolean; compThreshold: number; compKnee: number; compRatio: number; compAttack: number; compRelease: number }; // speed: 0.1 .. 5.0, 1.0 = unchanged
-const PP_EXTRA_DEFAULTS = { volumeOn: true, gainDb: 0, normalizeDb: -1, limiterDb: -1, silenceOn: true, silenceDb: -50, fadeOn: true, fadeInSec: 0, fadeOutSec: 0, playOn: true, speed: 1, reverseOn: false };
+const PP_EXTRA_DEFAULTS = { volumeOn: true, gainDb: 0, normalizeDb: 0, limiterDb: 0, silenceOn: true, silenceDb: -80, fadeOn: true, fadeInSec: 0, fadeOutSec: 0, playOn: true, speed: 1, reverseOn: false };
 const PP_COMP_DEFAULTS = { compOn: true, compThreshold: -24, compKnee: 30, compRatio: 1, compAttack: 0.003, compRelease: 0.25 };
 const PP_DEFAULT_PARAMS: PostProcessParams = { eq: Array(10).fill(0), masterVolume: 100, eqEnabled: true, fxEnabled: true, reverbEchoEnabled: true, clarity: 0, spaciousness: 0, surround: 0, dynamicBoost: 0, bassBoost: 0, reverbAmount: 0, reverbLength: 50, echoAmount: 0, echoDelayMs: 300, ...PP_EXTRA_DEFAULTS, ...PP_COMP_DEFAULTS };
 // Compressor: the five values of Studio's audio editor (threshold dB, knee dB, ratio :1, attack s, release s) and its presets
@@ -348,7 +348,7 @@ function buildProcessingGraph(ctx: BaseAudioContext, source: AudioNode, params: 
 // Extra stage on the rendered sound: silence removal -> reverse -> speed -> gain -> peak normalize -> limiter -> fades. (The compressor is part of the effect chain above.)
 // Returns the buffer itself when nothing is switched on, so the original processing path is untouched.
 function finishBuffer(input: AudioBuffer, p: PostProcessParams): AudioBuffer {
-  const useVolume = p.volumeOn;
+  const useVolume = p.volumeOn && (p.gainDb !== 0 || p.normalizeDb < 0 || p.limiterDb < 0);
   const useFade = p.fadeOn && (p.fadeInSec > 0 || p.fadeOutSec > 0);
   const useSpeed = p.playOn && p.speed !== 1;
   const useReverse = p.playOn && p.reverseOn;
@@ -395,12 +395,14 @@ function finishBuffer(input: AudioBuffer, p: PostProcessParams): AudioBuffer {
     length = outLength;
   }
   if (p.volumeOn && p.gainDb !== 0) { const g = dbToLin(p.gainDb); for (const channel of data) for (let i = 0; i < length; i++) channel[i] *= g; }
-  if (p.volumeOn) {
+  if (p.volumeOn && p.normalizeDb < 0) {
+    // 0 dB = no normalization (the neutral start value), -12..-1 dB = scale the loudest peak to that level
     let peak = 0;
     for (const channel of data) for (let i = 0; i < length; i++) peak = Math.max(peak, Math.abs(channel[i]));
     if (peak > 1e-6) { const g = dbToLin(p.normalizeDb) / peak; for (const channel of data) for (let i = 0; i < length; i++) channel[i] *= g; }
   }
-  if (p.volumeOn) {
+  if (p.volumeOn && p.limiterDb < 0) {
+    // 0 dB = no limiting (the neutral start value)
     // look-ahead peak limiter: the gain needed at every sample is spread 5 ms ahead and released over 80 ms, so peaks are turned down smoothly, not clipped
     const ceiling = dbToLin(p.limiterDb);
     const look = Math.max(1, Math.round(rate * 0.005));
@@ -671,13 +673,36 @@ function CompareSpectrogram({ buffer, fraction }: { buffer: AudioBuffer | null; 
 function snapTo5(value: number): number { return Math.round(value / 5) * 5; }
 const snapToStep = (value: number, step: number) => Number((Math.round(value / step) * step).toFixed(6));
 
+// the number next to a slider: click it and type a value (kept as text while typing, committed clamped to the range)
+function PpValueInput({ value, min, max, step, unit, onCommit, prefix }: { value: number; min: number; max: number; step: number; unit: string; onCommit: (next: number) => void; prefix?: string }) {
+  const [text, setText] = useState(String(value));
+  const [editing, setEditing] = useState(false);
+  useEffect(() => { if (!editing) setText(String(value)); }, [value, editing]);
+  const commit = () => {
+    setEditing(false);
+    const next = Number(text);
+    if (text.trim() === '' || !Number.isFinite(next)) { setText(String(value)); return; }
+    const clamped = Math.max(min, Math.min(max, snapToStep(next, Math.min(step, 0.01))));
+    onCommit(clamped); setText(String(clamped));
+  };
+  return <span className="pp-slider-value pp-slider-edit">
+    <input type="text" inputMode="decimal" value={editing ? text : `${prefix || ''}${value}`} aria-label={`값 입력 (${unit})`} size={5}
+      onFocus={event => { setEditing(true); setText(String(value)); event.currentTarget.select(); }}
+      onChange={event => setText(event.target.value)} onBlur={commit}
+      onKeyDown={event => { if (event.key === 'Enter') event.currentTarget.blur(); }}/>
+    <em>{unit}</em>
+  </span>;
+}
+
 // horizontal slider row for the post-process dialog ("음량 · 시간"): label, slider, value + unit
 function PpSlider({ label, unit, value, min, max, step, onChange, off, offAtMin, onOff }: { label: string; unit: string; value: number; min: number; max: number; step: number; onChange: (next: number) => void; off?: boolean; offAtMin?: boolean; onOff?: boolean }) {
   const shown = onOff ? (value ? 'On' : 'Off') : offAtMin && value <= min ? 'Off' : unit === '%' && value > 0 ? `+${value} %` : `${Number.isInteger(value) ? value : value.toFixed(1)} ${unit}`;
   return <label className={`pp-slider${off ? ' pp-off' : ''}`}>
     <span className="pp-slider-label">{label}</span>
     <input type="range" min={min} max={max} step={step} value={value} aria-label={`${label} (${unit})`} onChange={event => onChange(Number(event.target.value))}/>
-    <span className="pp-slider-value">{shown}</span>
+    {onOff || (offAtMin && value <= min)
+      ? <span className="pp-slider-value">{shown}</span>
+      : <PpValueInput value={value} min={min} max={max} step={step} unit={unit} prefix={unit === '%' && value > 0 ? '+' : ''} onCommit={onChange}/>}
   </label>;
 }
 
@@ -688,7 +713,7 @@ function PpSpeedSlider({ value, onChange, off }: { value: number; onChange: (nex
   return <label className={`pp-slider${off ? ' pp-off' : ''}`}>
     <span className="pp-slider-label">재생 속도</span>
     <input type="range" min={0} max={100} step={1} value={posFromSpeed(value)} aria-label="재생 속도 (배)" onChange={event => { const pos = Number(event.target.value); onChange(pos === 50 ? 1 : speedFromPos(pos)); }}/>
-    <span className="pp-slider-value">{value.toFixed(2).replace(/0$/, '')}x</span>
+    <PpValueInput value={value} min={0.1} max={5} step={0.01} unit="x" onCommit={onChange}/>
   </label>;
 }
 
