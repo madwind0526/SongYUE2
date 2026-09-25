@@ -3833,7 +3833,7 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
       <p className="field-hint">허깅페이스에서 YuE2용 LoRA를 찾습니다. 카드의 다운로드 아이콘으로 바로 받고, 카드를 누르면 샘플을 듣고 받을 파일을 고를 수 있습니다. 주소를 붙여 넣어도 됩니다.</p>
       <div className="adapter-filters">
         <Input value={queryText} placeholder="이름, 장르, 언어로 찾기 또는 허깅페이스 주소 붙여넣기" aria-label="LoRA 검색" onChange={event => setQueryText(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') runSearch(); }}/>
-        <Button className="adapter-find-btn" onClick={runSearch}><Search size={15}/>찾기</Button>
+        <Button variant="outline" className="adapter-find-btn" onClick={runSearch}><Search size={15}/>찾기</Button>
         <Button variant="outline" className="adapter-find-btn adapter-refresh-btn" disabled={hubLoading} title="허깅페이스를 다시 확인해서 새로 올라온 LoRA를 가져옵니다" onClick={() => void loadHub(true)}><RefreshCw size={15} className={hubLoading ? 'spin' : ''}/>새로고침</Button>
       </div>
       {categories.length > 0 && <div className="adapter-chiprow"><span>분류</span><button className={!category ? 'active' : ''} onClick={() => setCategory('')}>전체</button>{categories.map(label => <button key={label} className={category === label ? 'active' : ''} onClick={() => setCategory(category === label ? '' : label)}>{label}</button>)}</div>}
