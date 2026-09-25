@@ -4752,7 +4752,7 @@ export default function Studio() {
   const [busy, setBusy] = useState('');
   const [notice, setNotice] = useState<{ text: string; error?: boolean } | null>(null);
   const [query, setQuery] = useState('');
-  const [tab, setTab] = useState('all');
+  const [tab, setTab] = useState('audio');
   const [sortOption, setSortOption] = useState<'date-desc' | 'date-asc' | 'title-asc' | 'title-desc'>('date-desc');
   const [randomizeSeed, setRandomizeSeed] = useState(loadRandomizeSeed);
   const [generateProgress, setGenerateProgress] = useState(0);
@@ -4891,7 +4891,7 @@ export default function Studio() {
     if (on && gguf && !inst.length) notify('연주곡(Instrumental) LoRA가 없어 기존 방식으로 만듭니다. LoRA 선택 > Preset에서 "연주곡"을 받으면 자동으로 적용됩니다.');
   }
   const notify = (text: string, error = false) => setNotice({ text, error });
-  const navigate = (target: Page) => { setPage(target); setMobileNav(false); setQuery(''); setTab('all'); setActivePlaylistId(null); };
+  const navigate = (target: Page) => { setPage(target); setMobileNav(false); setQuery(''); setTab(target === 'projects' ? 'projects' : 'audio'); setActivePlaylistId(null); };
   useEffect(() => {
     try {
       const cached = JSON.parse(localStorage.getItem('songyue2-composer') || 'null');
