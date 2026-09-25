@@ -1170,8 +1170,8 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
           <div className="pp-fx-header">
             <span className="pp-panel-title">음량 · 시간</span>
             <div className="pp-extra-toggles">
-              <div className={params.normalizeOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" title="가장 큰 소리를 목표 dB에 맞춥니다" onClick={() => updateParam('normalizeOn', !params.normalizeOn)}><Power size={12}/>노멀라이즈</button></div>
-              <div className={params.limiterOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" title="상한을 넘는 소리를 부드럽게 눌러 찌그러짐을 막습니다" onClick={() => updateParam('limiterOn', !params.limiterOn)}><Power size={12}/>리미터</button></div>
+              <div className={params.normalizeOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" title="가장 큰 소리를 목표 dB에 맞춥니다" onClick={() => updateParam('normalizeOn', !params.normalizeOn)}><Power size={12}/>Normalize</button></div>
+              <div className={params.limiterOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" title="상한을 넘는 소리를 부드럽게 눌러 찌그러짐을 막습니다" onClick={() => updateParam('limiterOn', !params.limiterOn)}><Power size={12}/>Limiter</button></div>
               <div className={params.trimSilenceOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" title="앞뒤 무음을 자르고 0.3초 넘는 무음은 짧게 줄입니다" onClick={() => updateParam('trimSilenceOn', !params.trimSilenceOn)}><Power size={12}/>무음 제거</button></div>
               <div className={params.extraEnabled ? 'pp-toggle-btn active' : 'pp-toggle-btn'}>
                 <button type="button" className="pp-toggle-reset" title="음량 · 시간 초기화" onClick={resetExtras}><RotateCcw size={12}/></button>
@@ -1180,9 +1180,9 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
             </div>
           </div>
           <div className="pp-extra-sliders">
-            <PpSlider label="게인 (조절값)" unit="dB" value={params.gainDb} min={-12} max={12} step={1} onChange={value => updateParam('gainDb', value)}/>
-            <PpSlider label="노멀라이즈 (목표)" unit="dB" value={params.normalizeDb} min={-12} max={0} step={1} onChange={value => updateParam('normalizeDb', value)}/>
-            <PpSlider label="리미터 (상한)" unit="dB" value={params.limiterDb} min={-12} max={0} step={1} onChange={value => updateParam('limiterDb', value)}/>
+            <PpSlider label="Gain (조절값)" unit="dB" value={params.gainDb} min={-12} max={12} step={1} onChange={value => updateParam('gainDb', value)}/>
+            <PpSlider label="Normalize (목표)" unit="dB" value={params.normalizeDb} min={-12} max={0} step={1} onChange={value => updateParam('normalizeDb', value)}/>
+            <PpSlider label="Limiter (상한)" unit="dB" value={params.limiterDb} min={-12} max={0} step={1} onChange={value => updateParam('limiterDb', value)}/>
             <PpSlider label="무음 제거 (기준)" unit="dB" value={params.silenceDb} min={-80} max={-20} step={5} onChange={value => updateParam('silenceDb', value)}/>
             <PpSlider label="페이드 인" unit="초" value={params.fadeInSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeInSec', value)}/>
             <PpSlider label="페이드 아웃" unit="초" value={params.fadeOutSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeOutSec', value)}/>
