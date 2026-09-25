@@ -3537,7 +3537,9 @@ function ScaleInput({ value, label, onChange }: { value: number; label: string; 
 function AdapterPicker({ selected, onChange, style, onInsertTrigger, notify }: { selected: AdapterChoice[]; onChange: (next: AdapterChoice[]) => void; style: string; onInsertTrigger: (trigger: string) => void; notify: (text: string, error?: boolean) => void }) {
   const [list, setList] = useState<AdapterList | null>(null);
   const [open, setOpen] = useState(false);
-  useEffect(() => { api<AdapterList>('/adapters').then(setList).catch(() => setList(null)); }, [open]);
+  // reload the list when the dialog closes or when a selection arrives that this list does not know yet (e.g. picked automatically by "악기만")
+  const unknownSelected = selected.some(entry => !list?.adapters.some(item => item.name === entry.name));
+  useEffect(() => { api<AdapterList>('/adapters').then(setList).catch(() => setList(null)); }, [open, unknownSelected]);
   const byName = new Map((list?.adapters || []).map(item => [item.name, item]));
   const setScale = (name: string, part: 'arScale' | 'narScale', value: number) => onChange(selected.map(entry => entry.name === name ? { ...entry, [part]: value } : entry));
   // apply: keep the strengths of LoRAs that stay selected, start new ones at their recommended values
@@ -4880,7 +4882,8 @@ export default function Studio() {
     const isInstLora = (item: AdapterItem) => item.source?.catalogId === 'instrumental' || /inst/i.test(item.name);
     let list: AdapterList | null = null;
     try { list = await api<AdapterList>('/adapters'); } catch { list = null; }
-    const inst = list?.adapters.filter(isInstLora) || [];
+    // prefer the verified preset (catalog id) over other copies of the same LoRA
+    const inst = (list?.adapters.filter(isInstLora) || []).sort((a, b) => Number(b.source?.catalogId === 'instrumental') - Number(a.source?.catalogId === 'instrumental'));
     const gguf = /^yue2-(q4|q8|bf16)$/.test(draft.modelId);
     setDraft(previous => {
       const rest = (previous.adapters || []).filter(entry => !inst.some(item => item.name === entry.name));
