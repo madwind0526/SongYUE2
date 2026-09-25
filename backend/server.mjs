@@ -12,6 +12,7 @@ import { comfyUiAlive, execute as executeComfyUi } from './comfyui.mjs';
 import { parseNoteEvents, encodeMidiFile } from './midi.mjs';
 import { startDdspJob, killDdspJob } from './ddsp-svc.mjs';
 import { searchRvcVoices, downloadRvcVoice, listInstalledRvcVoices, resolveUserRvcVoice, deleteRvcVoice } from './rvcvoices.mjs';
+import { normalizeSpeechText } from './speech-text.mjs';
 import { TYPECAST_LANGUAGES, typecastSubscription, listTypecastVoices, typecastSpeak, recommendTypecastVoice, cloneTypecastVoice, deleteTypecastVoice, TypecastError } from './typecast.mjs';
 import { Worker } from 'node:worker_threads';
 import { lyricLines, detectLanguage, alignLyrics, toLrc } from './lyricsync.mjs';
@@ -1197,7 +1198,8 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   async function runTtsTool(input) {
     const { model, mode, design } = resolveTtsModel(input);
     if (!(await isTtsModelInstalled(root, model))) throw fail(409, `${model.family.label} ${model.variant.size} ${input.precision} 모델이 설치되어 있지 않습니다. 모델 선택에서 '받기'를 눌러 내려받아 주세요.`);
-    const content = text(input.text, 20000).trim();
+    // digits and abbreviations (2024, AI, TTS ...) are written out in Hangul so the model reads them; "normalize: false" reads the text as typed
+    const content = input.normalize === false ? text(input.text, 20000).trim() : normalizeSpeechText(text(input.text, 20000)).trim();
     if (!content) throw fail(400, '말할 내용을 입력해 주세요.');
     const description = text(input.description, 500).trim();
     if (design && !description) throw fail(400, '음색 설명을 입력해 주세요.');
