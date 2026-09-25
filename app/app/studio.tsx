@@ -168,11 +168,11 @@ async function loadCustomEqPresets(): Promise<Record<string, number[]>> {
 type PostProcessParams = { eq: number[]; masterVolume: number; eqEnabled: boolean; fxEnabled: boolean; reverbEchoEnabled: boolean; clarity: number; spaciousness: number; surround: number; dynamicBoost: number; bassBoost: number; reverbAmount: number; reverbLength: number; echoAmount: number; echoDelayMs: number;
   // four extra groups, each with its own on/off: "음량" (Gain / Normalize / Limiter), "무음제거", "Fade", "Play" (재생 속도 / Reverse).
   // Every value is neutral by default, so nothing changes until a slider is moved or a switch is turned on.
-  volumeOn: boolean; gainDb: number; normalizeOn: boolean; normalizeDb: number; limiterOn: boolean; limiterDb: number;
+  volumeOn: boolean; gainDb: number; normalizeDb: number; limiterDb: number; // Normalize / Limiter: -13 = Off (left end of the slider)
   silenceOn: boolean; silenceDb: number;
   fadeOn: boolean; fadeInSec: number; fadeOutSec: number;
   playOn: boolean; speedPct: number; reverseOn: boolean };
-const PP_EXTRA_DEFAULTS = { volumeOn: true, gainDb: 0, normalizeOn: false, normalizeDb: -1, limiterOn: false, limiterDb: -1, silenceOn: false, silenceDb: -50, fadeOn: true, fadeInSec: 0, fadeOutSec: 0, playOn: true, speedPct: 0, reverseOn: false };
+const PP_EXTRA_DEFAULTS = { volumeOn: true, gainDb: 0, normalizeDb: -13, limiterDb: -13, silenceOn: false, silenceDb: -50, fadeOn: true, fadeInSec: 0, fadeOutSec: 0, playOn: true, speedPct: 0, reverseOn: false };
 const PP_DEFAULT_PARAMS: PostProcessParams = { eq: Array(10).fill(0), masterVolume: 100, eqEnabled: true, fxEnabled: true, reverbEchoEnabled: true, clarity: 0, spaciousness: 0, surround: 0, dynamicBoost: 0, bassBoost: 0, reverbAmount: 0, reverbLength: 50, echoAmount: 0, echoDelayMs: 300, ...PP_EXTRA_DEFAULTS };
 async function loadPostprocessPresets(): Promise<Record<string, PostProcessParams>> {
   try {
@@ -272,7 +272,7 @@ function buildProcessingGraph(ctx: BaseAudioContext, source: AudioNode, params: 
 // Extra stage on the rendered sound: silence removal -> reverse -> speed -> gain -> peak normalize -> limiter -> fades.
 // Returns the buffer itself when nothing is switched on, so the original processing path is untouched.
 function finishBuffer(input: AudioBuffer, p: PostProcessParams): AudioBuffer {
-  const useVolume = p.volumeOn && (p.gainDb !== 0 || p.normalizeOn || p.limiterOn);
+  const useVolume = p.volumeOn && (p.gainDb !== 0 || p.normalizeDb > -13 || p.limiterDb > -13);
   const useFade = p.fadeOn && (p.fadeInSec > 0 || p.fadeOutSec > 0);
   const useSpeed = p.playOn && p.speedPct !== 0;
   const useReverse = p.playOn && p.reverseOn;
@@ -319,12 +319,12 @@ function finishBuffer(input: AudioBuffer, p: PostProcessParams): AudioBuffer {
     length = outLength;
   }
   if (p.volumeOn && p.gainDb !== 0) { const g = dbToLin(p.gainDb); for (const channel of data) for (let i = 0; i < length; i++) channel[i] *= g; }
-  if (p.volumeOn && p.normalizeOn) {
+  if (p.volumeOn && p.normalizeDb > -13) {
     let peak = 0;
     for (const channel of data) for (let i = 0; i < length; i++) peak = Math.max(peak, Math.abs(channel[i]));
     if (peak > 1e-6) { const g = dbToLin(p.normalizeDb) / peak; for (const channel of data) for (let i = 0; i < length; i++) channel[i] *= g; }
   }
-  if (p.volumeOn && p.limiterOn) {
+  if (p.volumeOn && p.limiterDb > -13) {
     // look-ahead peak limiter: the gain needed at every sample is spread 5 ms ahead and released over 80 ms, so peaks are turned down smoothly, not clipped
     const ceiling = dbToLin(p.limiterDb);
     const look = Math.max(1, Math.round(rate * 0.005));
@@ -596,12 +596,13 @@ function snapTo5(value: number): number { return Math.round(value / 5) * 5; }
 const snapToStep = (value: number, step: number) => Math.round(value / step) * step;
 
 // horizontal slider row for the post-process dialog ("음량 · 시간"): label, slider, value + unit
-function PpSlider({ label, unit, value, min, max, step, onChange, off, check }: { label: string; unit: string; value: number; min: number; max: number; step: number; onChange: (next: number) => void; off?: boolean; check?: { checked: boolean; onChange: (next: boolean) => void } }) {
-  const shown = unit === '%' && value > 0 ? `+${value}` : Number.isInteger(value) ? String(value) : value.toFixed(1);
-  return <label className={`pp-slider${off ? ' pp-off' : ''}`}>
-    <span className="pp-slider-label">{check && <input type="checkbox" className="pp-slider-check" checked={check.checked} onChange={event => check.onChange(event.target.checked)} aria-label={`${label} 켜기`}/>}{label}</span>
+function PpSlider({ label, unit, value, min, max, step, onChange, off, offAtMin }: { label: string; unit: string; value: number; min: number; max: number; step: number; onChange: (next: number) => void; off?: boolean; offAtMin?: boolean }) {
+  const isOff = off || (offAtMin && value <= min);
+  const shown = offAtMin && value <= min ? 'Off' : unit === '%' && value > 0 ? `+${value} %` : `${Number.isInteger(value) ? value : value.toFixed(1)} ${unit}`;
+  return <label className={`pp-slider${isOff ? ' pp-off' : ''}`}>
+    <span className="pp-slider-label">{label}</span>
     <input type="range" min={min} max={max} step={step} value={value} aria-label={`${label} (${unit})`} onChange={event => onChange(Number(event.target.value))}/>
-    <span className="pp-slider-value">{shown} {unit}</span>
+    <span className="pp-slider-value">{shown}</span>
   </label>;
 }
 
@@ -1195,30 +1196,20 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
               <div className={params.silenceOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" onClick={() => updateParam('silenceOn', !params.silenceOn)}><Power size={12}/>무음제거</button></div>
               <div className={params.fadeOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" onClick={() => updateParam('fadeOn', !params.fadeOn)}><Power size={12}/>Fade</button></div>
               <div className={params.playOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" onClick={() => updateParam('playOn', !params.playOn)}><Power size={12}/>Play</button></div>
+              <div className={params.reverseOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" title="소리를 끝에서 처음으로 뒤집습니다(Play가 켜져 있을 때 적용)" onClick={() => updateParam('reverseOn', !params.reverseOn)}><Power size={12}/>Reverse</button></div>
             </div>
             <button type="button" className="pp-extra-reset" title="음량 · 무음제거 · Fade · Play 설정을 모두 처음 값으로" onClick={resetExtras}><RotateCcw size={12}/>Reset</button>
           </div>
-          <div className="pp-extra-groups">
-            <div className={`pp-group${params.volumeOn ? '' : ' pp-off'}`}>
-              <span className="pp-group-title">음량</span>
-              <PpSlider off={!params.volumeOn} label="Gain (조절값)" unit="dB" value={params.gainDb} min={-12} max={12} step={1} onChange={value => updateParam('gainDb', value)}/>
-              <PpSlider off={!params.volumeOn || !params.normalizeOn} check={{ checked: params.normalizeOn, onChange: value => updateParam('normalizeOn', value) }} label="Normalize (목표)" unit="dB" value={params.normalizeDb} min={-12} max={0} step={1} onChange={value => updateParam('normalizeDb', value)}/>
-              <PpSlider off={!params.volumeOn || !params.limiterOn} check={{ checked: params.limiterOn, onChange: value => updateParam('limiterOn', value) }} label="Limiter (상한)" unit="dB" value={params.limiterDb} min={-12} max={0} step={1} onChange={value => updateParam('limiterDb', value)}/>
-            </div>
-            <div className={`pp-group${params.silenceOn ? '' : ' pp-off'}`}>
-              <span className="pp-group-title">무음제거</span>
-              <PpSlider off={!params.silenceOn} label="기준" unit="dB" value={params.silenceDb} min={-80} max={-20} step={5} onChange={value => updateParam('silenceDb', value)}/>
-            </div>
-            <div className={`pp-group${params.fadeOn ? '' : ' pp-off'}`}>
-              <span className="pp-group-title">Fade</span>
-              <PpSlider off={!params.fadeOn} label="Fade In" unit="초" value={params.fadeInSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeInSec', value)}/>
-              <PpSlider off={!params.fadeOn} label="Fade Out" unit="초" value={params.fadeOutSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeOutSec', value)}/>
-            </div>
-            <div className={`pp-group${params.playOn ? '' : ' pp-off'}`}>
-              <span className="pp-group-title">Play</span>
-              <PpSlider off={!params.playOn} label="재생 속도" unit="%" value={params.speedPct} min={-50} max={100} step={5} onChange={value => updateParam('speedPct', value)}/>
-              <label className={`pp-slider pp-reverse${params.playOn ? '' : ' pp-off'}`}><span className="pp-slider-label"><input type="checkbox" className="pp-slider-check" checked={params.reverseOn} onChange={event => updateParam('reverseOn', event.target.checked)} aria-label="Reverse 켜기"/>Reverse</span><span className="pp-slider-hint">소리를 끝에서 처음으로 뒤집습니다</span></label>
-            </div>
+          <div className="pp-extra-sliders">
+            <PpSlider off={!params.volumeOn} label="Gain (조절값)" unit="dB" value={params.gainDb} min={-12} max={12} step={1} onChange={value => updateParam('gainDb', value)}/>
+            <PpSlider off={!params.silenceOn} label="무음 제거 (기준)" unit="dB" value={params.silenceDb} min={-80} max={-20} step={5} onChange={value => updateParam('silenceDb', value)}/>
+            <PpSlider off={!params.volumeOn} offAtMin label="Normalize (목표)" unit="dB" value={params.normalizeDb} min={-13} max={0} step={1} onChange={value => updateParam('normalizeDb', value)}/>
+            <PpSlider off={!params.fadeOn} label="Fade In" unit="초" value={params.fadeInSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeInSec', value)}/>
+            <PpSlider off={!params.volumeOn} offAtMin label="Limiter (상한)" unit="dB" value={params.limiterDb} min={-13} max={0} step={1} onChange={value => updateParam('limiterDb', value)}/>
+            <PpSlider off={!params.fadeOn} label="Fade Out" unit="초" value={params.fadeOutSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeOutSec', value)}/>
+          </div>
+          <div className={`pp-extra-play${params.playOn ? '' : ' pp-off'}`}>
+            <PpSlider off={!params.playOn} label="재생 속도" unit="%" value={params.speedPct} min={-50} max={100} step={5} onChange={value => updateParam('speedPct', value)}/>
           </div>
         </div>
         <div className={`pp-waveform-row${activeTrack === 'original' && isPlaying ? ' pp-row-playing-original' : ''}`}>

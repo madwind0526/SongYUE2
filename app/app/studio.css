@@ -58,7 +58,7 @@
 .postprocess-dialog{max-height:calc(100vh - 32px)!important;overflow-y:auto}
 
 /* "음량 · 시간": slider rows (two columns) instead of knobs */
-.pp-extra-sliders{display:none}.pp-slider{display:grid;grid-template-columns:120px 1fr 58px;align-items:center;gap:10px;font-size:11px;color:#bec8bc}.pp-slider-label{white-space:nowrap}.pp-slider input[type=range]{width:100%;accent-color:#7fb069}.pp-slider-value{text-align:right;font-variant-numeric:tabular-nums;color:#dfe9dc}
+.pp-extra-sliders{display:grid;grid-template-columns:1fr 1fr;gap:12px 28px}.pp-slider{display:grid;grid-template-columns:120px 1fr 58px;align-items:center;gap:10px;font-size:11px;color:#bec8bc}.pp-slider-label{white-space:nowrap}.pp-slider input[type=range]{width:100%;accent-color:#7fb069}.pp-slider-value{text-align:right;font-variant-numeric:tabular-nums;color:#dfe9dc}
 @media(max-width:950px){.pp-extra-sliders{grid-template-columns:1fr}}
 
 /* extra panel: four groups (음량 / 무음제거 / Fade / Play), a Reset at the right end; anything switched off turns gray */
@@ -72,3 +72,8 @@
 .pp-off,.pp-off *{color:#5b625a!important}.pp-off .pp-slider-check{opacity:.6}.pp-slider.pp-off input[type=range]{accent-color:#59605a;opacity:.6}.pp-group.pp-off .pp-group-title{color:#5b625a}
 .knob.pp-off .knob-dial,.eq-bar-col.pp-off .eq-bar-track{filter:grayscale(1);opacity:.45}.knob.pp-off .knob-pointer{background:#6a726a}.eq-bar-col.pp-off .eq-bar-fill{background:#59605a}
 @media(max-width:950px){.pp-extra-groups{grid-template-columns:1fr 1fr}}
+
+/* extra panel: 3 rows x 2 columns of sliders (no group sub-titles), then the Play row */
+.pp-extra-sliders .pp-slider{grid-template-columns:130px 1fr 60px}.pp-extra-play{display:grid;grid-template-columns:1fr 1fr;gap:12px 28px;align-items:center;margin-top:12px}.pp-extra-play .pp-slider{grid-template-columns:130px 1fr 60px}.pp-reverse-check{display:inline-flex;align-items:center;gap:8px;font-size:11px;color:#bec8bc}.pp-reverse-check input{accent-color:#7fb069;width:14px;height:14px;margin:0}.pp-reverse-check .pp-slider-hint{color:#7d9884;font-size:10px;grid-column:auto}
+.pp-extra-play.pp-off .pp-reverse-check{color:#5b625a}
+@media(max-width:950px){.pp-extra-sliders,.pp-extra-play{grid-template-columns:1fr}}
