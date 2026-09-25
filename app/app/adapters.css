@@ -11,13 +11,13 @@ button.adapter-card, label.adapter-card { cursor: pointer; }
 .adapter-card:hover { border-color: #4b5d48; }
 .adapter-card.selected { border-color: #8fbf7f; background: #222d21; }
 /* an already downloaded catalog entry: a clearly different background instead of being dimmed */
-.adapter-card.installed { background: #1a3f66; border: 2px solid #5aa9f0; padding: 13px 15px; }
-.adapter-card.installed:hover { border-color: #8cc6ff; }
-.adapter-card.installed .adapter-card-head strong { color: #ffffff; }
-.adapter-card.installed .adapter-desc { color: #d6e6f7; }
-.adapter-card.installed .adapter-sub, .adapter-card.installed .adapter-foot { color: #a9c8e8; }
-.adapter-card.installed .adapter-badge.kind { background: #2c5a8c; color: #dcecff; }
-.adapter-card.installed .adapter-chip { border-color: #4b7fb3; color: #cfe2f7; }
+.adapter-card.installed { background: #070907; border: 2px solid #3a5f86; padding: 13px 15px; }
+.adapter-card.installed:hover { border-color: #5a8cc0; }
+.adapter-card.installed .adapter-card-head strong { color: #eef0e7; }
+.adapter-card.installed .adapter-desc { color: #b9c4b8; }
+.adapter-card.installed .adapter-sub, .adapter-card.installed .adapter-foot { color: #8b978a; }
+.adapter-card.installed .adapter-badge.kind { background: #1b2a3a; color: #bcd3ea; }
+.adapter-card.installed .adapter-chip { border-color: #34506e; color: #b5c8dc; }
 .adapter-card.installed .adapter-done { color: #7fe8b0; }
 .adapter-card-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .adapter-card-head strong { font-size: 14px; color: #eaf3e2; }
