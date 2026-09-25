@@ -166,9 +166,13 @@ async function loadCustomEqPresets(): Promise<Record<string, number[]>> {
   } catch { return {}; }
 }
 type PostProcessParams = { eq: number[]; masterVolume: number; eqEnabled: boolean; fxEnabled: boolean; reverbEchoEnabled: boolean; clarity: number; spaciousness: number; surround: number; dynamicBoost: number; bassBoost: number; reverbAmount: number; reverbLength: number; echoAmount: number; echoDelayMs: number;
-  // "음량 · 시간" (all off by default): gain, peak normalize, limiter, fades, silence removal -- applied to the rendered sound after the effect chain
-  extraEnabled: boolean; gainDb: number; normalizeOn: boolean; normalizeDb: number; limiterOn: boolean; limiterDb: number; fadeInSec: number; fadeOutSec: number; trimSilenceOn: boolean; silenceDb: number };
-const PP_EXTRA_DEFAULTS = { extraEnabled: true, gainDb: 0, normalizeOn: false, normalizeDb: -1, limiterOn: false, limiterDb: -1, fadeInSec: 0, fadeOutSec: 0, trimSilenceOn: false, silenceDb: -50 };
+  // four extra groups, each with its own on/off: "음량" (Gain / Normalize / Limiter), "무음제거", "Fade", "Play" (재생 속도 / Reverse).
+  // Every value is neutral by default, so nothing changes until a slider is moved or a switch is turned on.
+  volumeOn: boolean; gainDb: number; normalizeOn: boolean; normalizeDb: number; limiterOn: boolean; limiterDb: number;
+  silenceOn: boolean; silenceDb: number;
+  fadeOn: boolean; fadeInSec: number; fadeOutSec: number;
+  playOn: boolean; speedPct: number; reverseOn: boolean };
+const PP_EXTRA_DEFAULTS = { volumeOn: true, gainDb: 0, normalizeOn: false, normalizeDb: -1, limiterOn: false, limiterDb: -1, silenceOn: false, silenceDb: -50, fadeOn: true, fadeInSec: 0, fadeOutSec: 0, playOn: true, speedPct: 0, reverseOn: false };
 const PP_DEFAULT_PARAMS: PostProcessParams = { eq: Array(10).fill(0), masterVolume: 100, eqEnabled: true, fxEnabled: true, reverbEchoEnabled: true, clarity: 0, spaciousness: 0, surround: 0, dynamicBoost: 0, bassBoost: 0, reverbAmount: 0, reverbLength: 50, echoAmount: 0, echoDelayMs: 300, ...PP_EXTRA_DEFAULTS };
 async function loadPostprocessPresets(): Promise<Record<string, PostProcessParams>> {
   try {
@@ -265,17 +269,20 @@ function buildProcessingGraph(ctx: BaseAudioContext, source: AudioNode, params: 
   return master;
 }
 
-// "음량 · 시간" stage on the rendered sound: silence removal -> gain -> peak normalize -> limiter -> fades.
+// Extra stage on the rendered sound: silence removal -> reverse -> speed -> gain -> peak normalize -> limiter -> fades.
 // Returns the buffer itself when nothing is switched on, so the original processing path is untouched.
 function finishBuffer(input: AudioBuffer, p: PostProcessParams): AudioBuffer {
-  const active = p.extraEnabled && (p.gainDb !== 0 || p.normalizeOn || p.limiterOn || p.fadeInSec > 0 || p.fadeOutSec > 0 || p.trimSilenceOn);
-  if (!active) return input;
+  const useVolume = p.volumeOn && (p.gainDb !== 0 || p.normalizeOn || p.limiterOn);
+  const useFade = p.fadeOn && (p.fadeInSec > 0 || p.fadeOutSec > 0);
+  const useSpeed = p.playOn && p.speedPct !== 0;
+  const useReverse = p.playOn && p.reverseOn;
+  if (!(useVolume || useFade || useSpeed || useReverse || p.silenceOn)) return input;
   const rate = input.sampleRate;
   const channels = input.numberOfChannels;
   let data = Array.from({ length: channels }, (_, ch) => input.getChannelData(ch).slice());
   let length = input.length;
   const dbToLin = (db: number) => Math.pow(10, db / 20);
-  if (p.trimSilenceOn) {
+  if (p.silenceOn) {
     // keep everything that is louder than the threshold, plus a short tail; runs of silence longer than 0.3 s are shortened to 0.15 s
     const threshold = dbToLin(p.silenceDb);
     const win = Math.max(1, Math.round(rate * 0.02));
@@ -302,13 +309,22 @@ function finishBuffer(input: AudioBuffer, p: PostProcessParams): AudioBuffer {
       length = total;
     }
   }
-  if (p.gainDb !== 0) { const g = dbToLin(p.gainDb); for (const channel of data) for (let i = 0; i < length; i++) channel[i] *= g; }
-  if (p.normalizeOn) {
+  if (useReverse) for (const channel of data) channel.reverse();
+  let outRate = rate;
+  if (useSpeed) {
+    // playback speed (tape style): the sound is read faster or slower, so the pitch follows the speed
+    const factor = 1 + p.speedPct / 100;
+    const outLength = Math.max(1, Math.round(length / factor));
+    data = data.map(channel => { const next = new Float32Array(outLength); for (let i = 0; i < outLength; i++) { const pos = i * factor; const i0 = Math.floor(pos); const frac = pos - i0; const a0 = channel[i0] ?? 0; const a1 = channel[Math.min(length - 1, i0 + 1)] ?? a0; next[i] = a0 + (a1 - a0) * frac; } return next; });
+    length = outLength;
+  }
+  if (p.volumeOn && p.gainDb !== 0) { const g = dbToLin(p.gainDb); for (const channel of data) for (let i = 0; i < length; i++) channel[i] *= g; }
+  if (p.volumeOn && p.normalizeOn) {
     let peak = 0;
     for (const channel of data) for (let i = 0; i < length; i++) peak = Math.max(peak, Math.abs(channel[i]));
     if (peak > 1e-6) { const g = dbToLin(p.normalizeDb) / peak; for (const channel of data) for (let i = 0; i < length; i++) channel[i] *= g; }
   }
-  if (p.limiterOn) {
+  if (p.volumeOn && p.limiterOn) {
     // look-ahead peak limiter: the gain needed at every sample is spread 5 ms ahead and released over 80 ms, so peaks are turned down smoothly, not clipped
     const ceiling = dbToLin(p.limiterDb);
     const look = Math.max(1, Math.round(rate * 0.005));
@@ -330,9 +346,9 @@ function finishBuffer(input: AudioBuffer, p: PostProcessParams): AudioBuffer {
       for (const channel of data) channel[i] *= smoothed;
     }
   }
-  if (p.fadeInSec > 0) { const n = Math.min(length, Math.round(p.fadeInSec * rate)); for (const channel of data) for (let i = 0; i < n; i++) channel[i] *= i / n; }
-  if (p.fadeOutSec > 0) { const n = Math.min(length, Math.round(p.fadeOutSec * rate)); for (const channel of data) for (let i = 0; i < n; i++) channel[length - 1 - i] *= i / n; }
-  const output = new AudioBuffer({ length: Math.max(1, length), numberOfChannels: channels, sampleRate: rate });
+  if (useFade && p.fadeInSec > 0) { const n = Math.min(length, Math.round(p.fadeInSec * rate)); for (const channel of data) for (let i = 0; i < n; i++) channel[i] *= i / n; }
+  if (useFade && p.fadeOutSec > 0) { const n = Math.min(length, Math.round(p.fadeOutSec * rate)); for (const channel of data) for (let i = 0; i < n; i++) channel[length - 1 - i] *= i / n; }
+  const output = new AudioBuffer({ length: Math.max(1, length), numberOfChannels: channels, sampleRate: outRate });
   data.forEach((channel, ch) => output.copyToChannel(length ? channel : new Float32Array(1), ch));
   return output;
 }
@@ -580,11 +596,16 @@ function snapTo5(value: number): number { return Math.round(value / 5) * 5; }
 const snapToStep = (value: number, step: number) => Math.round(value / step) * step;
 
 // horizontal slider row for the post-process dialog ("음량 · 시간"): label, slider, value + unit
-function PpSlider({ label, unit, value, min, max, step, onChange }: { label: string; unit: string; value: number; min: number; max: number; step: number; onChange: (next: number) => void }) {
-  return <label className="pp-slider"><span className="pp-slider-label">{label}</span><input type="range" min={min} max={max} step={step} value={value} aria-label={`${label} (${unit})`} onChange={event => onChange(Number(event.target.value))}/><span className="pp-slider-value">{Number.isInteger(value) ? value : value.toFixed(1)} {unit}</span></label>;
+function PpSlider({ label, unit, value, min, max, step, onChange, off, check }: { label: string; unit: string; value: number; min: number; max: number; step: number; onChange: (next: number) => void; off?: boolean; check?: { checked: boolean; onChange: (next: boolean) => void } }) {
+  const shown = unit === '%' && value > 0 ? `+${value}` : Number.isInteger(value) ? String(value) : value.toFixed(1);
+  return <label className={`pp-slider${off ? ' pp-off' : ''}`}>
+    <span className="pp-slider-label">{check && <input type="checkbox" className="pp-slider-check" checked={check.checked} onChange={event => check.onChange(event.target.checked)} aria-label={`${label} 켜기`}/>}{label}</span>
+    <input type="range" min={min} max={max} step={step} value={value} aria-label={`${label} (${unit})`} onChange={event => onChange(Number(event.target.value))}/>
+    <span className="pp-slider-value">{shown} {unit}</span>
+  </label>;
 }
 
-function EqBar({ label, value, onChange }: { label: string; value: number; onChange: (next: number) => void }) {
+function EqBar({ label, value, onChange, off }: { label: string; value: number; onChange: (next: number) => void; off?: boolean }) {
   const dragRef = useRef<{ startY: number; startValue: number } | null>(null);
   function onPointerDown(event: React.PointerEvent<HTMLDivElement>) {
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -597,7 +618,7 @@ function EqBar({ label, value, onChange }: { label: string; value: number; onCha
   }
   const halfHeightPct = Math.abs(value) / 100 * 50;
   const bottomPct = value >= 0 ? 50 : 50 - halfHeightPct;
-  return <div className="eq-bar-col">
+  return <div className={off ? "eq-bar-col pp-off" : "eq-bar-col"}>
     <input type="number" className="eq-bar-value" value={value} min={-100} max={100} step={5} onChange={event => onChange(Math.max(-100, Math.min(100, Number(event.target.value) || 0)))} onBlur={event => onChange(snapTo5(Math.max(-100, Math.min(100, Number(event.target.value) || 0))))}/>
     <div className="eq-bar-track" onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={() => { dragRef.current = null; }}>
       <div className="eq-bar-zero"/>
@@ -607,7 +628,7 @@ function EqBar({ label, value, onChange }: { label: string; value: number; onCha
   </div>;
 }
 
-function Knob({ label, value, min, max, onChange, variant, step = 5 }: { label: string; value: number; min: number; max: number; onChange: (next: number) => void; variant?: 'fx' | 'reverb'; step?: number }) {
+function Knob({ label, value, min, max, onChange, variant, step = 5, off }: { label: string; value: number; min: number; max: number; onChange: (next: number) => void; variant?: 'fx' | 'reverb'; step?: number; off?: boolean }) {
   const dragRef = useRef<{ startY: number; startValue: number } | null>(null);
   const pct = (value - min) / (max - min);
   const angle = -135 + pct * 270;
@@ -621,7 +642,7 @@ function Knob({ label, value, min, max, onChange, variant, step = 5 }: { label: 
     const next = dragRef.current.startValue + (delta / 150) * (max - min);
     onChange(snapToStep(Math.max(min, Math.min(max, next)), step));
   }
-  return <div className={variant ? `knob knob-${variant}` : 'knob'}>
+  return <div className={`${variant ? `knob knob-${variant}` : 'knob'}${off ? ' pp-off' : ''}`}>
     <div className="knob-dial" style={{ '--pct': pct } as React.CSSProperties} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={() => { dragRef.current = null; }}>
       <div className="knob-pointer" style={{ transform: `rotate(${angle}deg)` }}/>
     </div>
@@ -888,6 +909,7 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
       return next;
     });
   }
+  // "Reset" at the right end of the extra panel: every group back to neutral
   function resetExtras() {
     setParams(previous => {
       const next = { ...previous, ...PP_EXTRA_DEFAULTS };
@@ -1123,7 +1145,7 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
                 {customPresets[eqPreset] && <button type="button" className="pp-preset-btn" title={`"${eqPreset}" 프리셋 삭제`} onClick={() => void deleteCustomPreset(eqPreset)}><Trash2 size={12}/></button>}
               </div>
             </div>
-            <div className="pp-eq-bars">{PP_EQ_BANDS.map((_, index) => <EqBar key={PP_EQ_LABELS[index]} label={PP_EQ_LABELS[index]} value={params.eq[index]} onChange={value => updateEq(index, value)}/>)}</div>
+            <div className="pp-eq-bars">{PP_EQ_BANDS.map((_, index) => <EqBar key={PP_EQ_LABELS[index]} label={PP_EQ_LABELS[index]} value={params.eq[index]} off={!params.eqEnabled} onChange={value => updateEq(index, value)}/>)}</div>
             <div className="pp-eq-footer">
               <Knob label="전체 볼륨" value={params.masterVolume} min={0} max={150} onChange={value => updateParam('masterVolume', value)}/>
               {visualizerEnabled && <div className="pp-visualizer-wrap">
@@ -1154,38 +1176,49 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
               </div>
             </div>
             <div className="pp-knob-grid">
-              <Knob label="선명도" value={params.clarity} min={-100} max={100} onChange={value => updateParam('clarity', value)} variant="fx"/>
-              <Knob label="공간감" value={params.spaciousness} min={0} max={100} onChange={value => updateParam('spaciousness', value)} variant="fx"/>
-              <Knob label="서라운드 사운드" value={params.surround} min={-100} max={100} onChange={value => updateParam('surround', value)} variant="fx"/>
-              <Knob label="다이내믹 부스트" value={params.dynamicBoost} min={0} max={100} onChange={value => updateParam('dynamicBoost', value)} variant="fx"/>
-              <Knob label="베이스 부스트" value={params.bassBoost} min={-100} max={100} onChange={value => updateParam('bassBoost', value)} variant="fx"/>
-              <Knob label="리버브 양" value={params.reverbAmount} min={0} max={100} onChange={value => updateParam('reverbAmount', value)} variant="reverb"/>
-              <Knob label="리버브 잔향 길이" value={params.reverbLength} min={0} max={100} onChange={value => updateParam('reverbLength', value)} variant="reverb"/>
-              <Knob label="에코 양" value={params.echoAmount} min={0} max={100} onChange={value => updateParam('echoAmount', value)} variant="reverb"/>
-              <Knob label="에코 지연 (ms)" value={params.echoDelayMs} min={40} max={600} onChange={value => updateParam('echoDelayMs', value)} variant="reverb"/>
+              <Knob label="선명도" off={!params.fxEnabled} value={params.clarity} min={-100} max={100} onChange={value => updateParam('clarity', value)} variant="fx"/>
+              <Knob label="공간감" off={!params.fxEnabled} value={params.spaciousness} min={0} max={100} onChange={value => updateParam('spaciousness', value)} variant="fx"/>
+              <Knob label="서라운드 사운드" off={!params.fxEnabled} value={params.surround} min={-100} max={100} onChange={value => updateParam('surround', value)} variant="fx"/>
+              <Knob label="다이내믹 부스트" off={!params.fxEnabled} value={params.dynamicBoost} min={0} max={100} onChange={value => updateParam('dynamicBoost', value)} variant="fx"/>
+              <Knob label="베이스 부스트" off={!params.fxEnabled} value={params.bassBoost} min={-100} max={100} onChange={value => updateParam('bassBoost', value)} variant="fx"/>
+              <Knob label="리버브 양" off={!params.reverbEchoEnabled} value={params.reverbAmount} min={0} max={100} onChange={value => updateParam('reverbAmount', value)} variant="reverb"/>
+              <Knob label="리버브 잔향 길이" off={!params.reverbEchoEnabled} value={params.reverbLength} min={0} max={100} onChange={value => updateParam('reverbLength', value)} variant="reverb"/>
+              <Knob label="에코 양" off={!params.reverbEchoEnabled} value={params.echoAmount} min={0} max={100} onChange={value => updateParam('echoAmount', value)} variant="reverb"/>
+              <Knob label="에코 지연 (ms)" off={!params.reverbEchoEnabled} value={params.echoDelayMs} min={40} max={600} onChange={value => updateParam('echoDelayMs', value)} variant="reverb"/>
             </div>
           </div>
         </div>
         <div className="pp-fx-panel pp-extra-panel">
           <div className="pp-fx-header">
-            <span className="pp-panel-title">음량 · 시간</span>
             <div className="pp-extra-toggles">
-              <div className={params.normalizeOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" title="가장 큰 소리를 목표 dB에 맞춥니다" onClick={() => updateParam('normalizeOn', !params.normalizeOn)}><Power size={12}/>Normalize</button></div>
-              <div className={params.limiterOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" title="상한을 넘는 소리를 부드럽게 눌러 찌그러짐을 막습니다" onClick={() => updateParam('limiterOn', !params.limiterOn)}><Power size={12}/>Limiter</button></div>
-              <div className={params.trimSilenceOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" title="앞뒤 무음을 자르고 0.3초 넘는 무음은 짧게 줄입니다" onClick={() => updateParam('trimSilenceOn', !params.trimSilenceOn)}><Power size={12}/>무음 제거</button></div>
-              <div className={params.extraEnabled ? 'pp-toggle-btn active' : 'pp-toggle-btn'}>
-                <button type="button" className="pp-toggle-reset" title="음량 · 시간 초기화" onClick={resetExtras}><RotateCcw size={12}/></button>
-                <button type="button" className="pp-toggle-power" onClick={() => updateParam('extraEnabled', !params.extraEnabled)}><Power size={12}/>음량 · 시간</button>
-              </div>
+              <div className={params.volumeOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" onClick={() => updateParam('volumeOn', !params.volumeOn)}><Power size={12}/>음량</button></div>
+              <div className={params.silenceOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" onClick={() => updateParam('silenceOn', !params.silenceOn)}><Power size={12}/>무음제거</button></div>
+              <div className={params.fadeOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" onClick={() => updateParam('fadeOn', !params.fadeOn)}><Power size={12}/>Fade</button></div>
+              <div className={params.playOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" onClick={() => updateParam('playOn', !params.playOn)}><Power size={12}/>Play</button></div>
             </div>
+            <button type="button" className="pp-extra-reset" title="음량 · 무음제거 · Fade · Play 설정을 모두 처음 값으로" onClick={resetExtras}><RotateCcw size={12}/>Reset</button>
           </div>
-          <div className="pp-extra-sliders">
-            <PpSlider label="Gain (조절값)" unit="dB" value={params.gainDb} min={-12} max={12} step={1} onChange={value => updateParam('gainDb', value)}/>
-            <PpSlider label="Normalize (목표)" unit="dB" value={params.normalizeDb} min={-12} max={0} step={1} onChange={value => updateParam('normalizeDb', value)}/>
-            <PpSlider label="Limiter (상한)" unit="dB" value={params.limiterDb} min={-12} max={0} step={1} onChange={value => updateParam('limiterDb', value)}/>
-            <PpSlider label="무음 제거 (기준)" unit="dB" value={params.silenceDb} min={-80} max={-20} step={5} onChange={value => updateParam('silenceDb', value)}/>
-            <PpSlider label="페이드 인" unit="초" value={params.fadeInSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeInSec', value)}/>
-            <PpSlider label="페이드 아웃" unit="초" value={params.fadeOutSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeOutSec', value)}/>
+          <div className="pp-extra-groups">
+            <div className={`pp-group${params.volumeOn ? '' : ' pp-off'}`}>
+              <span className="pp-group-title">음량</span>
+              <PpSlider off={!params.volumeOn} label="Gain (조절값)" unit="dB" value={params.gainDb} min={-12} max={12} step={1} onChange={value => updateParam('gainDb', value)}/>
+              <PpSlider off={!params.volumeOn || !params.normalizeOn} check={{ checked: params.normalizeOn, onChange: value => updateParam('normalizeOn', value) }} label="Normalize (목표)" unit="dB" value={params.normalizeDb} min={-12} max={0} step={1} onChange={value => updateParam('normalizeDb', value)}/>
+              <PpSlider off={!params.volumeOn || !params.limiterOn} check={{ checked: params.limiterOn, onChange: value => updateParam('limiterOn', value) }} label="Limiter (상한)" unit="dB" value={params.limiterDb} min={-12} max={0} step={1} onChange={value => updateParam('limiterDb', value)}/>
+            </div>
+            <div className={`pp-group${params.silenceOn ? '' : ' pp-off'}`}>
+              <span className="pp-group-title">무음제거</span>
+              <PpSlider off={!params.silenceOn} label="기준" unit="dB" value={params.silenceDb} min={-80} max={-20} step={5} onChange={value => updateParam('silenceDb', value)}/>
+            </div>
+            <div className={`pp-group${params.fadeOn ? '' : ' pp-off'}`}>
+              <span className="pp-group-title">Fade</span>
+              <PpSlider off={!params.fadeOn} label="Fade In" unit="초" value={params.fadeInSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeInSec', value)}/>
+              <PpSlider off={!params.fadeOn} label="Fade Out" unit="초" value={params.fadeOutSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeOutSec', value)}/>
+            </div>
+            <div className={`pp-group${params.playOn ? '' : ' pp-off'}`}>
+              <span className="pp-group-title">Play</span>
+              <PpSlider off={!params.playOn} label="재생 속도" unit="%" value={params.speedPct} min={-50} max={100} step={5} onChange={value => updateParam('speedPct', value)}/>
+              <label className={`pp-slider pp-reverse${params.playOn ? '' : ' pp-off'}`}><span className="pp-slider-label"><input type="checkbox" className="pp-slider-check" checked={params.reverseOn} onChange={event => updateParam('reverseOn', event.target.checked)} aria-label="Reverse 켜기"/>Reverse</span><span className="pp-slider-hint">소리를 끝에서 처음으로 뒤집습니다</span></label>
+            </div>
           </div>
         </div>
         <div className={`pp-waveform-row${activeTrack === 'original' && isPlaying ? ' pp-row-playing-original' : ''}`}>
