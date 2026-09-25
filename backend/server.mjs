@@ -887,7 +887,6 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const design = input.mode === 'design';
     const preset = input.mode === 'preset';
     const familyId = text(input.family, 40);
-    if (TTS_FAMILIES.find((item) => item.id === familyId)?.disabled) throw fail(400, `${TTS_FAMILIES.find((item) => item.id === familyId).label}은(는) 사용하지 않도록 비활성화된 모델입니다. 다른 모델을 선택해 주세요.`);
     if ([...ASR_FAMILIES, ...VC_FAMILIES, ...EDIT_FAMILIES, ...ALIGN_FAMILIES, ...SFX_FAMILIES].some((item) => item.id === familyId)) {
       const asrModel = findTtsModel(familyId, ASR_FAMILIES.some((item) => item.id === familyId) ? 'asr' : EDIT_FAMILIES.some((item) => item.id === familyId) ? 'edit' : ALIGN_FAMILIES.some((item) => item.id === familyId) ? 'align' : SFX_FAMILIES.some((item) => item.id === familyId) ? 'sfx' : 'vc', text(input.size, 20), text(input.precision, 20));
       if (!asrModel) throw fail(400, '지원하지 않는 모델 조합입니다.');

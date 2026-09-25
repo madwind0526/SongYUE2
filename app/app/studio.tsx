@@ -2061,7 +2061,7 @@ function TransportControls({ t, disabled }: { t: AudioTransport; disabled: boole
 // (voice from a text description) only exists for Qwen3-TTS VoiceDesign.
 type TtsPrecisionInfo = { precision: string; sizeMb: number; installed: boolean; download: { state: string; receivedBytes: number; totalBytes: number; error: string | null } | null };
 type TtsVariantInfo = { mode: 'design' | 'ref' | 'preset' | 'asr'; size: string; precisions: TtsPrecisionInfo[] };
-type TtsFamilyInfo = { id: string; label: string; disabled?: boolean; languages?: string[]; voices?: { id: string; label: string }[]; variants: TtsVariantInfo[] };
+type TtsFamilyInfo = { id: string; label: string; languages?: string[]; voices?: { id: string; label: string }[]; variants: TtsVariantInfo[] };
 const TTS_PRECISION_LABELS: Record<string, string> = { q8_0: 'INT8 (Q8_0)', bf16: 'BF16', f16: 'FP16', f32: 'FP32', orig: '원본(FP32)' };
 function ttsVariantsFor(families: TtsFamilyInfo[], familyId: string, mode: 'design' | 'ref' | 'preset') {
   // Families with a native voice-design variant (Qwen3) use it in the design tab;
@@ -2799,9 +2799,8 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
           <div className="at-section-head">모델 선택</div>
           <div className="audio-tools-model-switch two-rows" role="group" aria-label="TTS 모델">
             {[...ttsModels.filter(family => ttsVariantsFor(ttsModels, family.id, ttsMode).length > 0), ...(ttsMode !== 'preset' && typecastAvailable ? [{ id: 'typecast', label: 'Typecast (클라우드)' }] : [])].map(family => {
-              const disabledFamily = 'disabled' in family && family.disabled === true;
-              const missing = family.id !== 'typecast' && (disabledFamily || !familyInstalled(ttsVariantsFor(ttsModels, family.id, ttsMode)));
-              return <button key={family.id} type="button" className={`${ttsFamily === family.id ? 'active' : ''}${missing ? ' model-missing' : ''}`} aria-pressed={ttsFamily === family.id} title={disabledFamily ? '사용하지 않는 모델입니다' : missing ? '모델 다운로드가 필요합니다' : undefined} onClick={() => setTtsFamily(family.id)} disabled={running || disabledFamily}>{family.label}</button>;
+              const missing = family.id !== 'typecast' && !familyInstalled(ttsVariantsFor(ttsModels, family.id, ttsMode));
+              return <button key={family.id} type="button" className={`${ttsFamily === family.id ? 'active' : ''}${missing ? ' model-missing' : ''}`} aria-pressed={ttsFamily === family.id} title={missing ? '모델 다운로드가 필요합니다' : undefined} onClick={() => setTtsFamily(family.id)} disabled={running}>{family.label}</button>;
             })}
           </div>
           {ttsFamily !== 'typecast' && ttsModels.length > 0 && !familyInstalled(ttsVariantsFor(ttsModels, ttsFamily, ttsMode)) && <span className="field-hint warning">{ttsModels.find(family => family.id === ttsFamily)?.label} 모델은 아직 내려받지 않았습니다. 아래 "모델 받기" 버튼을 눌러 다운로드해 주세요.</span>}

@@ -127,7 +127,7 @@ python scripts/download_models.py
 - **⑤ ComfyUI (선택, "YuE2 - INT8 ConvRot" 모델 전용)**: ComfyUI(v0.35.0+, YuE2 네이티브 지원)를 `engine/ComfyUI`에 독립 설치해 HTTP API로 연동합니다(약 4.2GB — `.venv`+코드, 체크포인트는 하드링크). VRAM 절약 효과는 없고 다운로드 용량만 작습니다 — 저VRAM 환경에서 고를 실익은 적습니다. → **[docs/comfyui-setup.md](docs/comfyui-setup.md)**
 - **⑥ AudioSR (선택, "음원 복원" 메뉴 전용, 실험적)**: 저음질 오디오를 복원하는 audio.cpp의 AudioSR 모델(약 6.18GB, f32 단일 정밀도)입니다. ①을 빌드할 때 `-Models "yue2,htdemucs,bs_roformer,audiosr,muscriptor"`로 `audiosr`을 포함해야 합니다. **클릭/틱 잡음이 재현되는 것을 확인한 실험적 기능**입니다 — `progress.md` 참고. → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)의 음원 복원 절**
 - **⑦ MuScriptor (선택, "MIDI로 내보내기" 메뉴 전용)**: 완성곡을 표준 MIDI 파일로 변환하는 audio.cpp의 MuScriptor 모델(약 412MB). 매우 빠름(RTX 5070에서 30초 곡 기준 약 0.7초). ①을 빌드할 때 `-Models "yue2,htdemucs,bs_roformer,audiosr,muscriptor"`로 `muscriptor`를 포함해야 합니다. → **[docs/audiocpp-setup.md](docs/audiocpp-setup.md)의 MIDI로 내보내기 절**
-- **⑨ Audio Tools 엔진 (audio.cpp, 선택)**: "오디오 도구" 페이지의 TTS(Qwen3-TTS·Fish Audio·OmniVoice·Supertonic 3·MagpieTTS, Chatterbox는 비활성)와 음성 인식(Qwen3-ASR·Nemotron 3.5·VibeVoice-ASR)은 audio.cpp로 실행합니다. 모델은 앱에서 선택해 내려받고(미설치 시 "모델 받기"), 음성 조절(피치·속도·음량·노이즈)은 ffmpeg로 처리합니다. (이전의 AudioAuK 연동은 2026-09-24 제거되었습니다.)
+- **⑨ Audio Tools 엔진 (audio.cpp, 선택)**: "오디오 도구" 페이지의 TTS(Qwen3-TTS·Fish Audio·OmniVoice·Supertonic 3·MagpieTTS, Chatterbox는 모델을 지워 둠)와 음성 인식(Qwen3-ASR·Nemotron 3.5·VibeVoice-ASR)은 audio.cpp로 실행합니다. 모델은 앱에서 선택해 내려받고(미설치 시 "모델 받기"), 음성 조절(피치·속도·음량·노이즈)은 ffmpeg로 처리합니다. (이전의 AudioAuK 연동은 2026-09-24 제거되었습니다.)
 - **⑩ DDSP-SVC (선택, "음색 변조"의 DDSP-SVC 탭 전용, 실험적)**: 목표 목소리의 레퍼런스 클립들로 SVC 모델을 실제로 학습해(기본 4만 스텝 ≈ 1시간 반) 변환하는 파이프라인. 특징 인코더(ContentVec/HubertSoft)·음정 추출기(RMVPE/FCPE)·보코더(NSF-HiFiGAN/PC-NSF-HiFiGAN)와 목표 스텝을 고르고, 목표에 도달하면 학습을 정확히 중단해 그 체크포인트로 추론합니다. 별도의 DDSP-SVC 설치가 필요합니다(기본 경로 `test\DDSP-SVC`, `ddspSvcPath` 설정).
 
 > "심볼릭 작곡"·"악기만"·ABC 기반 커버는 최종 생성에 ①이나 ②를 쓰더라도, ABC 악보 준비(계획 생성/보컬 성부 뮤트) 자체는 항상 ②의 Python 엔진(`abc_tools.py`)을 거칩니다. 즉 GGUF만 쓰더라도 이 기능들을 쓰려면 ②의 Python 환경 구성이 필요합니다.
@@ -198,7 +198,7 @@ YuE2 모델 가중치(GGUF/원본 모두)는 CC BY-NC 4.0을 따릅니다. 비�
 
 - **TTS 생성**: T2S(음색 설명) / Ref-T2S(참조 목소리 복제) / 프리셋 목소리 3가지. 모델·크기·정밀도를 화면에서 고르고 미설치 조합은 "모델 받기"로 내려받습니다(`models/audio-cpp/audio.cpp-gguf/`).
   - T2S: Qwen3-TTS VoiceDesign, (Fish Audio·OmniVoice는 Qwen3가 만든 참조 음성 사용), Typecast
-  - Ref-T2S: Fish Audio S2 Pro, Qwen3-TTS Base, OmniVoice, Typecast(유료 플랜). 버튼 순서: Qwen3-TTS, Fish Audio, (Chatterbox: 비활성), OmniVoice, Typecast
+  - Ref-T2S: Fish Audio S2 Pro, Qwen3-TTS Base, OmniVoice, Typecast(유료 플랜). 버튼 순서: Qwen3-TTS, Fish Audio, Chatterbox(모델 삭제, 받기 가능), OmniVoice, Typecast
   - 프리셋: Supertonic 3, Qwen3 CustomVoice, MagpieTTS — 목소리 선택 + 미리듣기
   - 스타일 지시(선택): Qwen3 CustomVoice
 - **음성 인식**: Qwen3-ASR(0.6B/1.7B), Nemotron 3.5 ASR, VibeVoice-ASR. 결과는 텍스트로 저장할 수 있습니다.

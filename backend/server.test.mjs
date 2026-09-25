@@ -1544,11 +1544,8 @@ test('Tools 메뉴 - audio.cpp TTS: 모델 목록/설치 확인, 문장 분할 �
   // not installed -> 409 with guidance, engine never spawned
   const missing = await callJson('/api/audio-tools/tts', 'POST', { family: 'fish', mode: 'ref', size: '기본', precision: 'q8_0', text: '안녕하세요', referenceDataUrl: refAudio });
   assert.equal(missing.status, 409);
-  // Chatterbox is disabled: refused even if a file were there
-  const disabled = await callJson('/api/audio-tools/tts', 'POST', { family: 'chatterbox', mode: 'ref', size: '기본', precision: 'q8_0', text: '안녕하세요', referenceDataUrl: refAudio });
-  assert.equal(disabled.status, 400);
-  assert.match(disabled.data.error, /비활성화/);
-  assert.equal((await callJson('/api/audio-tools/tts/models')).data.families.find(f => f.id === 'chatterbox').disabled, true);
+  // Chatterbox (model deleted) behaves like any other missing model: 409 with the download guidance
+  assert.equal((await callJson('/api/audio-tools/tts', 'POST', { family: 'chatterbox', mode: 'ref', size: '기본', precision: 'q8_0', text: '안녕하세요', referenceDataUrl: refAudio })).status, 409);
   assert.equal((await callJson('/api/audio-tools/tts', 'POST', { family: 'nope', mode: 'ref', size: 'x', precision: 'y', text: 'a' })).status, 400);
 
   await install('Fish-Audio-S2-Pro-GGUF', 'fish-audio-s2-pro-q8_0.gguf');

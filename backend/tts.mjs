@@ -45,8 +45,7 @@ export const TTS_FAMILIES = [
       bf16: ['Fish-Audio-S2-Pro-GGUF', 'fish-audio-s2-pro-bf16.gguf', 10229] } }],
   },
   {
-    // Disabled (2026-09-25): reads digits and abbreviations badly and is not needed next to Fish Audio; the model file was deleted.
-    id: 'chatterbox', label: 'Chatterbox', cliFamily: 'chatterbox', disabled: true,
+    id: 'chatterbox', label: 'Chatterbox', cliFamily: 'chatterbox',
     variants: [{ mode: 'ref', size: '기본', files: {
       q8_0: ['Chatterbox-GGUF', 'chatterbox-q8_0.gguf', 2088],
       f16: ['Chatterbox-GGUF', 'chatterbox-f16.gguf', 3744] } }],
@@ -217,7 +216,7 @@ export async function listTtsModels(root, downloads = new Map(), catalog = TTS_F
       }
       variants.push({ mode: variant.mode, size: variant.size, precisions });
     }
-    families.push({ id: family.id, label: family.label, disabled: family.disabled === true ? true : undefined, languages: family.languages ? Object.keys(family.languages) : undefined, voices: family.voices, variants });
+    families.push({ id: family.id, label: family.label, languages: family.languages ? Object.keys(family.languages) : undefined, voices: family.voices, variants });
   }
   return families;
 }
