@@ -69,5 +69,5 @@ LoRA/LoKr 어댑터는 audio.cpp가 읽지 못해서, **어댑터를 고른 곡�
 - 확인한 형식: PEFT/일반 LoRA(`lora_A/lora_B`), ComfyUI용 파일, bf16 파일, LoKr 모두 로드됨. DoRA·LoHa·PiSSA 델타는 엔진이 거부합니다. AR(작곡) 쪽만 바꾸는 파일, NAR(사운드) 쪽만 바꾸는 파일, 둘 다 바꾸는 파일이 있고, 곡 만들기의 LoRA 선택은 **작곡 강도와 사운드 강도를 따로** 받습니다(yue-server의 `ar_scale`/`nar_scale`).
 - **Preset 탭**(내부 이름은 catalog, `backend/adapter-catalog.json`)는 `node scripts/build-adapter-catalog.mjs`로 만듭니다. 각 항목의 설명·추천 강도·트리거는 공개 모델 카드를 보고 손으로 적고, 파일 크기와 다운로드가 고정되는 커밋은 허깅페이스 API에서 읽습니다. 모든 파일을 실제로 yue-server에 로드해 AR/NAR 범위를 확인했습니다.
 - **허깅페이스 탭**은 `yue2` 검색 결과에서 YuE2 어댑터만 골라(다른 모델의 LoRA, 모델 변환본 제외) 태그·언어·라이선스·샘플 수·파일 이름에서 분류하고, 저장소를 열면 README 첫 문단과 샘플 음원, 받을 수 있는 파일을 보여 줍니다. 작곡(AR) 파일 1개와 사운드(NAR) 파일 1개를 함께 고르면 하나의 LoRA로 묶습니다.
-- "악기만": GGUF 모델에서 "악기만"을 누르면 받아 둔 "연주곡(Instrumental)" LoRA가 자동으로 선택되어 이 엔진으로 만듭니다(가사는 [Verse] 같은 구간 태그만 남깁니다). 그 LoRA가 없으면 기존 방식(audio.cpp + 악보 mute-voice)으로 만들고 화면에서 받도록 안내합니다. 같은 시드여도 audio.cpp와 yue-server의 결과는 다릅니다. 비상업(cc-by-nc) 라이선스인 LoRA가 많아 화면에 "비상업용"으로 표시합니다.
+- "악기만": 원본(Python) 모델이 아닌 모델(GGUF, INT8 등)에서 "악기만"을 누르면 받아 둔 "연주곡(Instrumental)" LoRA가 모두 자동으로 선택되어 이 엔진으로 만듭니다(가사는 [Verse] 같은 구간 태그만 남깁니다). 그 LoRA가 없으면 기존 방식(audio.cpp + 악보 mute-voice)으로 만들고 화면에서 받도록 안내합니다. 같은 시드여도 audio.cpp와 yue-server의 결과는 다릅니다. 비상업(cc-by-nc) 라이선스인 LoRA가 많아 화면에 "비상업용"으로 표시합니다.
 - 실측(RTX 5070 12 GB): 30초 곡 약 14초, 1분 39초 곡 34초(추론 단계 32).

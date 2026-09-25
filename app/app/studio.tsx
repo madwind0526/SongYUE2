@@ -4882,14 +4882,15 @@ export default function Studio() {
     const isInstLora = (item: AdapterItem) => item.source?.catalogId === 'instrumental' || /inst/i.test(item.name);
     let list: AdapterList | null = null;
     try { list = await api<AdapterList>('/adapters'); } catch { list = null; }
-    // prefer the verified preset (catalog id) over other copies of the same LoRA
-    const inst = (list?.adapters.filter(isInstLora) || []).sort((a, b) => Number(b.source?.catalogId === 'instrumental') - Number(a.source?.catalogId === 'instrumental'));
-    const gguf = /^yue2-(q4|q8|bf16)$/.test(draft.modelId);
+    // every installed instrumental LoRA is applied (several copies/versions can be compared by their strengths or removed with the X)
+    const inst = list?.adapters.filter(isInstLora) || [];
+    // every model except the original Python one (which makes instrumentals by itself); LoRA songs are made by yue-server whatever the model is
+    const gguf = draft.modelId !== 'yue2-original';
     setDraft(previous => {
       const rest = (previous.adapters || []).filter(entry => !inst.some(item => item.name === entry.name));
       if (!on) return { ...previous, instrumental: false, adapters: rest };
       if (!gguf || !inst.length) return { ...previous, instrumental: true };
-      return { ...previous, instrumental: true, adapters: [...rest, { name: inst[0].name, arScale: DEFAULT_ADAPTER_SCALE, narScale: DEFAULT_ADAPTER_SCALE }] };
+      return { ...previous, instrumental: true, adapters: [...rest, ...inst.map(item => ({ name: item.name, arScale: DEFAULT_ADAPTER_SCALE, narScale: DEFAULT_ADAPTER_SCALE }))] };
     });
     if (on && gguf && !inst.length) notify('연주곡(Instrumental) LoRA가 없어 기존 방식으로 만듭니다. LoRA 선택 > Preset에서 "연주곡"을 받으면 자동으로 적용됩니다.');
   }
