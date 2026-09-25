@@ -2067,7 +2067,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         return send(200, { adapters: await listAdapters(paths.adapters), engineReady: missing.length === 0, missing });
       }
       if (req.method === 'GET' && pathname === '/api/adapters/hub/search') {
-        try { return send(200, { results: await searchHub({ fetchImpl, query: requestUrl.searchParams.get('q') || '' }) }); }
+        try { return send(200, { results: await searchHub({ fetchImpl, query: requestUrl.searchParams.get('q') || '', force: requestUrl.searchParams.get('refresh') === '1' }) }); }
         catch (error) { throw fail(502, error.message); }
       }
       if (req.method === 'GET' && pathname === '/api/adapters/hub/detail') {

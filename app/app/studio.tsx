@@ -3671,9 +3671,20 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
   const reloadCatalog = () => api<{ entries: CatalogEntry[] }>('/adapters/catalog').then(result => setCatalog(result.entries)).catch(error => notify((error as Error).message, true));
   useEffect(() => { void reload(); void reloadCatalog(); void loadHub(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (tab === 'catalog') void reloadCatalog(); }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
-  async function loadHub() {
+  // refresh = true: ask Hugging Face again (skipping the server's 10-minute memory) and report what is new since the list on screen
+  const [newRepoIds, setNewRepoIds] = useState<string[]>([]);
+  async function loadHub(refresh = false) {
     setHubLoading(true); setHubError('');
-    try { setHub((await api<{ results: HubRepo[] }>('/adapters/hub/search')).results); }
+    try {
+      const results = (await api<{ results: HubRepo[] }>(`/adapters/hub/search${refresh ? '?refresh=1' : ''}`)).results;
+      if (refresh) {
+        const known = new Set((hub || []).map(item => item.id));
+        const fresh = hub ? results.filter(item => !known.has(item.id)) : [];
+        setNewRepoIds(fresh.map(item => item.id));
+        notify(fresh.length ? `새로 올라온 LoRA ${fresh.length}개를 찾았습니다: ${fresh.slice(0, 3).map(item => item.title).join(', ')}${fresh.length > 3 ? ' 외' : ''}` : `최신 목록으로 다시 불러왔습니다. 새로 올라온 LoRA는 없습니다. (총 ${results.length}개)`);
+      }
+      setHub(results);
+    }
     catch (error) { setHubError((error as Error).message); }
     finally { setHubLoading(false); }
   }
@@ -3823,9 +3834,10 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
       <div className="adapter-filters">
         <Input value={queryText} placeholder="이름, 장르, 언어로 찾기 또는 허깅페이스 주소 붙여넣기" aria-label="LoRA 검색" onChange={event => setQueryText(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') runSearch(); }}/>
         <Button className="adapter-find-btn" onClick={runSearch}><Search size={15}/>찾기</Button>
+        <Button variant="outline" className="adapter-find-btn adapter-refresh-btn" disabled={hubLoading} title="허깅페이스를 다시 확인해서 새로 올라온 LoRA를 가져옵니다" onClick={() => void loadHub(true)}><RefreshCw size={15} className={hubLoading ? 'spin' : ''}/>새로고침</Button>
       </div>
       {categories.length > 0 && <div className="adapter-chiprow"><span>분류</span><button className={!category ? 'active' : ''} onClick={() => setCategory('')}>전체</button>{categories.map(label => <button key={label} className={category === label ? 'active' : ''} onClick={() => setCategory(category === label ? '' : label)}>{label}</button>)}</div>}
-      <div className="adapter-chiprow">{languages.length > 0 && <><span>언어</span><button className={!language ? 'active' : ''} onClick={() => setLanguage('')}>전체</button>{languages.map(label => <button key={label} className={language === label ? 'active' : ''} onClick={() => setLanguage(language === label ? '' : label)}>{label}</button>)}</>}<span className="adapter-sortbar" role="group" aria-label="정렬과 새로고침"><button type="button" aria-label="새로고침" title="새로고침" disabled={hubLoading} onClick={() => void loadHub()}><RefreshCw size={15} className={hubLoading ? 'spin' : ''}/></button><i className="adapter-sortbar-sep" aria-hidden="true"/><button type="button" className={sort === 'az' ? 'active' : ''} aria-label="이름 A→Z" aria-pressed={sort === 'az'} title="이름 A→Z" onClick={() => setSort('az')}><ArrowDownAZ size={15}/></button><button type="button" className={sort === 'za' ? 'active' : ''} aria-label="이름 Z→A" aria-pressed={sort === 'za'} title="이름 Z→A" onClick={() => setSort('za')}><ArrowDownZA size={15}/></button><button type="button" className={sort === 'likes' ? 'active' : ''} aria-label="좋아요 순" aria-pressed={sort === 'likes'} title="좋아요 순" onClick={() => setSort('likes')}><Heart size={15}/></button><button type="button" className={sort === 'updated' ? 'active' : ''} aria-label="최신 순" aria-pressed={sort === 'updated'} title="최신 순" onClick={() => setSort('updated')}><Clock size={15}/></button><button type="button" className={sort === 'samples' ? 'active' : ''} aria-label="샘플 많은 순" aria-pressed={sort === 'samples'} title="샘플 많은 순" onClick={() => setSort('samples')}><Headphones size={15}/></button></span></div>
+      <div className="adapter-chiprow">{languages.length > 0 && <><span>언어</span><button className={!language ? 'active' : ''} onClick={() => setLanguage('')}>전체</button>{languages.map(label => <button key={label} className={language === label ? 'active' : ''} onClick={() => setLanguage(language === label ? '' : label)}>{label}</button>)}</>}<span className="adapter-sortbar" role="group" aria-label="정렬과 새로고침"><button type="button" aria-label="새로고침" title="새로고침" disabled={hubLoading} onClick={() => void loadHub(true)}><RefreshCw size={15} className={hubLoading ? 'spin' : ''}/></button><i className="adapter-sortbar-sep" aria-hidden="true"/><button type="button" className={sort === 'az' ? 'active' : ''} aria-label="이름 A→Z" aria-pressed={sort === 'az'} title="이름 A→Z" onClick={() => setSort('az')}><ArrowDownAZ size={15}/></button><button type="button" className={sort === 'za' ? 'active' : ''} aria-label="이름 Z→A" aria-pressed={sort === 'za'} title="이름 Z→A" onClick={() => setSort('za')}><ArrowDownZA size={15}/></button><button type="button" className={sort === 'likes' ? 'active' : ''} aria-label="좋아요 순" aria-pressed={sort === 'likes'} title="좋아요 순" onClick={() => setSort('likes')}><Heart size={15}/></button><button type="button" className={sort === 'updated' ? 'active' : ''} aria-label="최신 순" aria-pressed={sort === 'updated'} title="최신 순" onClick={() => setSort('updated')}><Clock size={15}/></button><button type="button" className={sort === 'samples' ? 'active' : ''} aria-label="샘플 많은 순" aria-pressed={sort === 'samples'} title="샘플 많은 순" onClick={() => setSort('samples')}><Headphones size={15}/></button></span></div>
       {hubLoading && <p className="field-hint"><LoaderCircle className="spin" size={14}/> 허깅페이스에서 목록을 읽는 중…</p>}
       {hubError && <p className="field-hint warning">{hubError}</p>}
       <div className="adapter-grid catalog">{shown.map(item => {
@@ -3834,7 +3846,7 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
         // (or only one of its many files was installed from elsewhere) is just marked with how many files were received
         const installed = repoInstalled(item);
         return <article key={item.id} className={`adapter-card catalog hub-card${installed ? ' installed' : ''}`} onClick={() => void openDetail(item.id)}>
-          <div className="adapter-card-head"><strong>{item.title}</strong><span className="adapter-card-tools"><span className="adapter-badge" title={`허깅페이스에서 이 저장소에 눌린 좋아요 ${item.likes}개`}>♥ {item.likes}</span>
+          <div className="adapter-card-head"><strong>{item.title}{newRepoIds.includes(item.id) && <span className="adapter-badge new" title="방금 새로고침으로 찾은 LoRA">NEW</span>}</strong><span className="adapter-card-tools"><span className="adapter-badge" title={`허깅페이스에서 이 저장소에 눌린 좋아요 ${item.likes}개`}>♥ {item.likes}</span>
             {installed
               ? (deleting === item.id
                 ? <button type="button" className="adapter-icon-btn danger confirm" aria-label={`${item.title} 삭제 확인`} onClick={event => { event.stopPropagation(); void removeRepo(item); }}><Trash2 size={14}/>삭제?</button>

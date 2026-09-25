@@ -206,7 +206,9 @@ async function hfJson(fetchImpl, url) {
   return response.json();
 }
 
-export async function searchHub({ fetchImpl = fetch, query = '' } = {}) {
+// force: forget the 10-minute cache and ask Hugging Face again (the "새로고침" button)
+export async function searchHub({ fetchImpl = fetch, query = '', force = false } = {}) {
+  if (force) cache.clear();
   const models = await cached('search', 10 * 60 * 1000, async () => {
     const found = new Map();
     const queries = [
@@ -215,6 +217,11 @@ export async function searchHub({ fetchImpl = fetch, query = '' } = {}) {
     ];
     for (const query of queries) {
       const list = await hfJson(fetchImpl, `${HF}/api/models?${query}&full=true&limit=100&sort=likes&direction=-1`).catch(() => []);
+      for (const model of list) if (model?.id && !found.has(model.id)) found.set(model.id, model);
+    }
+    // the newest repos (a new LoRA has no likes yet, so it can be missing from the most-liked lists above)
+    for (const term of ['yue2', 'yue2 lora']) {
+      const list = await hfJson(fetchImpl, `${HF}/api/models?search=${encodeURIComponent(term)}&full=true&limit=50&sort=createdAt&direction=-1`).catch(() => []);
       for (const model of list) if (model?.id && !found.has(model.id)) found.set(model.id, model);
     }
     if (!found.size) throw new Error('허깅페이스에서 LoRA 목록을 가져오지 못했습니다. 인터넷 연결을 확인해 주세요.');

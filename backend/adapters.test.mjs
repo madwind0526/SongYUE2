@@ -6,7 +6,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { createStudioServer } from './server.mjs';
 import { yuePrecisionFor, yueServerPaths } from './yueserver.mjs';
-import { isYueAdapterRepo, classifyRepo, listUnits, groupUnits, summarizeReadme, installCatalogEntry, installHubUnits, importLocalFiles, loadCatalog, catalogSummary, clearHubCache } from './adapters.mjs';
+import { searchHub, isYueAdapterRepo, classifyRepo, listUnits, groupUnits, summarizeReadme, installCatalogEntry, installHubUnits, importLocalFiles, loadCatalog, catalogSummary, clearHubCache } from './adapters.mjs';
 import { extractAudioPart, normalizeAdapterSelection, toEngineAdapters, listAdapters, synthesize } from './yueserver.mjs';
 
 const repoModel = (extra) => ({ id: 'someone/yue2-rock-lora', likes: 4, tags: ['lora', 'yue2', 'rock', 'en', 'base_model:m-a-p/YuE2-3B', 'license:cc-by-nc-4.0'], cardData: { language: ['en'] },
@@ -284,4 +284,28 @@ test('the app model picks the yue-server precision: original / BF16 -> BF16 back
   assert.deepEqual(['yue2-original', 'yue2-bf16', 'yue2-q8', 'yue2-q4', 'comfy-int8'].map(yuePrecisionFor), ['bf16', 'bf16', 'q8', 'q8', 'q8']);
   assert.match(yueServerPaths('/r', 'bf16').model, /YuE2-3B-BF16\.gguf$/);
   assert.match(yueServerPaths('/r').model, /YuE2-3B-Q8_0\.gguf$/);
+});
+
+test('Hugging Face search: cached for 10 minutes, "refresh" asks again and also lists the newest repos', async () => {
+  clearHubCache();
+  const urls = [];
+  let extra = false;
+  const fetchImpl = async (url) => {
+    const target = String(url);
+    urls.push(target);
+    const list = [repoModel()];
+    if (extra && target.includes('sort=createdAt')) list.push({ ...repoModel(), id: 'someone/yue2-brand-new-lora' });
+    return Response.json(list);
+  };
+  const first = await searchHub({ fetchImpl });
+  const callsAfterFirst = urls.length;
+  assert.ok(urls.some((url) => url.includes('sort=createdAt')), 'the newest repos are requested as well');
+  await searchHub({ fetchImpl });
+  assert.equal(urls.length, callsAfterFirst, 'the second search comes from the cache');
+  extra = true;
+  const refreshed = await searchHub({ fetchImpl, force: true });
+  assert.ok(urls.length > callsAfterFirst, 'refresh asks Hugging Face again');
+  assert.ok(refreshed.some((item) => item.id === 'someone/yue2-brand-new-lora'));
+  assert.ok(!first.some((item) => item.id === 'someone/yue2-brand-new-lora'));
+  clearHubCache();
 });

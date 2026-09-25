@@ -190,3 +190,6 @@ button.adapter-card, label.adapter-card { cursor: pointer; }
 .adapter-pick-footer span { margin-right: auto; color: #cfe0c8; font-size: 13px; }
 /* picking mode: the card fills the wrapper, so every card in a row has the same size */
 .adapter-pickwrap > .adapter-card { flex: 1; height: auto; }
+
+.adapter-refresh-btn { margin-left: 6px; }
+.adapter-badge.new { margin-left: 8px; background: #e6c84f; color: #1a1d10; border-color: #e6c84f; font-weight: 700; }
