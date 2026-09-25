@@ -118,3 +118,7 @@
 .pp-comp-presetbar{flex:none;width:148px;padding-left:0}
 /* the legend (FxSound / 리버브/에코 / Compressor) is centred in the panel */
 .pp-fx-panel:not(.pp-extra-panel) .pp-fx-header{justify-content:center}.pp-fx-panel:not(.pp-extra-panel) .pp-fx-legend{justify-content:center;margin:0 auto}
+/* FX · 리버브 preset controls centred above the 3x3 knobs */
+.pp-fx-presets{justify-content:center}.pp-fx-presets .pp-preset-select{flex:none;width:150px}
+/* Compressor preset controls centred above the compressor knobs */
+.pp-comp-presetbar{justify-content:center}.pp-comp-presetbar .pp-preset-select{flex:none;width:96px}
