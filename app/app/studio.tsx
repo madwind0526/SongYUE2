@@ -178,8 +178,8 @@ type PostProcessParams = { eq: number[]; masterVolume: number; eqEnabled: boolea
   // Compressor: the same five values as Studio's audio editor (threshold dB, knee dB, ratio :1, attack s, release s); ratio 1:1 = no compression
   compOn: boolean; compThreshold: number; compKnee: number; compRatio: number; compAttack: number; compRelease: number }; // speed: 0.1 .. 5.0, 1.0 = unchanged
 const PP_EXTRA_DEFAULTS = { volumeOn: false, gainDb: 0, normalizeDb: -1, limiterDb: -1, silenceOn: false, silenceDb: -50, fadeOn: false, fadeInSec: 0, fadeOutSec: 0, playOn: false, speed: 1, reverseOn: false };
-const PP_COMP_DEFAULTS = { compOn: true, compThreshold: -24, compKnee: 30, compRatio: 1, compAttack: 0.003, compRelease: 0.25 };
-const PP_DEFAULT_PARAMS: PostProcessParams = { eq: Array(10).fill(0), masterVolume: 100, eqEnabled: true, fxEnabled: true, reverbEchoEnabled: true, clarity: 0, spaciousness: 0, surround: 0, dynamicBoost: 0, bassBoost: 0, reverbAmount: 0, reverbLength: 50, echoAmount: 0, echoDelayMs: 300, ...PP_EXTRA_DEFAULTS, ...PP_COMP_DEFAULTS };
+const PP_COMP_DEFAULTS = { compOn: false, compThreshold: -24, compKnee: 30, compRatio: 1, compAttack: 0.003, compRelease: 0.25 };
+const PP_DEFAULT_PARAMS: PostProcessParams = { eq: Array(10).fill(0), masterVolume: 100, eqEnabled: false, fxEnabled: false, reverbEchoEnabled: false, clarity: 0, spaciousness: 0, surround: 0, dynamicBoost: 0, bassBoost: 0, reverbAmount: 0, reverbLength: 50, echoAmount: 0, echoDelayMs: 300, ...PP_EXTRA_DEFAULTS, ...PP_COMP_DEFAULTS };
 // Compressor: the five values of Studio's audio editor (threshold dB, knee dB, ratio :1, attack s, release s) and its presets
 // ("Classic", "Light", "Dashed Distortion", "Chaotic Distortion"), played by the browser's compressor node like Studio does.
 type CompressorValues = { threshold: number; knee: number; ratio: number; attack: number; release: number };
@@ -963,12 +963,12 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
       return next;
     });
   }
-  function applyEqPreset(name: string) {
+  function applyEqPreset(name: string, enable = true) {
     setEqPreset(name);
     const preset = PP_EQ_PRESETS[name] || customPresets[name];
     if (!preset) return;
     setParams(previous => {
-      const next = { ...previous, eq: preset.slice() };
+      const next = { ...previous, eq: preset.slice(), ...(enable ? { eqEnabled: true } : {}) };
       scheduleRender(next);
       return next;
     });
@@ -991,7 +991,7 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
       applyEqPreset('평탄');
     } catch (error) { notify((error as Error).message, true); }
   }
-  function resetEq() { applyEqPreset('평탄'); }
+  function resetEq() { applyEqPreset('평탄', false); }
   function resetFx() {
     setParams(previous => {
       const next = { ...previous, clarity: 0, spaciousness: 0, surround: 0, dynamicBoost: 0, bassBoost: 0 };
@@ -1005,7 +1005,7 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
     setEffectPreset(name);
     const preset = FX_PRESETS[name] || effectPresets[name];
     if (!preset) return;
-    setParams(previous => { const next = { ...previous, ...preset }; scheduleRender(next); return next; });
+    setParams(previous => { const next = { ...previous, ...preset, fxEnabled: true, reverbEchoEnabled: true }; scheduleRender(next); return next; });
   }
   async function saveEffectPreset() {
     const name = window.prompt('저장할 FX · 리버브 프리셋 이름을 입력하세요', effectPreset)?.trim();
@@ -1044,7 +1044,7 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
     setCompPreset(name);
     const preset = COMPRESSOR_PRESETS[name] || customCompPresets[name];
     if (!preset) return;
-    setParams(previous => { const next = { ...previous, compThreshold: preset.threshold, compKnee: preset.knee, compRatio: preset.ratio, compAttack: preset.attack, compRelease: preset.release }; scheduleRender(next); return next; });
+    setParams(previous => { const next = { ...previous, compThreshold: preset.threshold, compKnee: preset.knee, compRatio: preset.ratio, compAttack: preset.attack, compRelease: preset.release, compOn: true }; scheduleRender(next); return next; });
   }
   async function saveCompPreset() {
     const name = window.prompt('저장할 컴프레서 프리셋 이름을 입력하세요', compPreset in COMPRESSOR_PRESETS ? '' : compPreset)?.trim();
