@@ -2415,15 +2415,14 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         return send(200, presets.filter(Boolean).sort((a, b) => a.name.localeCompare(b.name)));
       }
       if (req.method === 'POST' && pathname === '/api/effect-presets') {
-        // EQ + FX Sound + reverb / echo only (the compressor and the volume / time groups have their own settings)
+        // FX Sound + reverb / echo only (the EQ, the compressor and the volume / time groups have their own settings)
         const input = await body(req, 16 * 1024);
         const name = text(input.name, 120).trim();
         if (!name) throw fail(400, '프리셋 이름이 필요합니다.');
         const source = input.params && typeof input.params === 'object' ? input.params : {};
-        const numbers = ['masterVolume', 'clarity', 'spaciousness', 'surround', 'dynamicBoost', 'bassBoost', 'reverbAmount', 'reverbLength', 'echoAmount', 'echoDelayMs'];
-        const flags = ['eqEnabled', 'fxEnabled', 'reverbEchoEnabled'];
-        if (!Array.isArray(source.eq) || source.eq.length !== 10 || !source.eq.every((value) => typeof value === 'number' && Number.isFinite(value))) throw fail(400, 'EQ 값이 올바르지 않습니다.');
-        const params = { eq: source.eq };
+        const numbers = ['clarity', 'spaciousness', 'surround', 'dynamicBoost', 'bassBoost', 'reverbAmount', 'reverbLength', 'echoAmount', 'echoDelayMs'];
+        const flags = ['fxEnabled', 'reverbEchoEnabled'];
+        const params = {};
         for (const key of numbers) { if (!(typeof source[key] === 'number' && Number.isFinite(source[key]))) throw fail(400, `${key} 값이 올바르지 않습니다.`); params[key] = source[key]; }
         for (const key of flags) params[key] = source[key] !== false;
         const preset = { name, params };

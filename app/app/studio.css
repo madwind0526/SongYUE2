@@ -97,3 +97,5 @@
 .pp-comp-preset-btns{display:flex;gap:4px;flex-wrap:wrap;justify-content:center}
 .pp-settings-sep{width:1px;height:18px;background:#3b453b;margin:0 4px}
 .pp-settings-io{flex-wrap:wrap}
+
+.pp-fx-panel:not(.pp-extra-panel) .pp-fx-header{display:flex;align-items:center;justify-content:space-between;gap:8px}

@@ -195,9 +195,9 @@ async function loadCompressorPresets(): Promise<Record<string, CompressorValues>
   } catch { return {}; }
 }
 
-// "EQ · FX · 리버브" preset: only the EQ, FX Sound and reverb / echo values (the compressor and the volume / time groups have their own settings)
-type EffectValues = Pick<PostProcessParams, 'eq' | 'masterVolume' | 'eqEnabled' | 'fxEnabled' | 'reverbEchoEnabled' | 'clarity' | 'spaciousness' | 'surround' | 'dynamicBoost' | 'bassBoost' | 'reverbAmount' | 'reverbLength' | 'echoAmount' | 'echoDelayMs'>;
-const EFFECT_KEYS = ['eq', 'masterVolume', 'eqEnabled', 'fxEnabled', 'reverbEchoEnabled', 'clarity', 'spaciousness', 'surround', 'dynamicBoost', 'bassBoost', 'reverbAmount', 'reverbLength', 'echoAmount', 'echoDelayMs'] as const;
+// "FX · 리버브" preset: only the FX Sound and reverb / echo values (the EQ, the compressor and the volume / time groups have their own settings)
+type EffectValues = Pick<PostProcessParams, 'fxEnabled' | 'reverbEchoEnabled' | 'clarity' | 'spaciousness' | 'surround' | 'dynamicBoost' | 'bassBoost' | 'reverbAmount' | 'reverbLength' | 'echoAmount' | 'echoDelayMs'>;
+const EFFECT_KEYS = ['fxEnabled', 'reverbEchoEnabled', 'clarity', 'spaciousness', 'surround', 'dynamicBoost', 'bassBoost', 'reverbAmount', 'reverbLength', 'echoAmount', 'echoDelayMs'] as const;
 const pickEffectValues = (params: PostProcessParams): EffectValues => Object.fromEntries(EFFECT_KEYS.map(key => [key, params[key]])) as EffectValues;
 async function loadEffectPresets(): Promise<Record<string, EffectValues>> {
   try {
@@ -975,11 +975,9 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
     const preset = effectPresets[name];
     if (!preset) return;
     setParams(previous => { const next = { ...previous, ...preset }; scheduleRender(next); return next; });
-    const matched = Object.entries({ ...PP_EQ_PRESETS, ...customPresets }).find(([, values]) => values.every((value, index) => value === preset.eq[index]));
-    setEqPreset(matched ? matched[0] : PP_CUSTOM_PRESET);
   }
   async function saveEffectPreset() {
-    const name = window.prompt('저장할 EQ · FX · 리버브 프리셋 이름을 입력하세요', effectPreset)?.trim();
+    const name = window.prompt('저장할 FX · 리버브 프리셋 이름을 입력하세요', effectPreset)?.trim();
     if (!name) return;
     try {
       const saved = await api<{ name: string; params: EffectValues }>('/effect-presets', 'POST', { name, params: pickEffectValues(params) });
@@ -1245,13 +1243,6 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
       <div className="pp-description-row">
         <DialogDescription>{onSaveOverride ? `"${titleOverride}"에 EQ와 효과를 적용합니다. "저장"을 누르면 이 창을 닫고 처리한 소리가 반영됩니다(원본은 바뀌지 않습니다).` : `"${project.title}"의 사본에 EQ와 효과를 적용한 뒤 원하는 위치에 저장하세요. 원본 파일은 바뀌지 않습니다.`}</DialogDescription>
         <div className="pp-settings-io">
-          <select className="pp-preset-select" value={effectPreset} onChange={event => applyEffectPreset(event.target.value)} aria-label="EQ · FX · 리버브 프리셋">
-            <option value="">EQ · FX · 리버브 프리셋</option>
-            {Object.keys(effectPresets).map(name => <option key={name} value={name}>{name}</option>)}
-          </select>
-          <button type="button" className="pp-preset-btn" title="현재 EQ · FX Sound · 리버브/에코 설정을 프리셋으로 저장" onClick={() => void saveEffectPreset()}><Save size={12}/></button>
-          {effectPresets[effectPreset] && <button type="button" className="pp-preset-btn" title={`"${effectPreset}" 프리셋 삭제`} onClick={() => void deleteEffectPreset(effectPreset)}><Trash2 size={12}/></button>}
-          <span className="pp-settings-sep" aria-hidden="true"/>
           <select className="pp-preset-select" value={postprocessPreset} onChange={event => applyPostprocessPreset(event.target.value)} aria-label="전체 설정 프리셋">
             <option value="">전체 설정 (Total)</option>
             {Object.keys(postprocessPresets).map(name => <option key={name} value={name}>{name}</option>)}
@@ -1311,6 +1302,14 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
                 <span><i className="pp-legend-dot pp-legend-fx"/>FxSound</span>
                 <span><i className="pp-legend-dot pp-legend-reverb"/>리버브/에코</span>
                 <span><i className="pp-legend-dot pp-legend-comp"/>Compressor</span>
+              </div>
+              <div className="pp-preset-controls">
+                <select className="pp-preset-select" value={effectPreset} onChange={event => applyEffectPreset(event.target.value)} aria-label="FX · 리버브 프리셋">
+                  <option value="">FX · 리버브 프리셋</option>
+                  {Object.keys(effectPresets).map(name => <option key={name} value={name}>{name}</option>)}
+                </select>
+                <button type="button" className="pp-preset-btn" title="현재 FX Sound · 리버브/에코 설정을 프리셋으로 저장" onClick={() => void saveEffectPreset()}><Save size={12}/></button>
+                {effectPresets[effectPreset] && <button type="button" className="pp-preset-btn" title={`"${effectPreset}" 프리셋 삭제`} onClick={() => void deleteEffectPreset(effectPreset)}><Trash2 size={12}/></button>}
               </div>
             </div>
             <div className="pp-fx-body">
