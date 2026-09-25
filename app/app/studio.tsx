@@ -3631,7 +3631,7 @@ function AudioPolishDialog({ audioDataUrl, onClose, onApply }: { audioDataUrl: s
   const row = (key: 'source' | 'output', label: string, buffer: AudioBuffer | null, processed: boolean, note: string) => <div className={t.rowClass(key, 'stem-row')}>
     <div className="audio-compare-toolbar">
       <button type="button" className="pp-waveform-label" aria-label={`${label} 재생/일시정지`} onClick={() => t.handleKeyClick(key)} disabled={!buffer}>{t.activeKey === key && t.isPlaying ? <Pause size={15}/> : <Play size={15}/>}</button>
-      <span className="stem-label audio-compare-label"><strong>{label}</strong><small>{note}</small></span>
+      <span className="stem-label audio-compare-label"><strong>{label}</strong>{note && <small>{note}</small>}</span>
       {buffer && <span className="pp-seek-time audio-compare-duration">{formatSeekTime(buffer.duration)}</span>}
     </div>
     <div className="audio-compare-charts"><CompareWaveform peaks={t.peaksForKey(key)} fraction={t.positionSeconds / (buffer?.duration || 1)} processed={processed}/></div>
@@ -3669,8 +3669,8 @@ function AudioPolishDialog({ audioDataUrl, onClose, onApply }: { audioDataUrl: s
       </div>
       {errorText && <p className="field-hint warning">{errorText}</p>}
       <div className="stem-list">
-        {row('source', '원본', sourceBuffer, false, '지금의 처리본')}
-        {row('output', '처리 후', outputBuffer, true, outputBuffer ? '노이즈 제거 · 보컬 자연화 등 적용' : '아직 처리하지 않았습니다')}
+        {row('source', '원본', sourceBuffer, false, '')}
+        {row('output', '처리 후', outputBuffer, true, '')}
       </div>
       {result?.report && <PolishReportPanel report={result.report}/>}
       {result && !result.report && <p className="field-hint">처리를 마쳤습니다.</p>}
