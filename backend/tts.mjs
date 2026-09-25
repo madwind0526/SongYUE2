@@ -86,7 +86,6 @@ export const ASR_FAMILIES = [
   {
     id: 'qwen3asr', label: 'Qwen3-ASR', cliFamily: 'qwen3_asr', languages: { ko: 'Korean', en: 'English', ja: 'Japanese', zh: 'Chinese' },
     variants: [
-      { mode: 'asr', size: '0.6B', files: { q8_0: asrFile('0.6B', 'q8_0', 1151), f16: asrFile('0.6B', 'f16', 1881) } },
       { mode: 'asr', size: '1.7B', files: { q8_0: asrFile('1.7B', 'q8_0', 2473), f16: asrFile('1.7B', 'f16', 4088) } },
     ],
   },

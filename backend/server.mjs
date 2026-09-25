@@ -1279,7 +1279,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const audioFile = path.join(path.dirname(entry.file), entry.project.audioPath);
     if (!(await exists(audioFile))) throw fail(404, '음원 파일을 찾을 수 없습니다.');
     let asrModel = null;
-    for (const size of ['1.7B', '0.6B']) for (const precision of ['q8_0', 'f16']) {
+    for (const size of ['1.7B']) for (const precision of ['q8_0', 'f16']) {
       const candidate = findTtsModel('qwen3asr', 'asr', size, precision);
       if (!asrModel && candidate && await isTtsModelInstalled(root, candidate)) asrModel = candidate;
     }
