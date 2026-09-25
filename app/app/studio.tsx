@@ -177,7 +177,7 @@ type PostProcessParams = { eq: number[]; masterVolume: number; eqEnabled: boolea
   playOn: boolean; speed: number; reverseOn: boolean;
   // Compressor: the same five values as Studio's audio editor (threshold dB, knee dB, ratio :1, attack s, release s); ratio 1:1 = no compression
   compOn: boolean; compThreshold: number; compKnee: number; compRatio: number; compAttack: number; compRelease: number }; // speed: 0.1 .. 5.0, 1.0 = unchanged
-const PP_EXTRA_DEFAULTS = { volumeOn: true, gainDb: 0, normalizeDb: -1, limiterDb: -1, silenceOn: true, silenceDb: -50, fadeOn: true, fadeInSec: 0, fadeOutSec: 0, playOn: true, speed: 1, reverseOn: false };
+const PP_EXTRA_DEFAULTS = { volumeOn: false, gainDb: 0, normalizeDb: -1, limiterDb: -1, silenceOn: false, silenceDb: -50, fadeOn: false, fadeInSec: 0, fadeOutSec: 0, playOn: false, speed: 1, reverseOn: false };
 const PP_COMP_DEFAULTS = { compOn: true, compThreshold: -24, compKnee: 30, compRatio: 1, compAttack: 0.003, compRelease: 0.25 };
 const PP_DEFAULT_PARAMS: PostProcessParams = { eq: Array(10).fill(0), masterVolume: 100, eqEnabled: true, fxEnabled: true, reverbEchoEnabled: true, clarity: 0, spaciousness: 0, surround: 0, dynamicBoost: 0, bassBoost: 0, reverbAmount: 0, reverbLength: 50, echoAmount: 0, echoDelayMs: 300, ...PP_EXTRA_DEFAULTS, ...PP_COMP_DEFAULTS };
 // Compressor: the five values of Studio's audio editor (threshold dB, knee dB, ratio :1, attack s, release s) and its presets
