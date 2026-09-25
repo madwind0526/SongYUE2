@@ -165,12 +165,15 @@ async function loadCustomEqPresets(): Promise<Record<string, number[]>> {
     return Object.fromEntries(list.map(preset => [preset.name, preset.eq]));
   } catch { return {}; }
 }
-type PostProcessParams = { eq: number[]; masterVolume: number; eqEnabled: boolean; fxEnabled: boolean; reverbEchoEnabled: boolean; clarity: number; spaciousness: number; surround: number; dynamicBoost: number; bassBoost: number; reverbAmount: number; reverbLength: number; echoAmount: number; echoDelayMs: number };
-const PP_DEFAULT_PARAMS: PostProcessParams = { eq: Array(10).fill(0), masterVolume: 100, eqEnabled: true, fxEnabled: true, reverbEchoEnabled: true, clarity: 0, spaciousness: 0, surround: 0, dynamicBoost: 0, bassBoost: 0, reverbAmount: 0, reverbLength: 50, echoAmount: 0, echoDelayMs: 300 };
+type PostProcessParams = { eq: number[]; masterVolume: number; eqEnabled: boolean; fxEnabled: boolean; reverbEchoEnabled: boolean; clarity: number; spaciousness: number; surround: number; dynamicBoost: number; bassBoost: number; reverbAmount: number; reverbLength: number; echoAmount: number; echoDelayMs: number;
+  // "음량 · 시간" (all off by default): gain, peak normalize, limiter, fades, silence removal -- applied to the rendered sound after the effect chain
+  extraEnabled: boolean; gainDb: number; normalizeOn: boolean; normalizeDb: number; limiterOn: boolean; limiterDb: number; fadeInSec: number; fadeOutSec: number; trimSilenceOn: boolean; silenceDb: number };
+const PP_EXTRA_DEFAULTS = { extraEnabled: true, gainDb: 0, normalizeOn: false, normalizeDb: -1, limiterOn: false, limiterDb: -1, fadeInSec: 0, fadeOutSec: 0, trimSilenceOn: false, silenceDb: -50 };
+const PP_DEFAULT_PARAMS: PostProcessParams = { eq: Array(10).fill(0), masterVolume: 100, eqEnabled: true, fxEnabled: true, reverbEchoEnabled: true, clarity: 0, spaciousness: 0, surround: 0, dynamicBoost: 0, bassBoost: 0, reverbAmount: 0, reverbLength: 50, echoAmount: 0, echoDelayMs: 300, ...PP_EXTRA_DEFAULTS };
 async function loadPostprocessPresets(): Promise<Record<string, PostProcessParams>> {
   try {
     const list = await api<{ name: string; params: PostProcessParams }[]>('/postprocess-settings');
-    return Object.fromEntries(list.map(preset => [preset.name, preset.params]));
+    return Object.fromEntries(list.map(preset => [preset.name, { ...PP_EXTRA_DEFAULTS, ...preset.params }]));
   } catch { return {}; }
 }
 
@@ -260,6 +263,78 @@ function buildProcessingGraph(ctx: BaseAudioContext, source: AudioNode, params: 
   reverbWet.connect(master);
   echoWet.connect(master);
   return master;
+}
+
+// "음량 · 시간" stage on the rendered sound: silence removal -> gain -> peak normalize -> limiter -> fades.
+// Returns the buffer itself when nothing is switched on, so the original processing path is untouched.
+function finishBuffer(input: AudioBuffer, p: PostProcessParams): AudioBuffer {
+  const active = p.extraEnabled && (p.gainDb !== 0 || p.normalizeOn || p.limiterOn || p.fadeInSec > 0 || p.fadeOutSec > 0 || p.trimSilenceOn);
+  if (!active) return input;
+  const rate = input.sampleRate;
+  const channels = input.numberOfChannels;
+  let data = Array.from({ length: channels }, (_, ch) => input.getChannelData(ch).slice());
+  let length = input.length;
+  const dbToLin = (db: number) => Math.pow(10, db / 20);
+  if (p.trimSilenceOn) {
+    // keep everything that is louder than the threshold, plus a short tail; runs of silence longer than 0.3 s are shortened to 0.15 s
+    const threshold = dbToLin(p.silenceDb);
+    const win = Math.max(1, Math.round(rate * 0.02));
+    const loud: boolean[] = [];
+    for (let start = 0; start < length; start += win) {
+      let peak = 0;
+      for (let ch = 0; ch < channels; ch++) for (let i = start; i < Math.min(length, start + win); i++) peak = Math.max(peak, Math.abs(data[ch][i]));
+      loud.push(peak >= threshold);
+    }
+    const first = loud.indexOf(true);
+    if (first >= 0) {
+      const last = loud.lastIndexOf(true);
+      const tail = Math.round(0.1 * rate / win);
+      const maxQuiet = Math.round(0.3 * rate / win);
+      const keepQuiet = Math.round(0.15 * rate / win);
+      const out: number[] = [];
+      let quiet: number[] = [];
+      for (let w = first; w <= last; w++) {
+        if (loud[w]) { out.push(...(quiet.length > maxQuiet ? quiet.slice(0, keepQuiet) : quiet), w); quiet = []; } else quiet.push(w);
+      }
+      for (let w = last + 1; w <= Math.min(loud.length - 1, last + tail); w++) out.push(w);
+      const total = out.length * win;
+      data = data.map(channel => { const next = new Float32Array(total); out.forEach((w, index) => next.set(channel.subarray(w * win, Math.min(channel.length, (w + 1) * win)), index * win)); return next; });
+      length = total;
+    }
+  }
+  if (p.gainDb !== 0) { const g = dbToLin(p.gainDb); for (const channel of data) for (let i = 0; i < length; i++) channel[i] *= g; }
+  if (p.normalizeOn) {
+    let peak = 0;
+    for (const channel of data) for (let i = 0; i < length; i++) peak = Math.max(peak, Math.abs(channel[i]));
+    if (peak > 1e-6) { const g = dbToLin(p.normalizeDb) / peak; for (const channel of data) for (let i = 0; i < length; i++) channel[i] *= g; }
+  }
+  if (p.limiterOn) {
+    // look-ahead peak limiter: the gain needed at every sample is spread 5 ms ahead and released over 80 ms, so peaks are turned down smoothly, not clipped
+    const ceiling = dbToLin(p.limiterDb);
+    const look = Math.max(1, Math.round(rate * 0.005));
+    const need = new Float32Array(length).fill(1);
+    for (let i = 0; i < length; i++) { let peak = 0; for (const channel of data) peak = Math.max(peak, Math.abs(channel[i])); if (peak > ceiling) need[i] = ceiling / peak; }
+    const gain = new Float32Array(length).fill(1);
+    // running minimum over the look-ahead window (monotone deque)
+    const deque: number[] = [];
+    for (let i = length - 1; i >= 0; i--) {
+      while (deque.length && need[deque[deque.length - 1]] >= need[i]) deque.pop();
+      deque.push(i);
+      while (deque.length && deque[0] > i + look) deque.shift();
+      gain[i] = need[deque[0]];
+    }
+    const release = Math.exp(-1 / (rate * 0.08));
+    let smoothed = 1;
+    for (let i = 0; i < length; i++) {
+      smoothed = gain[i] < smoothed ? gain[i] : smoothed * release + gain[i] * (1 - release);
+      for (const channel of data) channel[i] *= smoothed;
+    }
+  }
+  if (p.fadeInSec > 0) { const n = Math.min(length, Math.round(p.fadeInSec * rate)); for (const channel of data) for (let i = 0; i < n; i++) channel[i] *= i / n; }
+  if (p.fadeOutSec > 0) { const n = Math.min(length, Math.round(p.fadeOutSec * rate)); for (const channel of data) for (let i = 0; i < n; i++) channel[length - 1 - i] *= i / n; }
+  const output = new AudioBuffer({ length: Math.max(1, length), numberOfChannels: channels, sampleRate: rate });
+  data.forEach((channel, ch) => output.copyToChannel(length ? channel : new Float32Array(1), ch));
+  return output;
 }
 
 function audioBufferToWavBlob(buffer: AudioBuffer): Blob {
@@ -502,6 +577,7 @@ function CompareSpectrogram({ buffer, fraction }: { buffer: AudioBuffer | null; 
 }
 
 function snapTo5(value: number): number { return Math.round(value / 5) * 5; }
+const snapToStep = (value: number, step: number) => Math.round(value / step) * step;
 
 function EqBar({ label, value, onChange }: { label: string; value: number; onChange: (next: number) => void }) {
   const dragRef = useRef<{ startY: number; startValue: number } | null>(null);
@@ -526,7 +602,7 @@ function EqBar({ label, value, onChange }: { label: string; value: number; onCha
   </div>;
 }
 
-function Knob({ label, value, min, max, onChange, variant }: { label: string; value: number; min: number; max: number; onChange: (next: number) => void; variant?: 'fx' | 'reverb' }) {
+function Knob({ label, value, min, max, onChange, variant, step = 5 }: { label: string; value: number; min: number; max: number; onChange: (next: number) => void; variant?: 'fx' | 'reverb'; step?: number }) {
   const dragRef = useRef<{ startY: number; startValue: number } | null>(null);
   const pct = (value - min) / (max - min);
   const angle = -135 + pct * 270;
@@ -538,14 +614,14 @@ function Knob({ label, value, min, max, onChange, variant }: { label: string; va
     if (!dragRef.current) return;
     const delta = dragRef.current.startY - event.clientY;
     const next = dragRef.current.startValue + (delta / 150) * (max - min);
-    onChange(snapTo5(Math.max(min, Math.min(max, next))));
+    onChange(snapToStep(Math.max(min, Math.min(max, next)), step));
   }
   return <div className={variant ? `knob knob-${variant}` : 'knob'}>
     <div className="knob-dial" style={{ '--pct': pct } as React.CSSProperties} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={() => { dragRef.current = null; }}>
       <div className="knob-pointer" style={{ transform: `rotate(${angle}deg)` }}/>
     </div>
     <span className="knob-label">{label}</span>
-    <input type="number" className="knob-value" value={value} min={min} max={max} step={5} onChange={event => onChange(Math.max(min, Math.min(max, Number(event.target.value) || 0)))} onBlur={event => onChange(snapTo5(Math.max(min, Math.min(max, Number(event.target.value) || 0))))}/>
+    <input type="number" className="knob-value" value={value} min={min} max={max} step={step} onChange={event => onChange(Math.max(min, Math.min(max, Number(event.target.value) || 0)))} onBlur={event => onChange(snapToStep(Math.max(min, Math.min(max, Number(event.target.value) || 0)), step))}/>
   </div>;
 }
 
@@ -708,7 +784,7 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
       const output = buildProcessingGraph(offlineCtx, source, currentParams);
       output.connect(offlineCtx.destination);
       source.start();
-      const rendered = await offlineCtx.startRendering();
+      const rendered = finishBuffer(await offlineCtx.startRendering(), currentParams);
       processedRef.current = rendered;
       setProcessedPeaks(computeWaveformPeaks(rendered, 300));
     } catch { setErrorText('오디오 처리 중 오류가 발생했습니다.'); }
@@ -807,6 +883,13 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
       return next;
     });
   }
+  function resetExtras() {
+    setParams(previous => {
+      const next = { ...previous, ...PP_EXTRA_DEFAULTS };
+      scheduleRender(next);
+      return next;
+    });
+  }
   function resetReverbEcho() {
     setParams(previous => {
       const next = { ...previous, reverbAmount: 0, reverbLength: 0, echoAmount: 0, echoDelayMs: 40 };
@@ -834,8 +917,9 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
     setPostprocessPreset(name);
     const preset = postprocessPresets[name];
     if (!preset) return;
-    setParams(preset);
-    scheduleRender(preset);
+    const full = { ...PP_EXTRA_DEFAULTS, ...preset };
+    setParams(full);
+    scheduleRender(full);
     const matched = Object.entries({ ...PP_EQ_PRESETS, ...customPresets }).find(([, values]) => values.every((value, index) => value === preset.eq[index]));
     setEqPreset(matched ? matched[0] : PP_CUSTOM_PRESET);
   }
@@ -1075,6 +1159,28 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
               <Knob label="에코 양" value={params.echoAmount} min={0} max={100} onChange={value => updateParam('echoAmount', value)} variant="reverb"/>
               <Knob label="에코 지연 (ms)" value={params.echoDelayMs} min={40} max={600} onChange={value => updateParam('echoDelayMs', value)} variant="reverb"/>
             </div>
+          </div>
+        </div>
+        <div className="pp-fx-panel pp-extra-panel">
+          <div className="pp-fx-header">
+            <span className="pp-panel-title">음량 · 시간</span>
+            <div className="pp-extra-toggles">
+              <div className={params.normalizeOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" title="가장 큰 소리를 목표 dB에 맞춥니다" onClick={() => updateParam('normalizeOn', !params.normalizeOn)}><Power size={12}/>노멀라이즈</button></div>
+              <div className={params.limiterOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" title="상한을 넘는 소리를 부드럽게 눌러 찌그러짐을 막습니다" onClick={() => updateParam('limiterOn', !params.limiterOn)}><Power size={12}/>리미터</button></div>
+              <div className={params.trimSilenceOn ? 'pp-toggle-btn active' : 'pp-toggle-btn'}><button type="button" className="pp-toggle-power" title="앞뒤 무음을 자르고 0.3초 넘는 무음은 짧게 줄입니다" onClick={() => updateParam('trimSilenceOn', !params.trimSilenceOn)}><Power size={12}/>무음 제거</button></div>
+              <div className={params.extraEnabled ? 'pp-toggle-btn active' : 'pp-toggle-btn'}>
+                <button type="button" className="pp-toggle-reset" title="음량 · 시간 초기화" onClick={resetExtras}><RotateCcw size={12}/></button>
+                <button type="button" className="pp-toggle-power" onClick={() => updateParam('extraEnabled', !params.extraEnabled)}><Power size={12}/>음량 · 시간</button>
+              </div>
+            </div>
+          </div>
+          <div className="pp-knob-grid pp-extra-grid">
+            <Knob label="게인 (dB)" value={params.gainDb} min={-12} max={12} step={1} onChange={value => updateParam('gainDb', value)} variant="fx"/>
+            <Knob label="노멀라이즈 목표 (dB)" value={params.normalizeDb} min={-12} max={0} step={1} onChange={value => updateParam('normalizeDb', value)} variant="fx"/>
+            <Knob label="리미터 상한 (dB)" value={params.limiterDb} min={-12} max={0} step={1} onChange={value => updateParam('limiterDb', value)} variant="fx"/>
+            <Knob label="페이드 인 (초)" value={params.fadeInSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeInSec', value)} variant="reverb"/>
+            <Knob label="페이드 아웃 (초)" value={params.fadeOutSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeOutSec', value)} variant="reverb"/>
+            <Knob label="무음 기준 (dB)" value={params.silenceDb} min={-80} max={-20} step={5} onChange={value => updateParam('silenceDb', value)} variant="reverb"/>
           </div>
         </div>
         <div className={`pp-waveform-row${activeTrack === 'original' && isPlaying ? ' pp-row-playing-original' : ''}`}>

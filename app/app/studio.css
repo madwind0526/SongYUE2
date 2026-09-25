@@ -50,3 +50,9 @@
 .device-status .resource-usage>span{position:relative;display:inline-flex;flex-direction:column;align-items:stretch;gap:3px;min-width:58px;padding-bottom:9px}.device-status .resource-usage>span>b{display:inline-flex;align-items:baseline;justify-content:space-between;gap:5px;font-weight:500}.device-status .resource-usage>span::before{content:'';position:absolute;left:0;right:0;bottom:0;height:6px;border-radius:3px;background:#2a322b}.device-status .resource-usage>span>i{position:absolute;left:0;bottom:0;height:6px;border-radius:3px;background:#7fb069;transition:width .6s ease}.device-status .resource-usage>span>i.mid{background:#e6c84f}.device-status .resource-usage>span>i.high{background:#e5544f}
 /* always label + % (the amounts in GB are in the tooltips); below 1500px the bars are dropped */
 @media(max-width:1500px){.device-status .resource-usage{gap:10px}.device-status .resource-usage>span{min-width:0;padding-bottom:0}.device-status .resource-usage>span::before,.device-status .resource-usage>span>i{display:none}}
+
+/* post-process: extra panel ("음량 · 시간") under the EQ / FX columns, same look as the FX panel */
+.pp-extra-panel{margin-bottom:16px}.pp-extra-panel .pp-fx-header{display:flex;align-items:center;justify-content:space-between;gap:10px}.pp-extra-toggles{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.pp-extra-grid{grid-template-columns:repeat(6,1fr)}
+@media(max-width:950px){.pp-extra-grid{grid-template-columns:repeat(3,1fr)}}
+/* the extra panel makes the dialog taller than small screens: scroll inside the dialog instead of cutting the buttons off */
+.postprocess-dialog{max-height:calc(100vh - 32px)!important;overflow-y:auto}
