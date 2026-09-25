@@ -1323,6 +1323,18 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const rate = Number.parseInt(text, 10);
     return Number.isFinite(rate) && rate >= 8000 && rate <= 192000 ? rate : 48000;
   }
+  // The reference song for "기준곡 마스터링": a file inside the library folder (checked like every library path).
+  async function polishReferenceFile(settings, input) {
+    if (!settings.master.enabled) return null;
+    const libraryRoot = path.join(root, 'library');
+    const relative = text(input.referencePath, 2048).trim();
+    const target = path.resolve(libraryRoot, relative);
+    const rel = path.relative(libraryRoot, target);
+    if (!relative || rel.startsWith('..') || path.isAbsolute(rel)) throw fail(400, '기준곡을 라이브러리에서 골라 주세요.');
+    if (!LIBRARY_BROWSE_AUDIO_EXTENSIONS.has(path.extname(target).toLowerCase())) throw fail(400, '지원하지 않는 기준곡 형식입니다.');
+    if (!(await exists(target))) throw fail(404, '기준곡 파일을 찾을 수 없습니다.');
+    return target;
+  }
   async function defaultPolishRunner({ inputFile, referenceFile, outputFile, settings, workDir, onProgress }) {
     const rate = await probeSampleRate(inputFile);
     const inputRaw = path.join(workDir, 'input.f32');
@@ -2893,17 +2905,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         const settings = normalizePolishSettings(input.settings);
         const stages = enabledStages(settings);
         if (!stages.length) throw fail(400, '적용할 단계를 하나 이상 켜 주세요.');
-        let referenceFile = null;
-        if (settings.master.enabled) {
-          const libraryRoot = path.join(root, 'library');
-          const relative = text(input.referencePath, 2048).trim();
-          const target = path.resolve(libraryRoot, relative);
-          const rel = path.relative(libraryRoot, target);
-          if (!relative || rel.startsWith('..') || path.isAbsolute(rel)) throw fail(400, '기준곡을 라이브러리에서 골라 주세요.');
-          if (!LIBRARY_BROWSE_AUDIO_EXTENSIONS.has(path.extname(target).toLowerCase())) throw fail(400, '지원하지 않는 기준곡 형식입니다.');
-          if (!(await exists(target))) throw fail(404, '기준곡 파일을 찾을 수 없습니다.');
-          referenceFile = target;
-        }
+        const referenceFile = await polishReferenceFile(settings, input);
         if (generating) throw fail(409, '이미 다른 작업을 실행 중입니다. 완료 후 다시 시도해 주세요.');
         generating = true;
         generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 15000, progress: 0, detail: '준비 중' };
@@ -2928,8 +2930,9 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         // "AI 처리" for the sound Audio Tools made (speech, effects ...): same chain as the song polish, on a data URL instead of a saved song.
         const input = await body(req, 60 * 1024 * 1024);
         if (!(typeof input.audioDataUrl === 'string' && input.audioDataUrl.length)) throw fail(400, '처리할 오디오가 필요합니다.');
-        const settings = normalizePolishSettings({ ...input.settings, master: { enabled: false } });
+        const settings = normalizePolishSettings(input.settings);
         if (!enabledStages(settings).length) throw fail(400, '적용할 단계를 하나 이상 켜 주세요.');
+        const referenceFile = await polishReferenceFile(settings, input);
         if (generating) throw fail(409, '이미 다른 작업을 실행 중입니다. 완료 후 다시 시도해 주세요.');
         generating = true;
         generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 8000, progress: 0, detail: '준비 중' };
@@ -2940,7 +2943,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           const flacFile = path.join(dir, 'polished.flac');
           const onProgress = (percent, label) => { if (generationStatus) { generationStatus.progress = percent; generationStatus.detail = label; } };
           let report = null;
-          try { report = (await (polishRunner || defaultPolishRunner)({ inputFile, referenceFile: null, outputFile: flacFile, settings, workDir: dir, onProgress }))?.report || null; }
+          try { report = (await (polishRunner || defaultPolishRunner)({ inputFile, referenceFile, outputFile: flacFile, settings, workDir: dir, onProgress }))?.report || null; }
           catch (error) { throw error?.status ? error : fail(502, `AI 처리에 실패했습니다. ${error?.message || ''}`.trim()); }
           if (!(await exists(flacFile))) throw fail(502, 'AI 처리 결과가 만들어지지 않았습니다.');
           const wavFile = path.join(dir, 'polished.wav');

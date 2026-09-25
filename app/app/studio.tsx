@@ -3601,15 +3601,19 @@ function PolishReportPanel({ report }: { report: PolishReport }) {
 // "AI 처리" for sound made in Audio Tools (speech, effects, converted voices): the same chain as "AI 곡 다듬기", with speech-friendly
 // defaults (denoise + vocal naturalize on, spectral lifter off; no reference mastering). The result replaces the tool's result on "적용".
 const AUDIO_POLISH_DEFAULT: PolishSettings = { denoise: { enabled: true, strength: 0.3 }, lifter: { enabled: false, gate: 0.3, shimmerDb: 4, hfMix: 0, punch: 0 }, naturalize: { enabled: true, amount: 0.5 }, master: { enabled: false } };
-function AudioPolishDialog({ audioDataUrl, onClose, onApply }: { audioDataUrl: string; onClose: () => void; onApply: (dataUrl: string) => Promise<void> }) {
+function AudioPolishDialog({ audioDataUrl, onClose, onApply, kind = 'sound' }: { audioDataUrl: string; onClose: () => void; onApply: (dataUrl: string) => Promise<void>; kind?: 'sound' | 'song' }) {
   const t = useAudioTransport();
-  const [settings, setSettings] = useState<PolishSettings>(AUDIO_POLISH_DEFAULT);
+  const song = kind === 'song';
+  const [settings, setSettings] = useState<PolishSettings>(song ? POLISH_DEFAULT : AUDIO_POLISH_DEFAULT);
+  const [referencePath, setReferencePath] = useState<string | null>(null);
+  const [referencePickerOpen, setReferencePickerOpen] = useState(false);
   const [running, setRunning] = useState(false);
   const [applying, setApplying] = useState(false);
   const [result, setResult] = useState<{ dataUrl: string; report: PolishReport | null } | null>(null);
   const [errorText, setErrorText] = useState('');
   const patch = <K extends keyof PolishSettings>(key: K, value: Partial<PolishSettings[K]>) => { setResult(null); t.setBuffer('output', null); setSettings(previous => ({ ...previous, [key]: { ...previous[key], ...value } })); };
-  const anyStage = settings.denoise.enabled || settings.lifter.enabled || settings.naturalize.enabled;
+  const anyStage = settings.denoise.enabled || settings.lifter.enabled || settings.naturalize.enabled || (song && settings.master.enabled);
+  const canStart = anyStage && (!settings.master.enabled || !!referencePath);
   const decode = async (dataUrl: string) => t.ensureAudioContext().decodeAudioData(await (await fetch(dataUrl)).arrayBuffer());
   // the current result is listed as "원본" so it can be compared with the processed one
   useEffect(() => { decode(audioDataUrl).then(buffer => t.setBuffer('source', buffer)).catch(() => setErrorText('원본 오디오를 불러오지 못했습니다.')); }, [audioDataUrl]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -3625,7 +3629,7 @@ function AudioPolishDialog({ audioDataUrl, onClose, onApply }: { audioDataUrl: s
   </div>;
   async function start() {
     setRunning(true); setErrorText(''); setResult(null); t.setBuffer('output', null);
-    try { const done = await api<{ dataUrl: string; report: PolishReport | null }>('/audio-tools/polish', 'POST', { audioDataUrl, settings }); t.setBuffer('output', await decode(done.dataUrl)); setResult(done); }
+    try { const done = await api<{ dataUrl: string; report: PolishReport | null }>('/audio-tools/polish', 'POST', { audioDataUrl, settings: song ? settings : { ...settings, master: { enabled: false } }, referencePath: song && settings.master.enabled ? referencePath : undefined }); t.setBuffer('output', await decode(done.dataUrl)); setResult(done); }
     catch (error) { setErrorText((error as Error).message); }
     finally { setRunning(false); }
   }
@@ -3635,10 +3639,10 @@ function AudioPolishDialog({ audioDataUrl, onClose, onApply }: { audioDataUrl: s
     try { await onApply(result.dataUrl); onClose(); }
     catch (error) { setErrorText((error as Error).message); setApplying(false); }
   }
-  return <Dialog open onOpenChange={next => { if (!next && !running && !applying) onClose(); }}>
+  return <><Dialog open onOpenChange={next => { if (!next && !running && !applying) onClose(); }}>
     <DialogContent className="studio-dialog audio-polish-dialog">
-      <DialogTitle>AI 처리</DialogTitle>
-      <DialogDescription>만들어진 음성의 잡음과 기계적인 느낌을 다듬습니다. 결과를 확인한 뒤 "적용"을 누르면 처리본이 바뀌고, 언제든 되돌릴 수 있습니다.</DialogDescription>
+      <DialogTitle>{song ? 'AI 곡 다듬기' : 'AI 처리'}</DialogTitle>
+      <DialogDescription>{song ? 'AI로 만든 곡의 잡음, 반짝임, 기계적인 보컬을 다듬습니다.' : '만들어진 음성의 잡음과 기계적인 느낌을 다듬습니다.'} 결과를 확인한 뒤 "적용"을 누르면 처리본이 바뀌고, 언제든 되돌릴 수 있습니다.</DialogDescription>
       <div className="polish-step">
         <label className="at-function"><input type="checkbox" checked={settings.denoise.enabled} onChange={event => patch('denoise', { enabled: event.target.checked })} disabled={running}/>노이즈 제거</label>
         <p className="field-hint">음성 밑에 깔린 지속적인 쉬익·지지직 소리를 줄입니다.</p>
@@ -3649,11 +3653,29 @@ function AudioPolishDialog({ audioDataUrl, onClose, onApply }: { audioDataUrl: s
         <p className="field-hint">기계적인 억양과 일정한 음 높이를 사람이 말하는 것처럼 다듬습니다.</p>
         {settings.naturalize.enabled && <PolishSlider label="세기" value={settings.naturalize.amount} min={0.05} max={1} step={0.05} onChange={value => patch('naturalize', { amount: value })} disabled={running}/>}
       </div>
+      {song ? <>
+      <div className="polish-step">
+        <label className="at-function"><input type="checkbox" checked={settings.lifter.enabled} onChange={event => patch('lifter', { enabled: event.target.checked })} disabled={running}/>Spectral Lifter</label>
+        <p className="field-hint">AI 음악 특유의 반짝이는 소리와 치찰음을 가라앉히고, 잘려 나간 높은 음역과 드럼의 타격감을 살릴 수 있습니다.</p>
+        {settings.lifter.enabled && <>
+          <PolishSlider label="잡음 게이트" value={settings.lifter.gate} min={0} max={1} step={0.05} onChange={value => patch('lifter', { gate: value })} disabled={running}/>
+          <PolishSlider label="반짝임 줄이기" value={settings.lifter.shimmerDb} min={0} max={12} step={1} unit=" dB" onChange={value => patch('lifter', { shimmerDb: value })} disabled={running}/>
+          <PolishSlider label="고음역 복원" value={settings.lifter.hfMix} min={0} max={0.5} step={0.05} onChange={value => patch('lifter', { hfMix: value })} disabled={running}/>
+          <PolishSlider label="타격감" value={settings.lifter.punch} min={0} max={1} step={0.05} onChange={value => patch('lifter', { punch: value })} disabled={running}/>
+        </>}
+      </div>
+      </> : <>
       <div className="polish-step">
         <label className="at-function"><input type="checkbox" checked={settings.lifter.enabled} onChange={event => patch('lifter', { enabled: event.target.checked })} disabled={running}/>반짝임 줄이기</label>
         <p className="field-hint">날카롭게 들리는 고음과 치찰음("ㅅ" 소리)을 가라앉힙니다. 필요할 때만 켜세요.</p>
         {settings.lifter.enabled && <PolishSlider label="줄이는 정도" value={settings.lifter.shimmerDb} min={0} max={12} step={1} unit=" dB" onChange={value => patch('lifter', { shimmerDb: value })} disabled={running}/>}
       </div>
+      </>}
+      {song && <div className="polish-step">
+        <label className="at-function"><input type="checkbox" checked={settings.master.enabled} onChange={event => patch('master', { enabled: event.target.checked })} disabled={running}/>기준곡 마스터링</label>
+        <p className="field-hint">좋아하는 곡의 음량과 음색 균형에 맞춥니다(matchering). 마지막 단계로 적용됩니다.</p>
+        {settings.master.enabled && <Button variant="outline" className="voice-convert-file-btn" onClick={() => setReferencePickerOpen(true)} disabled={running} title={referencePath || undefined}><Upload size={14}/><span className="voice-convert-file-name">{referencePath ? referencePath.split('/').pop() : '기준곡 선택 (라이브러리)'}</span></Button>}
+      </div>}
       {errorText && <p className="field-hint warning">{errorText}</p>}
       <div className="stem-list">
         {row('source', '원본', sourceBuffer, false, '')}
@@ -3666,16 +3688,17 @@ function AudioPolishDialog({ audioDataUrl, onClose, onApply }: { audioDataUrl: s
       <div className="dialog-actions">
         <TransportControls t={t} disabled={!sourceBuffer}/>
         <Button variant="outline" onClick={onClose} disabled={running || applying}>닫기</Button>
-        <Button variant="outline" onClick={() => void start()} disabled={!anyStage || running || applying}>{running ? <LoaderCircle className="spin" size={15}/> : <WandSparkles size={15}/>}{result ? '다시 처리' : '처리 시작'}</Button>
+        <Button variant="outline" onClick={() => void start()} disabled={!canStart || running || applying}>{running ? <LoaderCircle className="spin" size={15}/> : <WandSparkles size={15}/>}{result ? '다시 처리' : '처리 시작'}</Button>
         <Button onClick={() => void apply()} disabled={!result || running || applying}>{applying ? <LoaderCircle className="spin" size={15}/> : <Check size={15}/>}적용</Button>
       </div>
     </DialogContent>
-  </Dialog>;
+  </Dialog>
+  <MultiFileLibraryPicker open={referencePickerOpen} onClose={() => setReferencePickerOpen(false)} onConfirm={paths => paths[0] && setReferencePath(paths[0])} title="기준곡 선택" description="음량과 음색 균형을 맞출 기준곡을 라이브러리에서 고릅니다."/></>;
 }
 
 // "AI 처리" + "후처리" (+ "처리 전으로") for a sound result held as an AudioBuffer: Audio Tools, the timbre-transform popup, audio restore.
 // The processed sound replaces the result through onReplace; the sound before the last change is kept so it can be brought back.
-function ResultEnhanceButtons({ buffer, onReplace, notify, title, disabled }: { buffer: AudioBuffer | null; onReplace: (next: AudioBuffer) => void | Promise<void>; notify: (text: string, error?: boolean) => void; title: string; disabled?: boolean }) {
+function ResultEnhanceButtons({ buffer, onReplace, notify, title, disabled, kind = 'sound' }: { buffer: AudioBuffer | null; onReplace: (next: AudioBuffer) => void | Promise<void>; notify: (text: string, error?: boolean) => void; title: string; disabled?: boolean; kind?: 'sound' | 'song' }) {
   const [polishUrl, setPolishUrl] = useState<string | null>(null);
   const [postOpen, setPostOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -3709,9 +3732,9 @@ function ResultEnhanceButtons({ buffer, onReplace, notify, title, disabled }: { 
   if (!buffer) return null;
   return <>
     {canUndo && <Button variant="outline" onClick={() => void undo()} disabled={disabled}><RotateCcw size={15}/>처리 전으로</Button>}
-    <Button variant="outline" onClick={() => void openPolish()} disabled={disabled || busy}>{busy ? <LoaderCircle className="spin" size={15}/> : <WandSparkles size={15}/>}AI 처리</Button>
+    <Button variant="outline" onClick={() => void openPolish()} disabled={disabled || busy}>{busy ? <LoaderCircle className="spin" size={15}/> : <WandSparkles size={15}/>}{kind === 'song' ? 'AI 곡 다듬기' : 'AI 처리'}</Button>
     <Button variant="outline" onClick={() => setPostOpen(true)} disabled={disabled}><SlidersHorizontal size={15}/>후처리</Button>
-    {polishUrl && <AudioPolishDialog audioDataUrl={polishUrl} onClose={() => setPolishUrl(null)} onApply={applyPolished}/>}
+    {polishUrl && <AudioPolishDialog kind={kind} audioDataUrl={polishUrl} onClose={() => setPolishUrl(null)} onApply={applyPolished}/>}
     {postOpen && <PostProcessDialog
       project={{ id: 'result-enhance', title } as unknown as Project}
       onClose={() => setPostOpen(false)}
@@ -4309,7 +4332,7 @@ function TimbreTransformDialog({ onClose, notify, onCreated, ddspActiveJobs, onD
               <TransportControls t={t} disabled={!t.peaksForKey('source').length}/>
               <div className="pp-dialog-actions-right">
                 <Button variant="outline" onClick={onClose} disabled={saving}>닫기</Button>
-                <ResultEnhanceButtons buffer={resultBuffer} onReplace={next => t.setBuffer('result', next)} notify={notify} title="변환곡" disabled={saving}/>
+                <ResultEnhanceButtons buffer={resultBuffer} onReplace={next => t.setBuffer('result', next)} notify={notify} title="변환곡" disabled={saving} kind="song"/>
                 <Button onClick={() => void handleSave()} disabled={!resultBuffer || saving}>{saving ? <LoaderCircle className="spin"/> : <Save size={15}/>}저장</Button>
               </div>
             </div>
@@ -4623,7 +4646,7 @@ function AudioRestoreDialog({ file, onClose, notify, onCreated }: { file: File; 
         </div>
         <div className="pp-dialog-actions-right">
           <Button variant="outline" onClick={() => { stopPlayback(); onClose(); }} disabled={saving}>취소</Button>
-          <ResultEnhanceButtons buffer={restoredPeaks.length ? restoredBufferRef.current : null} onReplace={replaceRestored} notify={notify} title="복원본" disabled={saving}/>
+          <ResultEnhanceButtons buffer={restoredPeaks.length ? restoredBufferRef.current : null} onReplace={replaceRestored} notify={notify} title="복원본" disabled={saving} kind="song"/>
           <Button onClick={() => void handleSave()} disabled={!restoredPeaks.length || saving}>{saving ? <LoaderCircle className="spin"/> : <Save size={15}/>}저장</Button>
         </div>
       </div>
@@ -4695,6 +4718,18 @@ function AudioCompareDialog({ onClose, notify, onCreated }: { onClose: () => voi
     } catch { setErrorText('오디오 파일을 불러오지 못했습니다.'); }
   }
 
+  // "AI 곡 다듬기" on one of the two rows: the row's sound goes to the polish dialog and the result replaces the row
+  const [polishRow, setPolishRow] = useState<{ row: 1 | 2; url: string } | null>(null);
+  async function openRowPolish(row: 1 | 2) {
+    const buffer = row === 1 ? row1BufferRef.current : row2BufferRef.current;
+    if (!buffer) return;
+    try { setPolishRow({ row, url: await readFileAsDataUrl(audioBufferToWavBlob(buffer)) }); } catch (error) { notify((error as Error).message, true); }
+  }
+  async function applyRowPolish(dataUrl: string) {
+    if (!polishRow) return;
+    const decoded = await new OfflineAudioContext(1, 1, 44100).decodeAudioData(await (await fetch(dataUrl)).arrayBuffer());
+    handleRowProcessed(polishRow.row, decoded, polishRow.row === 1 ? row1ParamsRef.current : row2ParamsRef.current);
+  }
   function handleRowProcessed(row: 1 | 2, buffer: AudioBuffer, params: PostProcessParams) {
     const peaks = computeWaveformPeaks(buffer, 300);
     if (row === 1) { row1BufferRef.current = buffer; row1ParamsRef.current = params; setRow1Peaks(peaks); setRow1Processed(true); }
@@ -4824,6 +4859,7 @@ function AudioCompareDialog({ onClose, notify, onCreated }: { onClose: () => voi
             <button type="button" className="pp-waveform-label" aria-label={activeKey === 'row1' && isPlaying ? '음원-1 일시정지' : '음원-1 재생'} onClick={() => handleKeyClick('row1')} disabled={!row1Peaks.length}>{activeKey === 'row1' && isPlaying ? <Pause size={15}/> : <Play size={15}/>}</button>
             <button type="button" className="audio-compare-load-btn" aria-label="음원-1 파일 불러오기" title="음원-1 파일 불러오기" onClick={() => row1InputRef.current?.click()}><Upload size={13}/></button>
             <span className="stem-label audio-compare-label"><strong>음원-1</strong>{row1Name && <small title={row1Name}>({row1Name})</small>}{row1Processed && <span className="small-badge">처리됨</span>}</span>
+            <Button variant="outline" size="sm" onClick={() => void openRowPolish(1)} disabled={!row1BufferRef.current}><WandSparkles size={14}/>AI 곡 다듬기</Button>
             <Button variant="outline" size="sm" onClick={() => setEditingRow(1)} disabled={!row1BufferRef.current}><SlidersHorizontal size={14}/>후처리</Button>
             </div>
             <div className="audio-compare-charts">
@@ -4836,6 +4872,7 @@ function AudioCompareDialog({ onClose, notify, onCreated }: { onClose: () => voi
             <button type="button" className="pp-waveform-label" aria-label={activeKey === 'row2' && isPlaying ? '음원-2 일시정지' : '음원-2 재생'} onClick={() => handleKeyClick('row2')} disabled={!row2Peaks.length}>{activeKey === 'row2' && isPlaying ? <Pause size={15}/> : <Play size={15}/>}</button>
             <button type="button" className="audio-compare-load-btn" aria-label="음원-2 파일 불러오기" title="음원-2 파일 불러오기" onClick={() => row2InputRef.current?.click()}><Upload size={13}/></button>
             <span className="stem-label audio-compare-label"><strong>음원-2</strong>{row2Name && <small title={row2Name}>({row2Name})</small>}{row2Processed && <span className="small-badge">처리됨</span>}</span>
+            <Button variant="outline" size="sm" onClick={() => void openRowPolish(2)} disabled={!row2BufferRef.current}><WandSparkles size={14}/>AI 곡 다듬기</Button>
             <Button variant="outline" size="sm" onClick={() => setEditingRow(2)} disabled={!row2BufferRef.current}><SlidersHorizontal size={14}/>후처리</Button>
             </div>
             <div className="audio-compare-charts">
@@ -4868,6 +4905,7 @@ function AudioCompareDialog({ onClose, notify, onCreated }: { onClose: () => voi
     </Dialog>}
     <input ref={row1InputRef} type="file" accept="audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/mp4,audio/ogg" hidden onChange={event => void handlePickFile(1, event)}/>
     <input ref={row2InputRef} type="file" accept="audio/mpeg,audio/wav,audio/x-wav,audio/flac,audio/mp4,audio/ogg" hidden onChange={event => void handlePickFile(2, event)}/>
+    {polishRow && <AudioPolishDialog kind="song" audioDataUrl={polishRow.url} onClose={() => setPolishRow(null)} onApply={applyRowPolish}/>}
     {editingRow && <PostProcessDialog
       key={editingRow}
       project={{ id: `compare-row${editingRow}`, title: editingRow === 1 ? (row1Name || '음원-1') : (row2Name || '음원-2') } as unknown as Project}
