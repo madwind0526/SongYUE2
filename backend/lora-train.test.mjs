@@ -71,3 +71,13 @@ test('the chosen result is filed once (archive + hard-linked installed copy), th
   assert.equal(library.length, 1); assert.equal(library[0].name, '지수 음색'); assert.equal(library[0].hasRecord, true); assert.ok(library[0].bytes > 0);
   assert.equal(safeFolderName('a/b:c'), 'a b c');
 });
+
+test('the trainer: the scan lists every song with its length', async (t) => {
+  const { createLoraTrainer } = await import('./lora-trainer.mjs');
+  const dir = await temp(t);
+  await writeFile(path.join(dir, 'a.mp3'), 'aa'); await writeFile(path.join(dir, 'b.wav'), 'b');
+  const trainer = createLoraTrainer({ root: dir, outputDirectory: dir, fetchImpl: async () => new Response('{}'), spawnImpl: () => { throw new Error('not used'); }, comfyEnginePath: () => dir, ensureComfyUi: async () => '', setBusy: () => {}, isBusy: () => false, adaptersDir: () => dir, listInstalledNames: async () => [], synthesizeSong: async () => Buffer.alloc(0), measureSeconds: async (file) => (file.endsWith('a.mp3') ? 200 : 100) });
+  const found = await trainer.scan(dir);
+  assert.deepEqual(found.files.map((file) => [file.name, file.seconds]), [['a.mp3', 200], ['b.wav', 100]]);
+  assert.equal(found.seconds, 300); assert.equal(found.minutes, 5);
+});

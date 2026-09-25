@@ -3661,8 +3661,10 @@ type AdapterPickMode = { selected: string[]; onApply: (names: string[]) => void;
 // library/Lora and installed; the other one is deleted.
 type TrainJob = { id: string; status: string; request: { name: string; trigger: string; steps: number; rank: number }; sourceDir: string; songs: number; step: number; total: number; startedAt: number; trainStartedAt?: number; message: string; error: string; difference: number | null; verdict: { same: boolean; recommend: string; needsListening: boolean } | null; ab: { status: string; error?: string } | null; result?: { installedName: string; mode: string; bytes: number } };
 type TrainStatus = { readiness: { ready: boolean; checks: Record<string, { ok: boolean; hint: string }> }; job: TrainJob | null; busy: boolean };
-type TrainScan = { dir: string; count: number; bytes: number; minutes: number; captions: number; files: { name: string; bytes: number }[] };
-const TRAIN_PRESETS = [{ label: '빠르게 (500스텝, 약 4분)', steps: 500 }, { label: '보통 (1500스텝, 약 9분)', steps: 1500 }, { label: '꼼꼼히 (3000스텝, 약 18분)', steps: 3000 }];
+type TrainScan = { dir: string; count: number; bytes: number; minutes: number; seconds: number; captions: number; files: { name: string; bytes: number; seconds: number }[] };
+// end condition: a number of steps, or a number of passes over all the chosen material (1 step = one random clip; a pass = all clips once)
+const TRAIN_PACE_SECONDS_PER_STEP = 0.85;
+const TRAIN_CLIP_CHOICES = [3, 4, 5, 6];
 function LoraTrainTab({ notify, onInstalled }: { notify: (text: string, error?: boolean) => void; onInstalled: () => void }) {
   const [status, setStatus] = useState<TrainStatus | null>(null);
   const [dir, setDir] = useState('');
@@ -3671,7 +3673,11 @@ function LoraTrainTab({ notify, onInstalled }: { notify: (text: string, error?: 
   const [name, setName] = useState('');
   const [trigger, setTrigger] = useState('');
   const [steps, setSteps] = useState(1500);
-  const [rank, setRank] = useState(32);
+  const [endMode, setEndMode] = useState<'steps' | 'passes'>('steps');
+  const [passes, setPasses] = useState(3);
+  const [rank, setRank] = useState(16);
+  const [clip, setClip] = useState(6);
+  const [chosen, setChosen] = useState<string[]>([]);
   const [caption, setCaption] = useState('');
   const [busy, setBusy] = useState('');
   const [library, setLibrary] = useState<{ name: string; bytes: number; hasRecord: boolean }[]>([]);
@@ -3687,7 +3693,7 @@ function LoraTrainTab({ notify, onInstalled }: { notify: (text: string, error?: 
   }, [job?.status, job?.ab?.status]); // eslint-disable-line react-hooks/exhaustive-deps
   async function scanFolder() {
     setScanning(true); setScan(null);
-    try { setScan(await api<TrainScan>('/lora-train/scan', 'POST', { dir })); }
+    try { const found = await api<TrainScan>('/lora-train/scan', 'POST', { dir }); setScan(found); setChosen(found.files.map(file => file.name)); }
     catch (error) { notify((error as Error).message, true); }
     finally { setScanning(false); }
   }
@@ -3697,7 +3703,14 @@ function LoraTrainTab({ notify, onInstalled }: { notify: (text: string, error?: 
     catch (error) { notify((error as Error).message, true); await reloadStatus(); }
     finally { setBusy(''); }
   }
-  const startTraining = () => act('start', '/lora-train/start', { name, triggerWord: trigger, steps, rank, caption, sourceDir: dir });
+  // what the choices add up to
+  const chosenFiles = scan ? scan.files.filter(file => chosen.includes(file.name)) : [];
+  const chosenSeconds = chosenFiles.reduce((sum, file) => sum + file.seconds, 0);
+  const clipCount = Math.max(1, Math.floor(chosenSeconds / clip));
+  const totalSteps = endMode === 'passes' ? Math.max(50, Math.round(passes * clipCount)) : steps;
+  const passesOfSteps = clipCount ? totalSteps / clipCount : 0;
+  const estimateMinutes = Math.max(1, Math.round(totalSteps * TRAIN_PACE_SECONDS_PER_STEP / 60));
+  const startTraining = () => act('start', '/lora-train/start', { name, triggerWord: trigger, steps: totalSteps, rank, clipSeconds: clip, caption, sourceDir: dir, files: chosen.length === scan?.count ? null : chosen });
   async function finalize(choice: 'ema' | 'raw') {
     setBusy('finalize');
     try { await api('/lora-train/finalize', 'POST', { choice }); notify(`"${job?.request.name}"을(를) 보관함에 넣고 설치했습니다.`); onInstalled(); await reloadStatus(); void reloadLibrary(); }
@@ -3709,7 +3722,7 @@ function LoraTrainTab({ notify, onInstalled }: { notify: (text: string, error?: 
   // the remaining time counts from the first training step (reading the songs is not part of the pace)
   const minutesLeft = job && running && job.step > 2 && job.trainStartedAt ? Math.max(1, Math.round((Date.now() - job.trainStartedAt) / 60000 * (job.total - job.step) / job.step)) : null;
   const notReady = status && !status.readiness.ready ? Object.values(status.readiness.checks).filter(check => !check.ok) : [];
-  const canStart = !!status?.readiness.ready && !status.busy && !running && job?.status !== 'review' && !!scan && scan.count > 0 && name.trim() && trigger.trim() && !busy;
+  const canStart = !!status?.readiness.ready && !status.busy && !running && job?.status !== 'review' && !!scan && chosen.length > 0 && name.trim() && trigger.trim() && !busy;
   const gb = (bytes: number) => bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
   return <div className="train-tab">
     {notReady.length > 0 && <div className="train-warn">{notReady.map(check => <p key={check.hint}>{check.hint}</p>)}</div>}
@@ -3717,11 +3730,23 @@ function LoraTrainTab({ notify, onInstalled }: { notify: (text: string, error?: 
       <p className="field-hint">내 곡(mp3, wav, flac)이 들어 있는 폴더를 고르면 그 곡들의 음색과 질감을 배운 LoRA를 만듭니다. 폴더의 곡은 복사하거나 바꾸지 않고 그 자리에서 읽습니다. 학습하는 동안에는 GPU를 거의 다 쓰므로 곡 만들기 등은 끝난 뒤에 해 주세요.</p>
       <div className="train-form">
         <label className="train-field wide">곡이 들어 있는 폴더<span className="train-row"><Input value={dir} placeholder="예: D:\Music\지수" aria-label="곡 폴더 경로" onChange={event => { setDir(event.target.value); setScan(null); }} onKeyDown={event => { if (event.key === 'Enter') void scanFolder(); }}/><Button variant="outline" disabled={!dir.trim() || scanning} onClick={() => void scanFolder()}>{scanning ? <LoaderCircle className="spin" size={14}/> : <FolderOpen size={14}/>}확인</Button></span></label>
-        {scan && <p className="train-scan">곡 {scan.count}개 · 약 {scan.minutes}분 · {gb(scan.bytes)}{scan.captions > 0 ? ` · 설명 파일 ${scan.captions}개(곡과 같은 이름의 .txt를 스타일 설명으로 씁니다)` : ''}{scan.count < 3 ? ' — 곡이 3개보다 적으면 효과가 약할 수 있습니다.' : ''}</p>}
+        {scan && <div className="train-songs">
+          <div className="train-songs-head"><strong>곡 목록</strong><span>{chosen.length} / {scan.count}곡 선택 · 약 {Math.round(chosenSeconds / 60)}분{scan.captions > 0 ? ` · 설명 파일 ${scan.captions}개(곡과 같은 이름의 .txt를 스타일 설명으로 씁니다)` : ''}</span><button type="button" className="link-button" onClick={() => setChosen(scan.files.map(file => file.name))}>모두 선택</button><button type="button" className="link-button" onClick={() => setChosen([])}>모두 해제</button></div>
+          <ul>{scan.files.map(file => <li key={file.name}><label><input type="checkbox" checked={chosen.includes(file.name)} onChange={event => setChosen(event.target.checked ? [...chosen, file.name] : chosen.filter(item => item !== file.name))}/><span>{file.name}</span><small>{Math.floor(file.seconds / 60)}:{String(file.seconds % 60).padStart(2, '0')} · {gb(file.bytes)}</small></label></li>)}</ul>
+          {chosen.length > 0 && chosen.length < 3 && <p className="field-hint warning">곡이 3개보다 적으면 효과가 약할 수 있습니다.</p>}
+          {chosen.length < scan.count && chosen.length > 0 && <p className="field-hint">고른 곡만 작업 폴더에 연결해서 학습하고, 끝나면 그 폴더를 지웁니다. 원래 폴더의 곡은 바뀌지 않습니다.</p>}
+        </div>}
         <label className="train-field">LoRA 이름<Input value={name} maxLength={60} placeholder="예: 지수 음색" onChange={event => setName(event.target.value)}/></label>
         <label className="train-field">트리거 단어 (영문)<Input value={trigger} maxLength={30} placeholder="예: jisoo_voice" onChange={event => setTrigger(event.target.value)}/><small>곡을 만들 때 스타일 맨 앞에 이 단어를 넣으면 이 LoRA가 반응합니다.</small></label>
-        <label className="train-field">학습 정도<select value={steps} onChange={event => setSteps(Number(event.target.value))} aria-label="학습 스텝">{TRAIN_PRESETS.map(item => <option key={item.steps} value={item.steps}>{item.label}</option>)}</select></label>
-        <label className="train-field">크기 (rank)<select value={rank} onChange={event => setRank(Number(event.target.value))} aria-label="LoRA rank"><option value={16}>작게 16 (약 107 MB)</option><option value={32}>보통 32 (약 213 MB)</option></select></label>
+        <label className="train-field">조각 길이 (곡을 자르는 길이)<select value={clip} onChange={event => setClip(Number(event.target.value))} aria-label="조각 길이">{TRAIN_CLIP_CHOICES.map(item => <option key={item} value={item}>{item}초{item === 6 ? ' (기본, 12 GB 카드 한계)' : item < 5 ? ' (메모리 여유, 짧은 단위)' : ''}</option>)}</select><small>곡을 이 길이로 잘라 학습합니다. 길수록 곡의 흐름을 더 배우지만 메모리를 더 씁니다. 이 PC(12 GB)는 6초까지 됩니다.</small></label>
+        <label className="train-field">크기 (rank)<select value={rank} onChange={event => setRank(Number(event.target.value))} aria-label="LoRA rank"><option value={16}>16 · 작게 (약 107 MB)</option><option value={32}>32 · 보통 (약 213 MB)</option></select><small>작으면 파일이 반으로 줄고 학습도 조금 가볍습니다.</small></label>
+        <div className="train-field wide train-end"><span>끝내는 조건</span>
+          <div className="train-end-row">
+            <label><input type="radio" name="train-end" checked={endMode === 'steps'} onChange={() => setEndMode('steps')}/>스텝 수<Input type="number" min={50} max={20000} step={100} value={steps} disabled={endMode !== 'steps'} aria-label="학습 스텝 수" onChange={event => setSteps(Math.max(50, Math.min(20000, Number(event.target.value) || 50)))}/></label>
+            <label><input type="radio" name="train-end" checked={endMode === 'passes'} onChange={() => setEndMode('passes')}/>곡 전체 반복<Input type="number" min={1} max={100} step={1} value={passes} disabled={endMode !== 'passes'} aria-label="반복 횟수" onChange={event => setPasses(Math.max(1, Math.min(100, Number(event.target.value) || 1)))}/>번</label>
+          </div>
+          <small>= <b>{totalSteps}스텝</b> · 곡 전체를 약 {passesOfSteps.toFixed(1)}번 반복 · 조각 {clipCount}개 · 학습 약 {estimateMinutes}분(이 PC 기준 추정). 너무 적으면 효과가 약하고 너무 많으면 곡을 외워 버립니다. 보통 곡 전체를 2~4번 반복하면 충분합니다.</small>
+        </div>
         <label className="train-field wide">곡 전체에 붙일 스타일 설명 (선택)<Input value={caption} maxLength={300} placeholder="예: korean pop ballad, soft female vocal (폴더에 .txt 설명 파일이 있으면 그것을 씁니다)" onChange={event => setCaption(event.target.value)}/></label>
       </div>
       {job?.status === 'failed' && <p className="field-hint warning">지난 학습이 실패했습니다: {job.error}</p>}

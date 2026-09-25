@@ -1,6 +1,6 @@
 // One LoRA training run at a time: starts the ComfyUI trainer nodes, follows the progress, compares the EMA and the raw result and
 // files the chosen one. The pure helpers live in lora-train.mjs; this file keeps the running state and talks to ComfyUI.
-import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFile, link, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { TRAINER_NODE_DIR, TRAIN_CHECKPOINT, buildTrainPrompt, cleanTrainRequest, emaRawVerdict, finalizeTrainedLora, linkOrCopy, scanSourceDir } from './lora-train.mjs';
@@ -30,11 +30,37 @@ export function createLoraTrainer(context) {
     return { ready: Object.values(checks).every((item) => item.ok), checks };
   }
 
+  // the songs of a folder with the length of each one (the user picks which of them to learn from)
   async function scan(dir) {
     const found = await scanSourceDir(dir);
     let seconds = 0;
-    for (const file of found.files.slice(0, 200)) seconds += (await measureSeconds(path.join(dir, file.name)).catch(() => 0)) || 0;
-    return { ...found, minutes: Math.round(seconds / 6) / 10 };
+    const files = [];
+    for (const file of found.files.slice(0, 500)) {
+      const length = (await measureSeconds(path.join(dir, file.name)).catch(() => 0)) || 0;
+      seconds += length;
+      files.push({ ...file, seconds: Math.round(length) });
+    }
+    return { ...found, files, minutes: Math.round(seconds / 6) / 10, seconds: Math.round(seconds) };
+  }
+
+  // Only some of the songs chosen: they are linked (or copied when the folder is on another drive) into a work folder that the trainer reads;
+  // the user's folder is never written to. The work folder is deleted with the rest of the run.
+  async function prepareSources(source, chosen, id) {
+    if (!Array.isArray(chosen) || chosen.length === 0 || chosen.length === source.count) return { ...source, dir: source.dir, linked: 0 };
+    const known = new Map(source.files.map((file) => [file.name, file]));
+    const names = [...new Set(chosen.map(String))].filter((name) => known.has(name));
+    if (names.length === 0) throw Object.assign(new Error('학습에 쓸 곡을 하나 이상 골라 주세요.'), { status: 400 });
+    const work = path.join(jobDir(id), 'songs');
+    await mkdir(work, { recursive: true });
+    for (const name of names) {
+      const from = path.join(source.dir, name);
+      const to = path.join(work, name);
+      try { await link(from, to); } catch { await copyFile(from, to); }
+      const caption = `${path.basename(name, path.extname(name))}.txt`;
+      if (await exists(path.join(source.dir, caption))) { try { await link(path.join(source.dir, caption), path.join(work, caption)); } catch { await copyFile(path.join(source.dir, caption), path.join(work, caption)); } }
+    }
+    const captions = (await readdir(work)).filter((name) => name.toLowerCase().endsWith('.txt')).length;
+    return { ...source, dir: work, count: names.length, files: names.map((name) => known.get(name)), captions, linked: names.length };
   }
 
   const publicJob = () => (job ? { ...job } : null);
@@ -64,8 +90,9 @@ export function createLoraTrainer(context) {
     if (!state.ready) throw Object.assign(new Error(Object.values(state.checks).filter((item) => !item.ok).map((item) => item.hint).join(' ')), { status: 409 });
     const id = randomUUID();
     await mkdir(jobDir(id), { recursive: true });
+    try { source = await prepareSources(source, input.files, id); } catch (error) { await rm(jobDir(id), { recursive: true, force: true }).catch(() => {}); throw error; }
     const loraName = `songyue-${id.slice(0, 8)}`;
-    job = { id, status: 'starting', request: cleaned, sourceDir: source.dir, songs: source.count, step: 0, total: cleaned.steps, startedAt: now(), updatedAt: now(), loraName, error: '', message: 'ComfyUI를 준비하는 중', verdict: null, difference: null, ab: null };
+    job = { id, status: 'starting', request: cleaned, sourceDir: String(input.sourceDir || '').trim(), songs: source.count, songNames: source.files.map((file) => file.name), step: 0, total: cleaned.steps, startedAt: now(), updatedAt: now(), loraName, error: '', message: 'ComfyUI를 준비하는 중', verdict: null, difference: null, ab: null };
     setBusy(true, 'LoRA 학습 중');
     // the run never rejects into the server: failures end up in the job
     void run(source).catch((error) => touch({ status: 'failed', error: error?.message || String(error), message: '학습 실패' }));
@@ -210,7 +237,7 @@ export function createLoraTrainer(context) {
           trainedAt: new Date(job.startedAt).toISOString().slice(0, 10), chosen: choice === 'ema' ? 'EMA' : 'raw', emaRawDifference: job.difference,
           triggerWord: req.trigger, stage: 'sound (NAR) only', trainer: 'ComfyUI-YuE2-Trainer (Starnodes2024)', baseCheckpoint: TRAIN_CHECKPOINT,
           settings: { steps: req.steps, rank: req.rank, alpha: req.rank, learningRate: req.learningRate, clipSeconds: req.clipSeconds, optimizer: 'adamw_8bit', scheduler: 'cosine', emaDecay: 0.99, caption: req.caption || null },
-          sourceFolder: job.sourceDir, songCount: job.songs, trainingMinutes: Math.round((now() - job.startedAt) / 6000) / 10,
+          sourceFolder: job.sourceDir, songCount: job.songs, songs: job.songNames, trainingMinutes: Math.round((now() - job.startedAt) / 6000) / 10,
           license: 'YuE2 가중치는 CC BY-NC 4.0이라 이 LoRA도 비상업용으로만 써야 한다. 학습에 쓴 곡의 저작권과 사용 조건은 사용자가 책임진다.',
         },
         cleanupDirs: [jobDir(job.id)],

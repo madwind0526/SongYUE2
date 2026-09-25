@@ -2208,7 +2208,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         if (req.method === 'GET' && sub === '/status') return run(async () => ({ readiness: await loraTrainer.readiness(), job: await loraTrainer.current(), busy: generating }));
         if (req.method === 'GET' && sub === '/library') return run(async () => ({ items: await listLoraLibrary(loraTrainer.libraryDir()) }));
         if (req.method === 'POST' && sub === '/scan') { const input = await body(req, 16 * 1024); return run(() => loraTrainer.scan(text(input.dir, 1000).trim()).catch((error) => { throw Object.assign(error, { status: 400 }); })); }
-        if (req.method === 'POST' && sub === '/start') { const input = await body(req, 16 * 1024); return run(() => loraTrainer.start({ ...input, sourceDir: text(input.sourceDir, 1000) })); }
+        if (req.method === 'POST' && sub === '/start') { const input = await body(req, 16 * 1024); return run(() => loraTrainer.start({ ...input, sourceDir: text(input.sourceDir, 1000), files: Array.isArray(input.files) ? input.files.slice(0, 1000).map((name) => text(name, 300)) : null })); }
         if (req.method === 'POST' && sub === '/cancel') return run(() => loraTrainer.cancel());
         if (req.method === 'POST' && sub === '/ab') return run(() => loraTrainer.abPreview());
         if (req.method === 'POST' && sub === '/finalize') { const input = await body(req, 4 * 1024); return run(() => loraTrainer.finalize(text(input.choice, 8))); }
