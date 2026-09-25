@@ -2130,6 +2130,9 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
   const [referenceText, setReferenceText] = useState('');
   const [ttsVoice, setTtsVoice] = useState('F1');
   const [ttsStyle, setTtsStyle] = useState('');
+  // "전처리": digits / capital abbreviations are written out in Hangul before a local model reads them (remembered per browser)
+  const [ttsPreprocess, setTtsPreprocess] = useState(() => { try { return localStorage.getItem('songyue2-tts-preprocess') !== '0'; } catch { return true; } });
+  useEffect(() => { try { localStorage.setItem('songyue2-tts-preprocess', ttsPreprocess ? '1' : '0'); } catch { /* per-browser convenience only */ } }, [ttsPreprocess]);
   const [previewing, setPreviewing] = useState(false);
   const [typecastVoices, setTypecastVoices] = useState<TypecastVoice[]>([]);
   const [typecastConfigured, setTypecastConfigured] = useState<boolean | null>(null);
@@ -2711,7 +2714,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
         setWarningText([result.voiceName ? `설명에 맞춰 Typecast 목소리 "${result.voiceName}"를 자동 선택했습니다.` : '', result.segmentCount > 1 ? `긴 텍스트를 ${result.segmentCount}개 조각으로 나눠 생성한 뒤 이어붙였습니다.` : ''].filter(Boolean).join(' '));
         await showResult(result.dataUrl);
       } else if (isTts) {
-        const result = await api<{ dataUrl: string; segmentCount: number; referenceText?: string }>('/audio-tools/tts', 'POST', { family: ttsFamily, mode: ttsMode, size: ttsSize, precision: ttsPrecision, text: ttsText, description: ttsDescription, voiceId: ttsVoice, style: ttsStyle, language: speechLanguage, referenceDataUrl: ttsMode === 'ref' ? audioDataUrl : undefined, referenceText: ttsMode === 'ref' ? referenceText : undefined });
+        const result = await api<{ dataUrl: string; segmentCount: number; referenceText?: string }>('/audio-tools/tts', 'POST', { family: ttsFamily, mode: ttsMode, size: ttsSize, precision: ttsPrecision, text: ttsText, description: ttsDescription, voiceId: ttsVoice, style: ttsStyle, normalize: ttsPreprocess, language: speechLanguage, referenceDataUrl: ttsMode === 'ref' ? audioDataUrl : undefined, referenceText: ttsMode === 'ref' ? referenceText : undefined });
         if (result.referenceText) setReferenceText(result.referenceText);
         if (result.segmentCount > 1) setWarningText(`긴 텍스트를 ${result.segmentCount}개 문장 조각으로 나눠 생성한 뒤 이어붙였습니다.`);
         await showResult(result.dataUrl);
@@ -2797,7 +2800,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
           <div className="audio-tools-model-switch two-rows" role="group" aria-label="TTS 모델">
             {[...ttsModels.filter(family => ttsVariantsFor(ttsModels, family.id, ttsMode).length > 0), ...(ttsMode !== 'preset' && typecastAvailable ? [{ id: 'typecast', label: 'Typecast (클라우드)' }] : [])].map(family => {
               const missing = family.id !== 'typecast' && !familyInstalled(ttsVariantsFor(ttsModels, family.id, ttsMode));
-              return <button key={family.id} type="button" className={ttsFamily === family.id ? 'active' : ''} aria-pressed={ttsFamily === family.id} title={missing ? '모델 다운로드가 필요합니다' : undefined} style={missing ? { opacity: 0.6 } : undefined} onClick={() => setTtsFamily(family.id)} disabled={running}>{family.label}</button>;
+              return <button key={family.id} type="button" className={`${ttsFamily === family.id ? 'active' : ''}${missing ? ' model-missing' : ''}`} aria-pressed={ttsFamily === family.id} title={missing ? '모델 다운로드가 필요합니다' : undefined} onClick={() => setTtsFamily(family.id)} disabled={running}>{family.label}</button>;
             })}
           </div>
           {ttsFamily !== 'typecast' && ttsModels.length > 0 && !familyInstalled(ttsVariantsFor(ttsModels, ttsFamily, ttsMode)) && <span className="field-hint warning">{ttsModels.find(family => family.id === ttsFamily)?.label} 모델은 아직 내려받지 않았습니다. 아래 "모델 받기" 버튼을 눌러 다운로드해 주세요.</span>}
@@ -2834,7 +2837,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
           <div className="audio-tools-model-switch" role="group" aria-label="음성 인식 (STT) 모델">
             {asrModels.map(family => {
               const missing = !familyInstalled(family.variants);
-              return <button key={family.id} type="button" className={asrFamily === family.id ? 'active' : ''} aria-pressed={asrFamily === family.id} title={missing ? '모델 다운로드가 필요합니다' : undefined} style={missing ? { opacity: 0.6 } : undefined} onClick={() => setAsrFamily(family.id)} disabled={running}>{family.label}</button>;
+              return <button key={family.id} type="button" className={`${asrFamily === family.id ? 'active' : ''}${missing ? ' model-missing' : ''}`} aria-pressed={asrFamily === family.id} title={missing ? '모델 다운로드가 필요합니다' : undefined} onClick={() => setAsrFamily(family.id)} disabled={running}>{family.label}</button>;
             })}
           </div>
           {asrFamilyInfo && !familyInstalled(asrFamilyInfo.variants) && <span className="field-hint warning">{asrFamilyInfo.label} 모델은 아직 내려받지 않았습니다. 아래 "모델 받기" 버튼을 눌러 다운로드해 주세요.</span>}
@@ -2930,7 +2933,7 @@ function AudioToolsPage({ notify }: { notify: (text: string, error?: boolean) =>
             <span className="field-hint">미리듣기는 짧은 샘플 문장을 한 번 생성해 저장해 두며, 같은 목소리는 다음부터 바로 재생됩니다. 모델이 설치되어 있어야 합니다.</span>
           </label>}
           {!isTypecast && ttsMode === 'design' && <label className="at-field">음색 설명<Input type="text" value={ttsDescription} onChange={event => setTtsDescription(event.target.value)} placeholder="예) 따뜻하고 부드러운 남성 재즈 보컬" disabled={running}/></label>}
-          <label className="at-field">말할 내용<Textarea rows={5} className="at-textarea" value={ttsText} onChange={event => setTtsText(event.target.value)} placeholder="여러 줄로 입력해 주세요. 실제 발화할 텍스트입니다." disabled={running}/></label>
+          <label className="at-field"><span className="at-field-head">말할 내용{!isTypecast && <span className="at-preprocess" title="체크하면 숫자와 대문자 약어(2024, AI, TTS 등)를 한글로 풀어 읽게 합니다. 체크를 끄면 입력한 글을 그대로 모델에 넘깁니다."><input type="checkbox" checked={ttsPreprocess} disabled={running} onChange={event => setTtsPreprocess(event.target.checked)}/>전처리</span>}</span><Textarea rows={5} className="at-textarea" value={ttsText} onChange={event => setTtsText(event.target.value)} placeholder="여러 줄로 입력해 주세요. 실제 발화할 텍스트입니다." disabled={running}/></label>
           {!isTypecast && ttsMode === 'ref' && <label className="at-field">참조 목소리 텍스트 (선택)<Input type="text" value={referenceText} onChange={event => setReferenceText(event.target.value)} placeholder="참조 오디오에서 말하는 내용" disabled={running}/><span className="field-hint">비워 두면 Qwen3는 참조 오디오를 Qwen3-ASR로 자동으로 받아써서 채웁니다(ASR 모델이 없으면 목소리 특징만 추출). CosyVoice3는 비워 둘 때 cross_lingual 방식으로 동작하며 깨끗한 참조에서 더 안정적입니다.</span></label>}
           {!isTypecast && <label className="at-field">발화 언어<select value={speechLanguage} onChange={event => setSpeechLanguage(event.target.value as 'auto' | 'en' | 'ko')} disabled={running}><option value="auto">자동 (내용 문자에 맞춤)</option><option value="ko">한국어</option><option value="en">English</option></select><span className="field-hint">긴 텍스트는 문장 단위로 나눠 생성한 뒤 이어붙입니다. Qwen3-TTS는 한국어를 고르면 섞인 영어 문장을 생략할 수 있으니 혼합 문장은 자동을 권장합니다.</span></label>}
           <p className="field-hint at-run-summary">실행: {tool.description}</p>
