@@ -1338,7 +1338,7 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
             <div className="pp-fx-presetrow">
               <div className="pp-preset-controls pp-fx-presets">
                 <select className="pp-preset-select" value={effectPreset} onChange={event => applyEffectPreset(event.target.value)} aria-label="FX · 리버브 프리셋">
-                  <option value=""></option>
+                  <option value="" hidden></option>
                   {sortedNames(Object.keys(FX_PRESETS)).map(name => <option key={name} value={name}>{name}</option>)}
                   {Object.keys(effectPresets).length > 0 && <optgroup label="저장한 프리셋">{sortedNames(Object.keys(effectPresets)).map(name => <option key={name} value={name}>{name}</option>)}</optgroup>}
                 </select>
