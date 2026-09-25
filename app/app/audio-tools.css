@@ -59,11 +59,11 @@
 .audio-tools-model-switch.two-rows button { padding: 9px 6px; border: 1px solid #3b493d; border-radius: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* a model whose files are not installed: black button with gray text (still selectable, it explains the download) */
-.audio-tools-model-switch button.model-missing { background: #0b0d0b; color: #6f776e; }
+.audio-tools-model-switch button.model-missing { background: #0b0d0b; color: #4d534c; }
 .audio-tools-model-switch button.model-missing.active { background: #161a16; color: #8b938a; }
 
 .at-field-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .at-preprocess { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: #cfe0c8; cursor: pointer; }
 .at-preprocess input { width: 15px; height: 15px; accent-color: #7fb069; }
 
-.audio-tools-model-switch button.model-missing:disabled { cursor: not-allowed; color: #4d534c; }
+.audio-tools-model-switch button.model-missing:disabled { cursor: not-allowed; }
