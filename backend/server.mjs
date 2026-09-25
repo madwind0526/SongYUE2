@@ -2417,7 +2417,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         const input = await body(req, 8 * 1024);
         const name = text(input.name, 120).trim();
         if (!name) throw fail(400, '프리셋 이름이 필요합니다.');
-        const range = { threshold: [-60, 0], ratio: [1, 20], attack: [1, 100], release: [10, 1000], makeup: [0, 24] };
+        const range = { threshold: [-100, 0], knee: [0, 40], ratio: [1, 20], attack: [0, 1], release: [0, 1] };
         const values = input.values && typeof input.values === 'object' ? input.values : {};
         for (const [key, [min, max]] of Object.entries(range)) if (!(typeof values[key] === 'number' && Number.isFinite(values[key]) && values[key] >= min && values[key] <= max)) throw fail(400, '컴프레서 값이 올바르지 않습니다.');
         const preset = { name, values: Object.fromEntries(Object.keys(range).map((key) => [key, values[key]])) };

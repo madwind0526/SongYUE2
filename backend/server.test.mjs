@@ -2255,7 +2255,7 @@ test('컴프레서 프리셋: 저장, 목록, 삭제와 값 범위 검사', asyn
   const base = `http://127.0.0.1:${server.address().port}`;
   t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
   const call = async (route, method = 'GET', payload) => { const response = await fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) }); return { status: response.status, data: await response.json() }; };
-  const values = { threshold: -20, ratio: 4, attack: 10, release: 200, makeup: 3 };
+  const values = { threshold: -40, knee: 5, ratio: 7, attack: 0.002, release: 0.1 };
   assert.equal((await call('/api/compressor-presets', 'POST', { name: '', values })).status, 400);
   assert.equal((await call('/api/compressor-presets', 'POST', { name: '나쁜 값', values: { ...values, ratio: 50 } })).status, 400);
   assert.equal((await call('/api/compressor-presets', 'POST', { name: '내 컴프레서', values })).status, 200);

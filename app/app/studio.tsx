@@ -172,20 +172,21 @@ type PostProcessParams = { eq: number[]; masterVolume: number; eqEnabled: boolea
   silenceOn: boolean; silenceDb: number;
   fadeOn: boolean; fadeInSec: number; fadeOutSec: number;
   playOn: boolean; speed: number; reverseOn: boolean;
-  // Compressor (5 knobs; ratio 1:1 = no compression)
-  compOn: boolean; compThreshold: number; compRatio: number; compAttack: number; compRelease: number; compMakeup: number }; // speed: 0.1 .. 5.0, 1.0 = unchanged
-const PP_EXTRA_DEFAULTS = { volumeOn: true, gainDb: 0, normalizeDb: -1, limiterDb: -1, silenceOn: true, silenceDb: -50, fadeOn: true, fadeInSec: 0, fadeOutSec: 0, playOn: true, speed: 1, reverseOn: false, compOn: true, compThreshold: -24, compRatio: 1, compAttack: 10, compRelease: 200, compMakeup: 0 };
+  // Compressor: the same five values as Studio's audio editor (threshold dB, knee dB, ratio :1, attack s, release s); ratio 1:1 = no compression
+  compOn: boolean; compThreshold: number; compKnee: number; compRatio: number; compAttack: number; compRelease: number }; // speed: 0.1 .. 5.0, 1.0 = unchanged
+const PP_EXTRA_DEFAULTS = { volumeOn: true, gainDb: 0, normalizeDb: -1, limiterDb: -1, silenceOn: true, silenceDb: -50, fadeOn: true, fadeInSec: 0, fadeOutSec: 0, playOn: true, speed: 1, reverseOn: false, compOn: true, compThreshold: -24, compKnee: 30, compRatio: 1, compAttack: 0.003, compRelease: 0.25 };
 const PP_DEFAULT_PARAMS: PostProcessParams = { eq: Array(10).fill(0), masterVolume: 100, eqEnabled: true, fxEnabled: true, reverbEchoEnabled: true, clarity: 0, spaciousness: 0, surround: 0, dynamicBoost: 0, bassBoost: 0, reverbAmount: 0, reverbLength: 50, echoAmount: 0, echoDelayMs: 300, ...PP_EXTRA_DEFAULTS };
-// Compressor: five values (threshold dB, ratio :1, attack ms, release ms, make-up dB). "끔" = ratio 1:1.
-type CompressorValues = { threshold: number; ratio: number; attack: number; release: number; makeup: number };
+// Compressor: the five values of Studio's audio editor (threshold dB, knee dB, ratio :1, attack s, release s) and its presets
+// ("Classic", "Light", "Dashed Distortion", "Chaotic Distortion"), played by the browser's compressor node like Studio does.
+type CompressorValues = { threshold: number; knee: number; ratio: number; attack: number; release: number };
+const COMPRESSOR_OFF = '끔 (1:1)';
 const COMPRESSOR_PRESETS: Record<string, CompressorValues> = {
-  '끔 (1:1)': { threshold: -24, ratio: 1, attack: 10, release: 200, makeup: 0 },
-  '부드럽게': { threshold: -18, ratio: 2, attack: 20, release: 250, makeup: 2 },
-  '보컬': { threshold: -20, ratio: 3, attack: 8, release: 150, makeup: 4 },
-  '단단하게': { threshold: -26, ratio: 6, attack: 5, release: 120, makeup: 6 },
-  '마스터 글루': { threshold: -14, ratio: 2, attack: 30, release: 300, makeup: 1 },
+  [COMPRESSOR_OFF]: { threshold: -24, knee: 30, ratio: 1, attack: 0.003, release: 0.25 },
+  'Classic': { threshold: -40, knee: 5, ratio: 7, attack: 0.002, release: 0.1 },
+  'Light': { threshold: -6, knee: 2, ratio: 2.5, attack: 0.002, release: 0.05 },
+  'Dashed Distortion': { threshold: -45, knee: 26, ratio: 2.05, attack: 0.233, release: 0 },
+  'Chaotic Distortion': { threshold: -60, knee: 14, ratio: 11.07, attack: 0.036, release: 0 },
 };
-const COMPRESSOR_KEYS = ['compThreshold', 'compRatio', 'compAttack', 'compRelease', 'compMakeup'] as const;
 async function loadCompressorPresets(): Promise<Record<string, CompressorValues>> {
   try {
     const list = await api<{ name: string; values: CompressorValues }[]>('/compressor-presets');
@@ -282,21 +283,32 @@ function buildProcessingGraph(ctx: BaseAudioContext, source: AudioNode, params: 
   delay.connect(echoWet);
   const master = ctx.createGain();
   master.gain.value = Math.max(0, params.masterVolume) / 100;
-  dry.connect(master);
-  reverbWet.connect(master);
-  echoWet.connect(master);
+  const mix = ctx.createGain();
+  dry.connect(mix);
+  reverbWet.connect(mix);
+  echoWet.connect(mix);
+  if (params.compOn && params.compRatio > 1) {
+    // Studio's compressor: the browser's compressor node with the five values of its dialog
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = params.compThreshold;
+    comp.knee.value = params.compKnee;
+    comp.ratio.value = params.compRatio;
+    comp.attack.value = params.compAttack;
+    comp.release.value = params.compRelease;
+    mix.connect(comp);
+    comp.connect(master);
+  } else mix.connect(master);
   return master;
 }
 
-// Extra stage on the rendered sound: silence removal -> reverse -> speed -> compressor -> gain -> peak normalize -> limiter -> fades.
+// Extra stage on the rendered sound: silence removal -> reverse -> speed -> gain -> peak normalize -> limiter -> fades. (The compressor is part of the effect chain above.)
 // Returns the buffer itself when nothing is switched on, so the original processing path is untouched.
 function finishBuffer(input: AudioBuffer, p: PostProcessParams): AudioBuffer {
   const useVolume = p.volumeOn;
   const useFade = p.fadeOn && (p.fadeInSec > 0 || p.fadeOutSec > 0);
   const useSpeed = p.playOn && p.speed !== 1;
   const useReverse = p.playOn && p.reverseOn;
-  const useComp = p.compOn && p.compRatio > 1;
-  if (!(useVolume || useFade || useSpeed || useReverse || useComp || p.silenceOn)) return input;
+  if (!(useVolume || useFade || useSpeed || useReverse || p.silenceOn)) return input;
   const rate = input.sampleRate;
   const channels = input.numberOfChannels;
   let data = Array.from({ length: channels }, (_, ch) => input.getChannelData(ch).slice());
@@ -337,28 +349,6 @@ function finishBuffer(input: AudioBuffer, p: PostProcessParams): AudioBuffer {
     const outLength = Math.max(1, Math.round(length / factor));
     data = data.map(channel => { const next = new Float32Array(outLength); for (let i = 0; i < outLength; i++) { const pos = i * factor; const i0 = Math.floor(pos); const frac = pos - i0; const a0 = channel[i0] ?? 0; const a1 = channel[Math.min(length - 1, i0 + 1)] ?? a0; next[i] = a0 + (a1 - a0) * frac; } return next; });
     length = outLength;
-  }
-  if (p.compOn && p.compRatio > 1) {
-    // peak envelope follower (attack / release on the level of the loudest channel) -> gain computer with a 6 dB soft knee -> make-up gain
-    const threshold = p.compThreshold;
-    const ratio = p.compRatio;
-    const knee = 6;
-    const attack = Math.exp(-1 / (rate * Math.max(0.0005, p.compAttack / 1000)));
-    const release = Math.exp(-1 / (rate * Math.max(0.005, p.compRelease / 1000)));
-    const makeup = dbToLin(p.compMakeup);
-    let envelope = 0;
-    for (let i = 0; i < length; i++) {
-      let level = 0;
-      for (const channel of data) level = Math.max(level, Math.abs(channel[i]));
-      envelope = level > envelope ? attack * envelope + (1 - attack) * level : release * envelope + (1 - release) * level;
-      const x = 20 * Math.log10(envelope + 1e-9);
-      const over = x - threshold;
-      let reduction = 0;
-      if (2 * over > knee) reduction = (threshold + over / ratio) - x;
-      else if (2 * Math.abs(over) <= knee) reduction = (1 / ratio - 1) * Math.pow(over + knee / 2, 2) / (2 * knee);
-      const gain = dbToLin(reduction) * makeup;
-      for (const channel of data) channel[i] *= gain;
-    }
   }
   if (p.volumeOn && p.gainDb !== 0) { const g = dbToLin(p.gainDb); for (const channel of data) for (let i = 0; i < length; i++) channel[i] *= g; }
   if (p.volumeOn) {
@@ -635,7 +625,7 @@ function CompareSpectrogram({ buffer, fraction }: { buffer: AudioBuffer | null; 
 }
 
 function snapTo5(value: number): number { return Math.round(value / 5) * 5; }
-const snapToStep = (value: number, step: number) => Math.round(value / step) * step;
+const snapToStep = (value: number, step: number) => Number((Math.round(value / step) * step).toFixed(6));
 
 // horizontal slider row for the post-process dialog ("음량 · 시간"): label, slider, value + unit
 function PpSlider({ label, unit, value, min, max, step, onChange, off, offAtMin }: { label: string; unit: string; value: number; min: number; max: number; step: number; onChange: (next: number) => void; off?: boolean; offAtMin?: boolean }) {
@@ -714,7 +704,7 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
   const [processedPeaks, setProcessedPeaks] = useState<number[]>([]);
   const [eqPreset, setEqPreset] = useState<string>('평탄');
   const [compOpen, setCompOpen] = useState(false);
-  const [compPreset, setCompPreset] = useState<string>('끔 (1:1)');
+  const [compPreset, setCompPreset] = useState<string>(COMPRESSOR_OFF);
   const [customCompPresets, setCustomCompPresets] = useState<Record<string, CompressorValues>>({});
   const [customPresets, setCustomPresets] = useState<Record<string, number[]>>({});
   const [postprocessPreset, setPostprocessPreset] = useState('');
@@ -974,12 +964,21 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
     return () => document.removeEventListener('mousedown', close);
   }, [compOpen]);
   // compressor presets: built-in ones, ones saved in Setting/Compressor-preset
-  const compValues = (): CompressorValues => ({ threshold: params.compThreshold, ratio: params.compRatio, attack: params.compAttack, release: params.compRelease, makeup: params.compMakeup });
+  const compValues = (): CompressorValues => ({ threshold: params.compThreshold, knee: params.compKnee, ratio: params.compRatio, attack: params.compAttack, release: params.compRelease });
+  function changeComp(patch: Partial<PostProcessParams>) {
+    setCompPreset(PP_CUSTOM_PRESET);
+    setParams(previous => {
+      const next = { ...previous, ...patch };
+      if (previous.compRatio <= 1 && !('compRatio' in patch)) next.compRatio = 4;
+      scheduleRender(next);
+      return next;
+    });
+  }
   function applyCompPreset(name: string) {
     setCompPreset(name);
     const preset = COMPRESSOR_PRESETS[name] || customCompPresets[name];
     if (!preset) return;
-    setParams(previous => { const next = { ...previous, compThreshold: preset.threshold, compRatio: preset.ratio, compAttack: preset.attack, compRelease: preset.release, compMakeup: preset.makeup }; scheduleRender(next); return next; });
+    setParams(previous => { const next = { ...previous, compThreshold: preset.threshold, compKnee: preset.knee, compRatio: preset.ratio, compAttack: preset.attack, compRelease: preset.release }; scheduleRender(next); return next; });
   }
   async function saveCompPreset() {
     const name = window.prompt('저장할 컴프레서 프리셋 이름을 입력하세요', compPreset in COMPRESSOR_PRESETS ? '' : compPreset)?.trim();
@@ -996,8 +995,7 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
     try {
       await api(`/compressor-presets?name=${encodeURIComponent(name)}`, 'DELETE');
       setCustomCompPresets(previous => { const next = { ...previous }; delete next[name]; return next; });
-      setCompPreset('끔 (1:1)');
-      applyCompPreset('끔 (1:1)');
+      applyCompPreset(COMPRESSOR_OFF);
       notify(`"${name}" 프리셋을 삭제했습니다.`);
     } catch (error) { notify((error as Error).message, true); }
   }
@@ -1306,7 +1304,7 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
           </div>
           {compOpen && <div className={`pp-comp-panel${params.compOn ? '' : ' pp-off'}`}>
             <div className="pp-comp-head">
-              <span className="pp-panel-title">Compressor</span>
+              <span className="pp-panel-title">Compressor{rendering ? <em className="pp-comp-note"> · 파형 다시 만드는 중…</em> : params.compRatio <= 1 ? <em className="pp-comp-note"> · Ratio 1:1은 효과가 없습니다</em> : null}</span>
               <div className="pp-preset-controls">
                 <select className="pp-preset-select" value={compPreset} onChange={event => applyCompPreset(event.target.value)} aria-label="컴프레서 프리셋">
                   {Object.keys(COMPRESSOR_PRESETS).map(name => <option key={name} value={name}>{name}</option>)}
@@ -1319,11 +1317,11 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
               </div>
             </div>
             <div className="pp-comp-knobs">
-              <Knob label="Threshold (dB)" off={!params.compOn} value={params.compThreshold} min={-60} max={0} step={1} onChange={value => { setCompPreset(PP_CUSTOM_PRESET); updateParam('compThreshold', value); }} variant="fx"/>
-              <Knob label="Ratio (:1)" off={!params.compOn} value={params.compRatio} min={1} max={20} step={0.5} onChange={value => { setCompPreset(PP_CUSTOM_PRESET); updateParam('compRatio', value); }} variant="fx"/>
-              <Knob label="Attack (ms)" off={!params.compOn} value={params.compAttack} min={1} max={100} step={1} onChange={value => { setCompPreset(PP_CUSTOM_PRESET); updateParam('compAttack', value); }} variant="reverb"/>
-              <Knob label="Release (ms)" off={!params.compOn} value={params.compRelease} min={10} max={1000} step={10} onChange={value => { setCompPreset(PP_CUSTOM_PRESET); updateParam('compRelease', value); }} variant="reverb"/>
-              <Knob label="Makeup (dB)" off={!params.compOn} value={params.compMakeup} min={0} max={24} step={1} onChange={value => { setCompPreset(PP_CUSTOM_PRESET); updateParam('compMakeup', value); }} variant="fx"/>
+              <Knob label="Threshold (dB)" off={!params.compOn} value={params.compThreshold} min={-100} max={0} step={1} onChange={value => changeComp({ compThreshold: value })} variant="fx"/>
+              <Knob label="Knee (dB)" off={!params.compOn} value={params.compKnee} min={0} max={40} step={1} onChange={value => changeComp({ compKnee: value })} variant="fx"/>
+              <Knob label="Ratio (:1)" off={!params.compOn} value={params.compRatio} min={1} max={20} step={0.01} onChange={value => changeComp({ compRatio: value })} variant="fx"/>
+              <Knob label="Attack (초)" off={!params.compOn} value={params.compAttack} min={0} max={1} step={0.001} onChange={value => changeComp({ compAttack: value })} variant="reverb"/>
+              <Knob label="Release (초)" off={!params.compOn} value={params.compRelease} min={0} max={1} step={0.001} onChange={value => changeComp({ compRelease: value })} variant="reverb"/>
             </div>
           </div>}
         </div>
