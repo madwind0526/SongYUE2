@@ -188,3 +188,5 @@ button.adapter-card, label.adapter-card { cursor: pointer; }
 .adapter-pickbox input { width: 16px; height: 16px; accent-color: #7fb069; }
 .adapter-pick-footer { position: sticky; bottom: 0; display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 12px 4px; margin-top: auto; background: #161a16; border-top: 1px solid #2b332c; }
 .adapter-pick-footer span { margin-right: auto; color: #cfe0c8; font-size: 13px; }
+/* picking mode: the card fills the wrapper, so every card in a row has the same size */
+.adapter-pickwrap > .adapter-card { flex: 1; height: auto; }
