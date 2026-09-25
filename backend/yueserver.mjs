@@ -21,6 +21,9 @@ export function yueServerPaths(root, precision = 'q8') {
   };
 }
 
+// The instrumental (no vocals) LoRA: the preset with catalog id "instrumental", or any adapter with "inst" in its name (e.g. ar_lora_inst_v3abc).
+export const isInstrumentalAdapter = (item) => item?.source?.catalogId === 'instrumental' || /inst/i.test(item?.name || '');
+
 const exists = (file) => stat(file).then(() => true, () => false);
 
 // One adapter = one folder with an adapter_config.json and a .safetensors file. The AR (planning) adapters carry

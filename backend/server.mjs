@@ -15,7 +15,7 @@ import { searchRvcVoices, downloadRvcVoice, listInstalledRvcVoices, resolveUserR
 import { TYPECAST_LANGUAGES, typecastSubscription, listTypecastVoices, typecastSpeak, recommendTypecastVoice, cloneTypecastVoice, deleteTypecastVoice, TypecastError } from './typecast.mjs';
 import { Worker } from 'node:worker_threads';
 import { lyricLines, detectLanguage, alignLyrics, toLrc } from './lyricsync.mjs';
-import { YUE_SERVER_PORT, yueServerPaths, yuePrecisionFor, listAdapters, normalizeAdapterSelection, toEngineAdapters, synthesize as yueServerSynthesize, probeAdapters, fileExists as yueFileExists } from './yueserver.mjs';
+import { YUE_SERVER_PORT, yueServerPaths, yuePrecisionFor, isInstrumentalAdapter, listAdapters, normalizeAdapterSelection, toEngineAdapters, synthesize as yueServerSynthesize, probeAdapters, fileExists as yueFileExists } from './yueserver.mjs';
 import { searchHub, hubDetail, installHubUnits, installCatalogEntry, loadCatalog, catalogSummary, importLocalFiles, updateMeta } from './adapters.mjs';
 import { runPolishChain, normalizePolishSettings, enabledStages } from './postfx/chain.mjs';
 import { startRealtimeVcProcess, REALTIME_CHUNK_SAMPLES, REALTIME_INPUT_RATE } from './realtimevc.mjs';
@@ -474,6 +474,11 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     if (project.abc && project.abc.trim() && project.cot === 'off') throw fail(400, '악보를 사용하려면 작곡 계획을 "멜로디 계획" 또는 "멜로디와 코드 계획"으로 설정해 주세요.');
     const adapters = normalizeAdapterSelection(project.adapters, await listAdapters(paths.adapters));
     if (!adapters.length) throw fail(400, '선택한 LoRA가 설치되어 있지 않습니다. models/yue-adapters 폴더를 확인해 주세요.');
+    // "악기만" needs the instrumental LoRA among the chosen ones; other LoRAs may be combined with it
+    if (project.instrumental) {
+      const installed = await listAdapters(paths.adapters);
+      if (!adapters.some((choice) => isInstrumentalAdapter(installed.find((item) => item.name === choice.name)))) throw fail(400, '"악기만"으로 만들 때는 연주곡(Instrumental) LoRA를 함께 사용해 주세요. LoRA 선택에서 연주곡 LoRA를 추가하거나, "보컬+악기"로 바꿔 주세요.');
+    }
     // "악기만": the instrumental LoRA wants section tags only (no lyric lines); an empty result becomes a single [instrumental] tag.
     const instrumentalLyrics = project.lyrics.split(/\r?\n/).filter((line) => /^\s*\[[^\]]+\]\s*$/.test(line)).join('\n') || '[instrumental]';
     const request = {

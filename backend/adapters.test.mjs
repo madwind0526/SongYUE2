@@ -206,9 +206,17 @@ test('API: adapters are listed, edited and deleted; songs with adapters are made
   assert.equal(fake.requests[0].output_format, 'wav16');
   assert.equal((await readFile(path.join(root, 'library', 'music', 'LoRA 곡.wav'))).subarray(0, 4).toString(), 'RIFF');
   // "instrumental" + LoRA is allowed now: only the section tags of the lyrics go to the engine, the plan defaults to melody
-  assert.equal((await call('/api/generate', 'POST', { projectId: instrumental.id })).status, 200);
+  // ... but only together with the instrumental LoRA
+  const refused = await call('/api/generate', 'POST', { projectId: instrumental.id });
+  assert.equal(refused.status, 400);
+  assert.match(refused.data.error, /연주곡/);
+  await mkdir(path.join(root, 'models', 'yue-adapters', 'ar_lora_inst_v3abc'), { recursive: true });
+  await writeFile(path.join(root, 'models', 'yue-adapters', 'ar_lora_inst_v3abc', 'a.safetensors'), 'w');
+  const withInst = (await call('/api/projects', 'POST', { title: '악기 LoRA 2', lyrics: '[verse]'+String.fromCharCode(10)+'가사', style: 'rock', modelId: 'yue2-q8', instrumental: true, adapters: [{ name: 'rock' }, { name: 'ar_lora_inst_v3abc' }] })).data;
+  assert.equal((await call('/api/generate', 'POST', { projectId: withInst.id })).status, 200);
   assert.equal(fake.requests[1].lyrics, '[verse]');
   assert.match(fake.requests[1].style, /instrumental, no vocals/);
+  await rm(path.join(root, 'models', 'yue-adapters', 'ar_lora_inst_v3abc'), { recursive: true, force: true });
   // rename / notes / delete
   const patched = await call('/api/adapters/rock', 'PATCH', { displayName: '내 록', note: '메모' });
   assert.equal(patched.data.displayName, '내 록');
