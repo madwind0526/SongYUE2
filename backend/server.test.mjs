@@ -2265,3 +2265,24 @@ test('컴프레서 프리셋: 저장, 목록, 삭제와 값 범위 검사', asyn
   assert.equal((await call(`/api/compressor-presets?name=${encodeURIComponent('내 컴프레서')}`, 'DELETE')).status, 200);
   assert.deepEqual((await call('/api/compressor-presets')).data, []);
 });
+
+test('이펙트 프리셋(EQ + FX Sound + 리버브/에코): 저장, 목록, 삭제와 값 검사', async t => {
+  resetEnv();
+  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-effect-'));
+  const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}) });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+  const call = async (route, method = 'GET', payload) => { const response = await fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) }); return { status: response.status, data: await response.json() }; };
+  const params = { eq: Array(10).fill(0), masterVolume: 100, eqEnabled: true, fxEnabled: false, reverbEchoEnabled: true, clarity: 10, spaciousness: 0, surround: 0, dynamicBoost: 0, bassBoost: 20, reverbAmount: 30, reverbLength: 50, echoAmount: 0, echoDelayMs: 300, compRatio: 9 };
+  assert.equal((await call('/api/effect-presets', 'POST', { name: '', params })).status, 400);
+  assert.equal((await call('/api/effect-presets', 'POST', { name: '나쁜 EQ', params: { ...params, eq: [1, 2] } })).status, 400);
+  assert.equal((await call('/api/effect-presets', 'POST', { name: '내 이펙트', params })).status, 200);
+  const list = (await call('/api/effect-presets')).data;
+  assert.equal(list.length, 1);
+  assert.equal(list[0].params.bassBoost, 20);
+  assert.equal(list[0].params.fxEnabled, false);
+  assert.equal('compRatio' in list[0].params, false, 'only EQ / FX / reverb values are stored');
+  assert.equal((await call(`/api/effect-presets?name=${encodeURIComponent('내 이펙트')}`, 'DELETE')).status, 200);
+  assert.deepEqual((await call('/api/effect-presets')).data, []);
+});

@@ -84,3 +84,16 @@
 .pp-comp-knobs{display:flex;justify-content:space-around;gap:10px}
 
 .pp-comp-note{font-style:normal;font-weight:400;font-size:10px;color:#9fbda7}
+
+/* FX panel: the 3x3 knobs (closer together on x) and the Compressor 3x2 next to it, same knob style */
+.pp-fx-body{display:flex;gap:10px;align-items:flex-start}
+.pp-fx-body .pp-knob-grid{grid-template-columns:repeat(3,62px);gap:14px 0;justify-items:center}
+.pp-fx-body .knob{width:62px}
+.pp-fx-body .pp-comp-block{padding-left:10px;border-left:1px solid #384038}
+.pp-legend-comp{background:#c9a35a}
+.knob-comp .knob-dial{--knob-color:#c9a35a;--knob-track:#463c28}
+.pp-comp-presets{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;width:62px}
+.pp-comp-presets .pp-preset-select{width:62px;font-size:9px;padding:2px}
+.pp-comp-preset-btns{display:flex;gap:4px;flex-wrap:wrap;justify-content:center}
+.pp-settings-sep{width:1px;height:18px;background:#3b453b;margin:0 4px}
+.pp-settings-io{flex-wrap:wrap}

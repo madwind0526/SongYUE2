@@ -279,6 +279,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   // library/setting: that folder is scanned as song drafts, and library/ is for song-related content only.
   const eqPresetsDir = () => path.join(root, 'Setting', 'EQ-preset');
   const compressorPresetsDir = () => path.join(root, 'Setting', 'Compressor-preset');
+  const effectPresetsDir = () => path.join(root, 'Setting', 'Effect-preset');
   const postprocessSettingsDir = () => path.join(root, 'Setting', 'PostProcess');
   const resolveConfigPath = (value, defaultRelative) => path.resolve(root, (value || '').trim() || defaultRelative);
   const resolveOptionalConfigPath = (value) => { const trimmed = (value || '').trim(); return trimmed ? path.resolve(root, trimmed) : ''; };
@@ -2403,6 +2404,36 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         const name = text(requestUrl.searchParams.get('name'), 120).trim();
         if (!name) throw fail(400, '프리셋 이름이 필요합니다.');
         const target = path.join(eqPresetsDir(), `${safeFilename(name)}.json`);
+        if (!(await exists(target))) throw fail(404, '프리셋을 찾을 수 없습니다.');
+        await unlink(target);
+        return send(200, { ok: true });
+      }
+      if (req.method === 'GET' && pathname === '/api/effect-presets') {
+        const dir = effectPresetsDir();
+        const files = await readdir(dir).catch(() => []);
+        const presets = await Promise.all(files.filter((name) => name.endsWith('.json')).map((name) => readJson(path.join(dir, name), null)));
+        return send(200, presets.filter(Boolean).sort((a, b) => a.name.localeCompare(b.name)));
+      }
+      if (req.method === 'POST' && pathname === '/api/effect-presets') {
+        // EQ + FX Sound + reverb / echo only (the compressor and the volume / time groups have their own settings)
+        const input = await body(req, 16 * 1024);
+        const name = text(input.name, 120).trim();
+        if (!name) throw fail(400, '프리셋 이름이 필요합니다.');
+        const source = input.params && typeof input.params === 'object' ? input.params : {};
+        const numbers = ['masterVolume', 'clarity', 'spaciousness', 'surround', 'dynamicBoost', 'bassBoost', 'reverbAmount', 'reverbLength', 'echoAmount', 'echoDelayMs'];
+        const flags = ['eqEnabled', 'fxEnabled', 'reverbEchoEnabled'];
+        if (!Array.isArray(source.eq) || source.eq.length !== 10 || !source.eq.every((value) => typeof value === 'number' && Number.isFinite(value))) throw fail(400, 'EQ 값이 올바르지 않습니다.');
+        const params = { eq: source.eq };
+        for (const key of numbers) { if (!(typeof source[key] === 'number' && Number.isFinite(source[key]))) throw fail(400, `${key} 값이 올바르지 않습니다.`); params[key] = source[key]; }
+        for (const key of flags) params[key] = source[key] !== false;
+        const preset = { name, params };
+        await saveJson(path.join(effectPresetsDir(), `${safeFilename(name)}.json`), preset);
+        return send(200, preset);
+      }
+      if (req.method === 'DELETE' && pathname === '/api/effect-presets') {
+        const name = text(requestUrl.searchParams.get('name'), 120).trim();
+        if (!name) throw fail(400, '프리셋 이름이 필요합니다.');
+        const target = path.join(effectPresetsDir(), `${safeFilename(name)}.json`);
         if (!(await exists(target))) throw fail(404, '프리셋을 찾을 수 없습니다.');
         await unlink(target);
         return send(200, { ok: true });
