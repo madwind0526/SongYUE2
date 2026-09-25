@@ -1274,7 +1274,7 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
               <Knob label="전체 볼륨" value={params.masterVolume} min={0} max={150} onChange={value => updateParam('masterVolume', value)}/>
               {visualizerEnabled && <div className="pp-visualizer-wrap">
                 <canvas ref={visualizerCanvasRef} className="pp-visualizer" width={220} height={180} aria-hidden="true"/>
-                {!isPlaying && <span className="pp-visualizer-label">SOUND<br/>FX</span>}
+                {!isPlaying && <span className="pp-visualizer-label">SOUND<br/>EFFECT</span>}
               </div>}
               <div className="pp-eq-footer-right">
                 <div className={params.eqEnabled ? 'pp-toggle-btn active' : 'pp-toggle-btn'}>
@@ -1303,13 +1303,25 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
                 <span><i className="pp-legend-dot pp-legend-reverb"/>리버브/에코</span>
                 <span><i className="pp-legend-dot pp-legend-comp"/>Compressor</span>
               </div>
-              <div className="pp-preset-controls">
+            </div>
+            <div className="pp-fx-presetrow">
+              <div className="pp-preset-controls pp-fx-presets">
                 <select className="pp-preset-select" value={effectPreset} onChange={event => applyEffectPreset(event.target.value)} aria-label="FX · 리버브 프리셋">
                   <option value="">FX · 리버브 프리셋</option>
                   {Object.keys(effectPresets).map(name => <option key={name} value={name}>{name}</option>)}
                 </select>
                 <button type="button" className="pp-preset-btn" title="현재 FX Sound · 리버브/에코 설정을 프리셋으로 저장" onClick={() => void saveEffectPreset()}><Save size={12}/></button>
                 {effectPresets[effectPreset] && <button type="button" className="pp-preset-btn" title={`"${effectPreset}" 프리셋 삭제`} onClick={() => void deleteEffectPreset(effectPreset)}><Trash2 size={12}/></button>}
+              </div>
+              <div className="pp-preset-controls pp-comp-presetbar">
+                <select className="pp-preset-select" value={compPreset} onChange={event => applyCompPreset(event.target.value)} aria-label="Compressor 프리셋">
+                  {Object.keys(COMPRESSOR_PRESETS).map(name => <option key={name} value={name}>{name}</option>)}
+                  {Object.keys(customCompPresets).length > 0 && <optgroup label="저장한 프리셋">{Object.keys(customCompPresets).map(name => <option key={name} value={name}>{name}</option>)}</optgroup>}
+                  {!(compPreset in COMPRESSOR_PRESETS) && !(compPreset in customCompPresets) && <option value={compPreset}>{compPreset}</option>}
+                </select>
+                <button type="button" className="pp-preset-btn" title="현재 Compressor 설정을 프리셋으로 저장" onClick={() => void saveCompPreset()}><Save size={12}/></button>
+                {customCompPresets[compPreset] && <button type="button" className="pp-preset-btn" title={`"${compPreset}" 프리셋 삭제`} onClick={() => void deleteCompPreset(compPreset)}><Trash2 size={12}/></button>}
+                <button type="button" className="pp-preset-btn" title="Compressor 초기화 (1:1)" onClick={resetComp}><RotateCcw size={12}/></button>
               </div>
             </div>
             <div className="pp-fx-body">
@@ -1331,18 +1343,6 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
                 <Knob label="Ratio (:1)" off={!params.compOn} value={params.compRatio} min={1} max={20} step={0.01} onChange={value => changeComp({ compRatio: value })} variant="comp"/>
                 <Knob label="Attack (초)" off={!params.compOn} value={params.compAttack} min={0} max={1} step={0.001} onChange={value => changeComp({ compAttack: value })} variant="comp"/>
                 <Knob label="Release (초)" off={!params.compOn} value={params.compRelease} min={0} max={1} step={0.001} onChange={value => changeComp({ compRelease: value })} variant="comp"/>
-                <div className="pp-comp-presets">
-                  <select className="pp-preset-select" value={compPreset} onChange={event => applyCompPreset(event.target.value)} aria-label="Compressor 프리셋">
-                    {Object.keys(COMPRESSOR_PRESETS).map(name => <option key={name} value={name}>{name}</option>)}
-                    {Object.keys(customCompPresets).length > 0 && <optgroup label="저장한 프리셋">{Object.keys(customCompPresets).map(name => <option key={name} value={name}>{name}</option>)}</optgroup>}
-                    {!(compPreset in COMPRESSOR_PRESETS) && !(compPreset in customCompPresets) && <option value={compPreset}>{compPreset}</option>}
-                  </select>
-                  <div className="pp-comp-preset-btns">
-                    <button type="button" className="pp-preset-btn" title="현재 Compressor 설정을 프리셋으로 저장" onClick={() => void saveCompPreset()}><Save size={12}/></button>
-                    {customCompPresets[compPreset] && <button type="button" className="pp-preset-btn" title={`"${compPreset}" 프리셋 삭제`} onClick={() => void deleteCompPreset(compPreset)}><Trash2 size={12}/></button>}
-                    <button type="button" className="pp-preset-btn" title="Compressor 초기화 (1:1)" onClick={resetComp}><RotateCcw size={12}/></button>
-                  </div>
-                </div>
               </div>
             </div>
             </div>

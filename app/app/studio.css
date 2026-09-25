@@ -102,3 +102,10 @@
 
 /* wider dialog so the knobs have room on x */
 .postprocess-dialog{width:1060px!important}
+
+/* Compressor knobs: 2 columns x 3 rows; the preset rows sit above their blocks */
+.pp-comp-grid{grid-template-columns:repeat(2,66px)!important}
+.pp-fx-presetrow{display:flex;align-items:center;gap:10px;margin:-2px 0 2px}
+.pp-fx-presets{width:230px;flex:none;display:flex;align-items:center;gap:4px}.pp-fx-presets .pp-preset-select{flex:1;min-width:0}
+.pp-comp-presetbar{flex:1;min-width:0;display:flex;align-items:center;gap:4px;padding-left:10px}.pp-comp-presetbar .pp-preset-select{flex:1;min-width:0}
+.postprocess-dialog{width:960px!important}
