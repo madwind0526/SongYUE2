@@ -187,6 +187,17 @@ const COMPRESSOR_PRESETS: Record<string, CompressorValues> = {
   'Light': { threshold: -6, knee: 2, ratio: 2.5, attack: 0.002, release: 0.05 },
   'Dashed Distortion': { threshold: -45, knee: 26, ratio: 2.05, attack: 0.233, release: 0 },
   'Chaotic Distortion': { threshold: -60, knee: 14, ratio: 11.07, attack: 0.036, release: 0 },
+  // starting points added for songs and speech (not from Studio): tune the knobs by ear
+  'Vocal Gentle': { threshold: -24, knee: 12, ratio: 3, attack: 0.005, release: 0.15 },
+  'Vocal Tight': { threshold: -28, knee: 6, ratio: 4, attack: 0.003, release: 0.1 },
+  'Bass Tight': { threshold: -30, knee: 6, ratio: 5, attack: 0.01, release: 0.2 },
+  'Drum Punch': { threshold: -20, knee: 4, ratio: 6, attack: 0.03, release: 0.08 },
+  'Mix Glue': { threshold: -18, knee: 20, ratio: 2, attack: 0.03, release: 0.25 },
+  'Master Gentle': { threshold: -12, knee: 30, ratio: 1.5, attack: 0.03, release: 0.3 },
+  'Loud Modern': { threshold: -30, knee: 10, ratio: 8, attack: 0.005, release: 0.12 },
+  'Peak Catch': { threshold: -6, knee: 0, ratio: 20, attack: 0.001, release: 0.05 },
+  'Speech Even': { threshold: -30, knee: 10, ratio: 4, attack: 0.005, release: 0.2 },
+  'Smooth Leveler': { threshold: -35, knee: 20, ratio: 3, attack: 0.02, release: 0.4 },
 };
 async function loadCompressorPresets(): Promise<Record<string, CompressorValues>> {
   try {
@@ -199,6 +210,23 @@ async function loadCompressorPresets(): Promise<Record<string, CompressorValues>
 type EffectValues = Pick<PostProcessParams, 'fxEnabled' | 'reverbEchoEnabled' | 'clarity' | 'spaciousness' | 'surround' | 'dynamicBoost' | 'bassBoost' | 'reverbAmount' | 'reverbLength' | 'echoAmount' | 'echoDelayMs'>;
 const EFFECT_KEYS = ['fxEnabled', 'reverbEchoEnabled', 'clarity', 'spaciousness', 'surround', 'dynamicBoost', 'bassBoost', 'reverbAmount', 'reverbLength', 'echoAmount', 'echoDelayMs'] as const;
 const pickEffectValues = (params: PostProcessParams): EffectValues => Object.fromEntries(EFFECT_KEYS.map(key => [key, params[key]])) as EffectValues;
+// built-in FX · 리버브 presets (starting points, tune by ear): FxSound values + reverb / echo values
+const fxPreset = (clarity: number, spaciousness: number, surround: number, dynamicBoost: number, bassBoost: number, reverbAmount: number, reverbLength: number, echoAmount: number, echoDelayMs: number): EffectValues => ({ fxEnabled: true, reverbEchoEnabled: true, clarity, spaciousness, surround, dynamicBoost, bassBoost, reverbAmount, reverbLength, echoAmount, echoDelayMs });
+const FX_PRESETS: Record<string, EffectValues> = {
+  '초기화 (Flat)': fxPreset(0, 0, 0, 0, 0, 0, 50, 0, 300),
+  'Vocal Presence': fxPreset(25, 10, 0, 20, 0, 12, 35, 0, 300),
+  'Bright Air': fxPreset(45, 25, 15, 0, -10, 8, 40, 0, 300),
+  'Warm Bass': fxPreset(-10, 0, 0, 15, 35, 0, 50, 0, 300),
+  'Lo-fi Warm': fxPreset(-35, 0, 0, 10, 20, 10, 30, 0, 300),
+  'Wide Stereo': fxPreset(10, 60, 45, 0, 0, 0, 50, 0, 300),
+  'Small Room': fxPreset(0, 5, 0, 0, 0, 25, 20, 0, 300),
+  'Plate Vocal': fxPreset(15, 10, 0, 10, 0, 30, 45, 0, 300),
+  'Concert Hall': fxPreset(0, 20, 10, 0, 0, 45, 80, 0, 300),
+  'Cathedral': fxPreset(-5, 25, 15, 0, 0, 65, 100, 0, 300),
+  'Slapback Echo': fxPreset(0, 0, 0, 0, 0, 8, 25, 35, 120),
+  'Dub Echo': fxPreset(0, 10, 0, 0, 10, 20, 50, 55, 450),
+  'Cinematic': fxPreset(10, 40, 30, 25, 20, 40, 75, 0, 300),
+};
 async function loadEffectPresets(): Promise<Record<string, EffectValues>> {
   try {
     const list = await api<{ name: string; params: EffectValues }[]>('/effect-presets');
@@ -972,7 +1000,7 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
   // EQ + FX Sound + reverb / echo presets
   function applyEffectPreset(name: string) {
     setEffectPreset(name);
-    const preset = effectPresets[name];
+    const preset = FX_PRESETS[name] || effectPresets[name];
     if (!preset) return;
     setParams(previous => { const next = { ...previous, ...preset }; scheduleRender(next); return next; });
   }
@@ -1308,7 +1336,8 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
               <div className="pp-preset-controls pp-fx-presets">
                 <select className="pp-preset-select" value={effectPreset} onChange={event => applyEffectPreset(event.target.value)} aria-label="FX · 리버브 프리셋">
                   <option value="">FX · 리버브 프리셋</option>
-                  {Object.keys(effectPresets).map(name => <option key={name} value={name}>{name}</option>)}
+                  {Object.keys(FX_PRESETS).map(name => <option key={name} value={name}>{name}</option>)}
+                  {Object.keys(effectPresets).length > 0 && <optgroup label="저장한 프리셋">{Object.keys(effectPresets).map(name => <option key={name} value={name}>{name}</option>)}</optgroup>}
                 </select>
                 <button type="button" className="pp-preset-btn" title="현재 FX Sound · 리버브/에코 설정을 프리셋으로 저장" onClick={() => void saveEffectPreset()}><Save size={12}/></button>
                 {effectPresets[effectPreset] && <button type="button" className="pp-preset-btn" title={`"${effectPreset}" 프리셋 삭제`} onClick={() => void deleteEffectPreset(effectPreset)}><Trash2 size={12}/></button>}
