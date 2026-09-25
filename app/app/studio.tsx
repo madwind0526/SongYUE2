@@ -1321,7 +1321,6 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
                 </select>
                 <button type="button" className="pp-preset-btn" title="현재 Compressor 설정을 프리셋으로 저장" onClick={() => void saveCompPreset()}><Save size={12}/></button>
                 {customCompPresets[compPreset] && <button type="button" className="pp-preset-btn" title={`"${compPreset}" 프리셋 삭제`} onClick={() => void deleteCompPreset(compPreset)}><Trash2 size={12}/></button>}
-                <button type="button" className="pp-preset-btn" title="Compressor 초기화 (1:1)" onClick={resetComp}><RotateCcw size={12}/></button>
               </div>
             </div>
             <div className="pp-fx-body">
