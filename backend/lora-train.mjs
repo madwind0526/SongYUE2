@@ -91,8 +91,10 @@ export async function finalizeTrainedLora({ libraryDir, adapterDir, existingAdap
   await rm(archived, { force: true });
   try { await rename(chosenFile, archived); } catch { await copyFile(chosenFile, archived); await rm(chosenFile, { force: true }); }
   if (otherFile) await rm(otherFile, { force: true });
-  let installedName = slug(name) || 'lora';
-  for (let suffix = 2; existingAdapterNames.includes(installedName); suffix += 1) installedName = `${slug(name) || 'lora'}-${suffix}`;
+  // the folder name is Latin only: the name when it has Latin letters, otherwise the trigger word (a Korean name has none)
+  const baseName = slug(name) || slug(trigger) || 'lora';
+  let installedName = baseName;
+  for (let suffix = 2; existingAdapterNames.includes(installedName); suffix += 1) installedName = `${baseName}-${suffix}`;
   const installDir = path.join(adapterDir, installedName);
   await mkdir(installDir, { recursive: true });
   const mode = await linkOrCopy(archived, path.join(installDir, `${installedName}.safetensors`));

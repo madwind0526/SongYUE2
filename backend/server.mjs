@@ -17,6 +17,8 @@ import { TYPECAST_LANGUAGES, typecastSubscription, listTypecastVoices, typecastS
 import { Worker } from 'node:worker_threads';
 import { lyricLines, detectLanguage, alignLyrics, toLrc } from './lyricsync.mjs';
 import { YUE_SERVER_PORT, yueServerPaths, yuePrecisionFor, isInstrumentalAdapter, listAdapters, normalizeAdapterSelection, toEngineAdapters, synthesize as yueServerSynthesize, probeAdapters, fileExists as yueFileExists } from './yueserver.mjs';
+import { createLoraTrainer } from './lora-trainer.mjs';
+import { listLoraLibrary } from './lora-train.mjs';
 import { searchHub, hubDetail, installHubUnits, installCatalogEntry, loadCatalog, catalogSummary, importLocalFiles, updateMeta } from './adapters.mjs';
 import { runPolishChain, normalizePolishSettings, enabledStages } from './postfx/chain.mjs';
 import { startRealtimeVcProcess, REALTIME_CHUNK_SAMPLES, REALTIME_INPUT_RATE } from './realtimevc.mjs';
@@ -1637,6 +1639,26 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     }
     throw fail(502, 'ComfyUI 엔진이 60초 안에 시작되지 않았습니다. 직접 실행되어 있는지 확인한 뒤 다시 시도해 주세요.');
   }
+  // LoRA training tab (ComfyUI trainer nodes): one run at a time, it takes the GPU like a song does
+  const loraTrainer = createLoraTrainer({
+    root, outputDirectory, fetchImpl, spawnImpl,
+    comfyEnginePath: () => resolveConfigPath(settings.comfyUiEnginePath, DEFAULT_COMFYUI_ENGINE_PATH),
+    ensureComfyUi: () => ensureComfyUiRunning(),
+    freeComfyUi: async () => {
+      const endpoint = settings.comfyUiEndpoint || DEFAULT_COMFYUI_ENDPOINT;
+      if (await comfyUiAlive(fetchImpl, endpoint)) await fetchImpl(`${endpoint}/free`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ unload_models: true, free_memory: true }) }).catch(() => {});
+    },
+    isBusy: () => generating,
+    setBusy: (on, label) => { generating = on; generationStatus = on ? { projectId: null, startedAt: Date.now(), expectedMs: 0, detail: label || '' } : null; },
+    adaptersDir: () => yueServerPaths(root).adapters,
+    listInstalledNames: async () => (await listAdapters(yueServerPaths(root).adapters)).map((item) => item.name),
+    measureSeconds: async (file) => (await measureDurationMs(file)) / 1000,
+    synthesizeSong: async (request) => {
+      const paths = yueServerPaths(root, 'q8');
+      const result = await yueServerSynthesize({ paths, base: `http://127.0.0.1:${yueServerPort}`, request, spawnImpl, fetchImpl: (url, init) => fetch(url, init) });
+      return result.audio;
+    },
+  });
   async function runComfyUi(project, file) {
     const preset = COMFYUI_MODELS[project.modelId];
     if (!preset) throw fail(400, '이 모델은 ComfyUI로 생성할 수 없습니다.');
@@ -2179,6 +2201,26 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           await updateMeta(path.join(paths.adapters, name), { verified });
           return send(200, { verified });
         } finally { generating = false; generationStatus = null; }
+      }
+      if (pathname.startsWith('/api/lora-train')) {
+        const sub = pathname.slice('/api/lora-train'.length);
+        const run = async (work) => { try { return send(200, await work()); } catch (error) { if (error?.status) throw fail(error.status, error.message); throw error; } };
+        if (req.method === 'GET' && sub === '/status') return run(async () => ({ readiness: await loraTrainer.readiness(), job: await loraTrainer.current(), busy: generating }));
+        if (req.method === 'GET' && sub === '/library') return run(async () => ({ items: await listLoraLibrary(loraTrainer.libraryDir()) }));
+        if (req.method === 'POST' && sub === '/scan') { const input = await body(req, 16 * 1024); return run(() => loraTrainer.scan(text(input.dir, 1000).trim()).catch((error) => { throw Object.assign(error, { status: 400 }); })); }
+        if (req.method === 'POST' && sub === '/start') { const input = await body(req, 16 * 1024); return run(() => loraTrainer.start({ ...input, sourceDir: text(input.sourceDir, 1000) })); }
+        if (req.method === 'POST' && sub === '/cancel') return run(() => loraTrainer.cancel());
+        if (req.method === 'POST' && sub === '/ab') return run(() => loraTrainer.abPreview());
+        if (req.method === 'POST' && sub === '/finalize') { const input = await body(req, 4 * 1024); return run(() => loraTrainer.finalize(text(input.choice, 8))); }
+        if (req.method === 'POST' && sub === '/discard') return run(() => loraTrainer.discard());
+        const abMatch = sub.match(/^\/ab\/(ema|raw)$/);
+        if (req.method === 'GET' && abMatch) {
+          const file = loraTrainer.abFile(abMatch[1]);
+          if (!file || !(await exists(file))) throw fail(404, '비교곡이 아직 없습니다.');
+          const data = await readFile(file);
+          res.writeHead(200, { 'Content-Type': 'audio/wav', 'Content-Length': String(data.length), 'Cache-Control': 'no-store' });
+          return res.end(data);
+        }
       }
       const adapterMatch = pathname.match(/^\/api\/adapters\/([^/]+)$/);
       if (adapterMatch && req.method === 'PATCH') {

@@ -9,7 +9,7 @@ const exists = (file) => stat(file).then(() => true, () => false);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function createLoraTrainer(context) {
-  const { root, outputDirectory, fetchImpl, spawnImpl, getSettings, comfyEnginePath, ensureComfyUi, setBusy, isBusy, adaptersDir, listInstalledNames, synthesizeSong, measureSeconds, now = () => Date.now() } = context;
+  const { root, outputDirectory, fetchImpl, spawnImpl, comfyEnginePath, ensureComfyUi, freeComfyUi = async () => {}, setBusy, isBusy, adaptersDir, listInstalledNames, synthesizeSong, measureSeconds, now = () => Date.now() } = context;
   let job = null;
   let socket = null;
   const libraryDir = () => path.join(root, 'library', 'Lora');
@@ -87,7 +87,11 @@ export function createLoraTrainer(context) {
           if (typeof event.data !== 'string') return;
           let message;
           try { message = JSON.parse(event.data); } catch { return; }
-          if (message.type === 'progress' && message.data?.max > 1 && job?.status !== 'review') touch({ status: 'training', step: message.data.value, total: message.data.max, message: '학습 중' });
+          if (message.type === 'progress' && message.data?.max > 1 && job?.status === 'training') {
+            // the encoder reports its own small counter (one step per song) before the training steps start
+            if (message.data.max === job.request.steps) touch({ step: message.data.value, total: message.data.max, message: '학습 중' });
+            else touch({ step: 0, message: `곡을 읽는 중 (${message.data.value}/${message.data.max})` });
+          }
         };
       } catch { socket = null; }
       const response = await fetchImpl(`${endpoint}/prompt`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt, client_id: clientId }) });
@@ -157,6 +161,7 @@ export function createLoraTrainer(context) {
     setBusy(true, 'LoRA 비교곡 만드는 중');
     const temp = [];
     try {
+      await freeComfyUi();
       touch({ ab: { status: 'making' } });
       const names = {};
       for (const [which, file] of [['ema', job.emaFile], ['raw', job.rawFile]]) {
@@ -201,7 +206,7 @@ export function createLoraTrainer(context) {
           trainedAt: new Date(job.startedAt).toISOString().slice(0, 10), chosen: choice === 'ema' ? 'EMA' : 'raw', emaRawDifference: job.difference,
           triggerWord: req.trigger, stage: 'sound (NAR) only', trainer: 'ComfyUI-YuE2-Trainer (Starnodes2024)', baseCheckpoint: TRAIN_CHECKPOINT,
           settings: { steps: req.steps, rank: req.rank, alpha: req.rank, learningRate: req.learningRate, clipSeconds: req.clipSeconds, optimizer: 'adamw_8bit', scheduler: 'cosine', emaDecay: 0.99, caption: req.caption || null },
-          sourceFolder: job.sourceDir, songCount: job.songs, minutes: Math.round((now() - job.startedAt) / 6000) / 10 + ' (training)',
+          sourceFolder: job.sourceDir, songCount: job.songs, trainingMinutes: Math.round((now() - job.startedAt) / 6000) / 10,
           license: 'YuE2 가중치는 CC BY-NC 4.0이라 이 LoRA도 비상업용으로만 써야 한다. 학습에 쓴 곡의 저작권과 사용 조건은 사용자가 책임진다.',
         },
         cleanupDirs: [jobDir(job.id)],

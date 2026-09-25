@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node scripts/start-studio.mjs",
     "build": "npm --prefix app run build",
-    "test": "node --test backend/server.test.mjs backend/postfx/postfx.test.mjs backend/lyricsync.test.mjs backend/adapters.test.mjs backend/speech-text.test.mjs",
+    "test": "node --test backend/server.test.mjs backend/postfx/postfx.test.mjs backend/lyricsync.test.mjs backend/adapters.test.mjs backend/speech-text.test.mjs backend/lora-train.test.mjs",
     "check": "npm --prefix app exec tsc -- --noEmit -p app/tsconfig.json",
     "models": "python scripts/download_models.py"
   }
