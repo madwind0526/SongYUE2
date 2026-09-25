@@ -109,3 +109,12 @@
 .pp-fx-presets{width:230px;flex:none;display:flex;align-items:center;gap:4px}.pp-fx-presets .pp-preset-select{flex:1;min-width:0}
 .pp-comp-presetbar{flex:1;min-width:0;display:flex;align-items:center;gap:4px;padding-left:10px}.pp-comp-presetbar .pp-preset-select{flex:1;min-width:0}
 .postprocess-dialog{width:960px!important}
+
+/* FX panel: the two knob groups are centred as a whole (equal room left and right) with a wider gap between them */
+.pp-fx-body{justify-content:center;gap:0}
+.pp-fx-body .pp-comp-block{margin-left:22px;padding-left:22px;border-left:1px solid #384038}
+.pp-fx-presetrow{justify-content:center;gap:0}
+.pp-fx-presets{margin-right:45px}
+.pp-comp-presetbar{flex:none;width:148px;padding-left:0}
+/* the legend (FxSound / 리버브/에코 / Compressor) is centred in the panel */
+.pp-fx-panel:not(.pp-extra-panel) .pp-fx-header{justify-content:center}.pp-fx-panel:not(.pp-extra-panel) .pp-fx-legend{justify-content:center;margin:0 auto}
