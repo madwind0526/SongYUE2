@@ -3660,6 +3660,8 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
   const [tab, setTab] = useState<'mine' | 'catalog' | 'hub'>('mine');
   // sorting of the Installed and Preset lists (favorites first / A-Z by default)
   const [mineSort, setMineSort] = useState('favorite');
+  const [mineCategory, setMineCategory] = useState('');
+  const [mineLanguage, setMineLanguage] = useState('');
   const [presetSort, setPresetSort] = useState('az');
   const [picked, setPicked] = useState<string[]>(picker?.selected || []);
   const [mine, setMine] = useState<AdapterList | null>(null);
@@ -3786,10 +3788,19 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
   const repoInstalled = (item: HubRepo) => Boolean(item.defaultPaths) && item.defaultPaths!.every(path => installedKeys.has(`${item.id}::${path}`));
   const categories = [...new Set((hub || []).flatMap(item => item.categories))];
   // the main languages get their own chip; every other language (and a repo that names none) is found under "기타"
-  const MAIN_LANGUAGES = ['한국어', '영어', '일본어', '중국어'];
+  const MAIN_LANGUAGES = ['한국어', '영어', '일본어'];
   const OTHER_LANGUAGE = '기타';
-  const languages = [...MAIN_LANGUAGES.filter(label => (hub || []).some(item => item.languages.includes(label))).sort(byText), ...((hub || []).some(item => item.languages.length === 0 || item.languages.some(label => !MAIN_LANGUAGES.includes(label))) ? [OTHER_LANGUAGE] : [])];
-  const matchesLanguage = (item: HubRepo) => !language || (language === OTHER_LANGUAGE ? item.languages.length === 0 || item.languages.some(label => !MAIN_LANGUAGES.includes(label)) : item.languages.includes(language));
+  const languageOptions = (items: { languages: string[] }[]) => [...MAIN_LANGUAGES.filter(label => items.some(item => item.languages.includes(label))).sort(byText), ...(items.some(item => item.languages.length === 0 || item.languages.some(label => !MAIN_LANGUAGES.includes(label))) ? [OTHER_LANGUAGE] : [])];
+  const languages = languageOptions(hub || []);
+  const matchesLanguage = (item: { languages: string[] }, selected = language) => !selected || (selected === OTHER_LANGUAGE ? item.languages.length === 0 || item.languages.some(label => !MAIN_LANGUAGES.includes(label)) : item.languages.includes(selected));
+  // a selected class / language that is no longer offered (after a refresh) goes back to 전체 so the list cannot stay empty
+  useEffect(() => {
+    if (!hub) return;
+    if (category && !categoryOptions.includes(category)) setCategory('');
+    if (language && !languages.includes(language)) setLanguage('');
+    if (mineCategory && !categoryOptions.includes(mineCategory)) setMineCategory('');
+    if (mineLanguage && !languages.includes(mineLanguage)) setMineLanguage('');
+  }, [hub]); // eslint-disable-line react-hooks/exhaustive-deps
   const needle = query.trim().toLowerCase();
   function runSearch() {
     const text = queryText.trim();
@@ -3797,8 +3808,15 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
     if (pasted) void openDetail(pasted);
     setQuery(pasted ? '' : text);
   }
-  const HUB_CLASSES: Record<string, (item: HubRepo) => boolean> = { '작곡': item => item.stage === 'ar' || item.stage === 'both', '사운드': item => item.stage === 'nar' || item.stage === 'both', '미분류': item => item.categories.length === 0 };
-  const matchesCategory = (item: HubRepo) => !category || (HUB_CLASSES[category] ? HUB_CLASSES[category](item) : item.categories.includes(category));
+  const HUB_CLASSES: Record<string, (item: { stage: string; categories: string[] }) => boolean> = { '작곡': item => item.stage === 'ar' || item.stage === 'both', '사운드': item => item.stage === 'nar' || item.stage === 'both', '미분류': item => item.categories.length === 0 };
+  const categoryOptions = [...['작곡', '사운드', ...categories.filter(label => !(label in HUB_CLASSES) && label !== '월드/민속')].sort(byText), '미분류'];
+  const matchesCategory = (item: { stage: string; categories: string[] }, selected = category) => !selected || (HUB_CLASSES[selected] ? HUB_CLASSES[selected](item) : item.categories.includes(selected));
+  // Preset installs may omit repo metadata; supplement it without changing the installed adapter's stage or saved settings.
+  const mineItems = (mine?.adapters || []).map(item => {
+    const repo = item.source && hub?.find(repo => repo.id === item.source!.repo);
+    return { ...item, categories: [...new Set([...item.categories, ...(repo?.categories || [])])], languages: item.languages.length ? item.languages : repo?.languages || [] };
+  });
+  const mineShown = mineItems.filter(item => matchesCategory(item, mineCategory) && matchesLanguage(item, mineLanguage));
   const shown = (hub || []).filter(item => matchesCategory(item) && matchesLanguage(item)
     && (!needle || [item.id, item.title, ...item.tags, ...item.categories, ...item.languages].join(' ').toLowerCase().includes(needle)))
     .sort((a, b) => sort === 'az' ? a.title.localeCompare(b.title) : sort === 'za' ? b.title.localeCompare(a.title) : sort === 'likes' ? b.likes - a.likes : sort === 'samples' ? b.sampleCount - a.sampleCount : b.updatedAt.localeCompare(a.updatedAt));
@@ -3832,10 +3850,16 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
         <Button variant="outline" className="adapter-import-go" disabled={!importPicked.some(file => /\.safetensors$/i.test(file.name)) || Boolean(importing)} onClick={() => void importFiles()}>{importing ? <LoaderCircle className="spin" size={22}/> : <Upload size={22}/>}가져오기</Button>
         <span className="adapter-sub">{importing || '작곡용과 사운드용이 따로 있으면 두 파일을 함께 선택하세요. adapter_config.json이 있으면 같이 선택하면 됩니다.'}</span>
       </div>
-      {mine && mine.adapters.length > 0 && <div className="adapter-chiprow"><span>정렬</span><AdapterSortBar value={mineSort} onChange={setMineSort} onRefresh={() => void reload()} options={[
+      {mine && <>
+        <div className="adapter-filterbar">
+        <div className="adapter-chiprow" role="group" aria-label="설치된 LoRA 분류"><span>분류</span><button type="button" className={!mineCategory ? 'active' : ''} aria-pressed={!mineCategory} onClick={() => setMineCategory('')}>전체</button>{categoryOptions.map(label => <button type="button" key={label} className={mineCategory === label ? 'active' : ''} aria-pressed={mineCategory === label} onClick={() => setMineCategory(mineCategory === label ? '' : label)}>{label}</button>)}</div>
+        <div className="adapter-chiprow" role="group" aria-label="설치된 LoRA 언어"><span>언어</span><button type="button" className={!mineLanguage ? 'active' : ''} aria-pressed={!mineLanguage} onClick={() => setMineLanguage('')}>전체</button>{languages.map(label => <button type="button" key={label} className={mineLanguage === label ? 'active' : ''} aria-pressed={mineLanguage === label} onClick={() => setMineLanguage(mineLanguage === label ? '' : label)}>{label}</button>)}<AdapterSortBar value={mineSort} onChange={setMineSort} onRefresh={() => void reload()} options={[
         { key: 'az', label: '이름 A→Z', icon: <ArrowDownAZ size={15}/> }, { key: 'za', label: '이름 Z→A', icon: <ArrowDownZA size={15}/> },
-        { key: 'favorite', label: '즐겨찾기 먼저', icon: <Heart size={15}/> }, { key: 'newest', label: '최근 받은 순', icon: <Clock size={15}/> }, { key: 'samples', label: '샘플 많은 순', icon: <Headphones size={15}/> }]}/></div>}
-      {mine ? (mine.adapters.length ? <div className="adapter-grid">{[...mine.adapters].sort((a, b) => (mineSort === 'za' ? byText(b.displayName, a.displayName) : mineSort === 'newest' ? (b.installedAt || '').localeCompare(a.installedAt || '') : mineSort === 'samples' ? b.samples.length - a.samples.length : mineSort === 'favorite' ? Number(!!b.favorite) - Number(!!a.favorite) : 0) || byText(a.displayName, b.displayName)).map(item => <div key={item.name} className={`adapter-pickwrap${picker ? ' pickable' : ''}${picked.includes(item.name) ? ' picked' : ''}`}>
+        { key: 'favorite', label: '즐겨찾기 먼저', icon: <Heart size={15}/> }, { key: 'newest', label: '최근 받은 순', icon: <Clock size={15}/> }, { key: 'samples', label: '샘플 많은 순', icon: <Headphones size={15}/> }]}/></div>
+        </div>
+        {mine.adapters.length > 0 && mineShown.length === 0 && <p className="field-hint" role="status">조건에 맞는 LoRA가 없습니다. 분류나 언어를 전체로 바꿔 주세요.</p>}
+      </>}
+      {mine ? (mine.adapters.length ? <div className="adapter-grid">{[...mineShown].sort((a, b) => (mineSort === 'za' ? byText(b.displayName, a.displayName) : mineSort === 'newest' ? (b.installedAt || '').localeCompare(a.installedAt || '') : mineSort === 'samples' ? b.samples.length - a.samples.length : mineSort === 'favorite' ? Number(!!b.favorite) - Number(!!a.favorite) : 0) || byText(a.displayName, b.displayName)).map(item => <div key={item.name} className={`adapter-pickwrap${picker ? ' pickable' : ''}${picked.includes(item.name) ? ' picked' : ''}`}>
           {picker && <label className="adapter-pickbox"><input type="checkbox" checked={picked.includes(item.name)} onChange={event => setPicked(event.target.checked ? [...picked, item.name] : picked.filter(name => name !== item.name))}/><span>{picked.includes(item.name) ? '선택됨' : '선택'}</span></label>}
           <AdapterCard item={item} onChanged={() => void reload()} notify={notify} running={running} setRunning={setRunning}/></div>)}</div>
         : <div className="empty-library"><h2>받은 LoRA가 아직 없어요</h2><p>Preset에서 마음에 드는 것을 받거나, 가지고 있는 파일을 가져오세요.</p><Button variant="outline" className="soft-button" onClick={() => setTab('catalog')}><Search/>Preset 보기</Button></div>)
@@ -3866,8 +3890,10 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
         <Button variant="outline" className="adapter-find-btn" onClick={runSearch}><Search size={15}/>찾기</Button>
         <Button variant="outline" className="adapter-find-btn adapter-refresh-btn" disabled={hubLoading} title="허깅페이스를 다시 확인해서 새로 올라온 LoRA를 가져옵니다" onClick={() => void loadHub(true)}><RefreshCw size={15} className={hubLoading ? 'spin' : ''}/>새로고침</Button>
       </div>
-      {(hub || []).length > 0 && <div className="adapter-chiprow"><span>분류</span><button className={!category ? 'active' : ''} onClick={() => setCategory('')}>전체</button>{[...['작곡', '사운드', ...categories.filter(label => !(label in HUB_CLASSES))].sort(byText), '미분류'].map(label => <button key={label} className={category === label ? 'active' : ''} onClick={() => setCategory(category === label ? '' : label)}>{label}</button>)}</div>}
+      <div className="adapter-filterbar">
+      {(hub || []).length > 0 && <div className="adapter-chiprow"><span>분류</span><button className={!category ? 'active' : ''} onClick={() => setCategory('')}>전체</button>{categoryOptions.map(label => <button key={label} className={category === label ? 'active' : ''} onClick={() => setCategory(category === label ? '' : label)}>{label}</button>)}</div>}
       <div className="adapter-chiprow">{languages.length > 0 && <><span>언어</span><button className={!language ? 'active' : ''} onClick={() => setLanguage('')}>전체</button>{languages.map(label => <button key={label} className={language === label ? 'active' : ''} onClick={() => setLanguage(language === label ? '' : label)}>{label}</button>)}</>}<span className="adapter-sortbar" role="group" aria-label="정렬과 새로고침"><button type="button" aria-label="새로고침" title="새로고침" disabled={hubLoading} onClick={() => void loadHub(true)}><RefreshCw size={15} className={hubLoading ? 'spin' : ''}/></button><i className="adapter-sortbar-sep" aria-hidden="true"/><button type="button" className={sort === 'az' ? 'active' : ''} aria-label="이름 A→Z" aria-pressed={sort === 'az'} title="이름 A→Z" onClick={() => setSort('az')}><ArrowDownAZ size={15}/></button><button type="button" className={sort === 'za' ? 'active' : ''} aria-label="이름 Z→A" aria-pressed={sort === 'za'} title="이름 Z→A" onClick={() => setSort('za')}><ArrowDownZA size={15}/></button><button type="button" className={sort === 'likes' ? 'active' : ''} aria-label="좋아요 순" aria-pressed={sort === 'likes'} title="좋아요 순" onClick={() => setSort('likes')}><Heart size={15}/></button><button type="button" className={sort === 'updated' ? 'active' : ''} aria-label="최신 순" aria-pressed={sort === 'updated'} title="최신 순" onClick={() => setSort('updated')}><Clock size={15}/></button><button type="button" className={sort === 'samples' ? 'active' : ''} aria-label="샘플 많은 순" aria-pressed={sort === 'samples'} title="샘플 많은 순" onClick={() => setSort('samples')}><Headphones size={15}/></button></span></div>
+      </div>
       {hubLoading && <p className="field-hint"><LoaderCircle className="spin" size={14}/> 허깅페이스에서 목록을 읽는 중…</p>}
       {hubError && <p className="field-hint warning">{hubError}</p>}
       <div className="adapter-grid catalog">{shown.map(item => {

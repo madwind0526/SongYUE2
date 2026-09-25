@@ -50,6 +50,11 @@ button.adapter-card, label.adapter-card { cursor: pointer; }
 .adapter-chiprow > span { margin-right: 4px; }
 .adapter-chiprow button { padding: 3px 10px; border-radius: 999px; border: 1px solid #364434; background: transparent; color: #a3b598; font-size: 12px; cursor: pointer; }
 .adapter-chiprow button.active { background: #33462f; border-color: #6d9a5f; color: #eaf3e2; }
+.adapter-filterbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+.adapter-filterbar > .adapter-chiprow { gap: 4px; min-width: 0; max-width: 100%; align-items: center; }
+.adapter-filterbar > .adapter-chiprow:last-child { flex: 1 1 max-content; }
+.adapter-filterbar .adapter-chiprow > button { padding-inline: 7px; white-space: nowrap; }
+.adapter-filterbar .adapter-chiprow > span:first-child { white-space: nowrap; }
 .adapter-paste { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 8px; border: 1px dashed #56704f; color: #c5dbb9; font-size: 13px; }
 .adapter-hub-layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-items: start; }
 .adapter-hub-layout:has(.adapter-detail) { grid-template-columns: minmax(0, 1fr) minmax(320px, 420px); }
