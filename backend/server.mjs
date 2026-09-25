@@ -17,6 +17,7 @@ import { TYPECAST_LANGUAGES, typecastSubscription, listTypecastVoices, typecastS
 import { Worker } from 'node:worker_threads';
 import { lyricLines, detectLanguage, alignLyrics, toLrc } from './lyricsync.mjs';
 import { YUE_SERVER_PORT, yueServerPaths, yuePrecisionFor, isInstrumentalAdapter, listAdapters, normalizeAdapterSelection, toEngineAdapters, synthesize as yueServerSynthesize, probeAdapters, fileExists as yueFileExists } from './yueserver.mjs';
+import { generateCoverPicture, makeFallbackCover, normalizeCover, COVER_MIN_SIZE } from './cover-art.mjs';
 import { createLoraTrainer } from './lora-trainer.mjs';
 import { listLoraLibrary, browseFolders, editLoraLibraryItem, deleteLoraLibraryItem } from './lora-train.mjs';
 import { searchHub, hubDetail, installHubUnits, installCatalogEntry, loadCatalog, catalogSummary, importLocalFiles, updateMeta } from './adapters.mjs';
@@ -242,6 +243,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     pythonMemoryBudgetGib: Number.isFinite(stored.pythonMemoryBudgetGib) ? stored.pythonMemoryBudgetGib : (Number(process.env.PYTHON_MEMORY_BUDGET_GIB) || 11),
     saveFormat: SAVE_FORMATS.has(stored.saveFormat) ? stored.saveFormat : (SAVE_FORMATS.has(process.env.SAVE_FORMAT) ? process.env.SAVE_FORMAT : 'wav'),
     viewMode: VIEW_MODES.has(stored.viewMode) ? stored.viewMode : 'list',
+    autoCover: stored.autoCover !== false,
     outputDirectory,
   };
   // Shared child-runner with a hard deadline + output cap. The older inline spawn promises resolved
@@ -344,7 +346,60 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   let ddspActive = false;
   const ddspJobs = new Map();
   const engineReady = async () => exists(resolveConfigPath(settings.enginePath, DEFAULT_ENGINE_PATH));
+  // Image size of a picture file (ffprobe), for the low-resolution notice
+  async function probeImageSize(file) {
+    try {
+      const output = await new Promise((resolve, reject) => {
+        const chunks = [];
+        const child = spawnImpl('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0:s=x', file], { windowsHide: true });
+        child.stdout.on('data', (data) => chunks.push(data));
+        child.once('error', reject);
+        child.once('close', () => resolve(Buffer.concat(chunks).toString('utf8')));
+      });
+      const [width, height] = output.trim().split('x').map(Number);
+      return Number.isFinite(width) && Number.isFinite(height) ? { width, height } : null;
+    } catch { return null; }
+  }
+  // Uploaded covers are always cut to a centred square and limited to 2475 px; a picture below 1400 px is kept as it is, with a notice
+  async function normalizeUploadedCover(buffer, extension) {
+    try {
+      const result = await normalizeCover({ buffer, extension, spawnImpl, runProbe: probeImageSize });
+      const small = result.size && Math.min(result.size.width, result.size.height) < COVER_MIN_SIZE;
+      return { buffer: result.buffer, extension: result.extension, notice: small ? `해상도가 낮습니다 (${result.size.width}×${result.size.height}). ${COVER_MIN_SIZE}px 이상을 권장합니다.` : '' };
+    } catch { return { buffer, extension, notice: '' }; }
+  }
+  // A new song without a cover gets a Z-Image Turbo picture from ComfyUI (title / style / lyrics as the prompt); without ComfyUI or its image models
+  // (or when it fails) a simple gradient cover with the title is drawn instead. Only a failure of both leaves the song without a cover.
+  async function makeAutoCover(project) {
+    if (!settings.autoCover || project.coverPath || !project.style || !project.title) return { project, temp: null };
+    let cover = null;
+    try {
+      if (generationStatus) generationStatus.detail = '표지를 만드는 중';
+      const endpoint = await ensureComfyUiRunning();
+      const png = await generateCoverPicture({ fetchImpl, endpoint, project });
+      if (png) cover = await normalizeCover({ buffer: png, extension: 'png', outputExtension: 'jpg', spawnImpl });
+    } catch (error) {
+      console.warn(`AI cover skipped: ${error.message}`);
+    } finally {
+      await fetchImpl(`${settings.comfyUiEndpoint || DEFAULT_COMFYUI_ENDPOINT}/free`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ unload_models: true, free_memory: true }) }).catch(() => {});
+    }
+    try {
+      if (!cover) cover = { buffer: await makeFallbackCover({ title: project.title, style: project.style, spawnImpl, fileExists: exists }), extension: 'jpg' };
+      await mkdir(coversDir(), { recursive: true });
+      const name = `auto-${randomUUID()}.${cover.extension}`;
+      await writeFile(path.join(coversDir(), name), cover.buffer);
+      return { project: { ...project, coverPath: name }, temp: path.join(coversDir(), name) };
+    } catch (error) {
+      console.warn(`cover skipped: ${error.message}`);
+      return { project, temp: null };
+    }
+  }
   async function finalizeToMusic(project, file, audioFile, extraFields = {}) {
+    const auto = await makeAutoCover(project);
+    try { return await finalizeToMusicCore(auto.project, file, audioFile, extraFields); }
+    finally { if (auto.temp) await unlink(auto.temp).catch(() => {}); }
+  }
+  async function finalizeToMusicCore(project, file, audioFile, extraFields = {}) {
     return serial(async () => {
       const dir = musicDir();
       await mkdir(dir, { recursive: true });
@@ -1755,7 +1810,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   }
   const publicSettings = () => {
     const env = providerFromEnv(settings.provider);
-    return { provider: settings.provider, endpoint: env.endpoint, llmModel: env.model, enginePath: settings.enginePath, pythonEnginePath: settings.pythonEnginePath, pythonScriptPath: settings.pythonScriptPath, pythonMemoryBudgetGib: settings.pythonMemoryBudgetGib, sheetSagePythonPath: settings.sheetSagePythonPath, comfyUiEndpoint: settings.comfyUiEndpoint, comfyUiEnginePath: settings.comfyUiEnginePath, ddspSvcPath: settings.ddspSvcPath, settingPath: settings.settingPath, musicPath: settings.musicPath, examplesPath: settings.examplesPath, coversPath: settings.coversPath, abcNotesPath: settings.abcNotesPath, stylePresets: settings.stylePresets, visualizerEnabled: settings.visualizerEnabled, visualizerRingCount: settings.visualizerRingCount, visualizerHue: settings.visualizerHue, visualizerLineWidth: settings.visualizerLineWidth, visualizerTrail: settings.visualizerTrail, visualizerSpiral: settings.visualizerSpiral, visualizerRingMode: settings.visualizerRingMode, visualizerTimeStep: settings.visualizerTimeStep, visualizerTimeSkew: settings.visualizerTimeSkew, visualizerRingStep: settings.visualizerRingStep, visualizerAmplitude: settings.visualizerAmplitude, saveFormat: settings.saveFormat, viewMode: settings.viewMode, outputDirectory: path.relative(root, outputDirectory) || '.', hasApiKey: Boolean(env.apiKey), apiKey: env.apiKey ? '***' : null, apiKeyStorage: 'env' };
+    return { provider: settings.provider, endpoint: env.endpoint, llmModel: env.model, enginePath: settings.enginePath, pythonEnginePath: settings.pythonEnginePath, pythonScriptPath: settings.pythonScriptPath, pythonMemoryBudgetGib: settings.pythonMemoryBudgetGib, sheetSagePythonPath: settings.sheetSagePythonPath, comfyUiEndpoint: settings.comfyUiEndpoint, comfyUiEnginePath: settings.comfyUiEnginePath, ddspSvcPath: settings.ddspSvcPath, settingPath: settings.settingPath, musicPath: settings.musicPath, examplesPath: settings.examplesPath, coversPath: settings.coversPath, abcNotesPath: settings.abcNotesPath, stylePresets: settings.stylePresets, visualizerEnabled: settings.visualizerEnabled, visualizerRingCount: settings.visualizerRingCount, visualizerHue: settings.visualizerHue, visualizerLineWidth: settings.visualizerLineWidth, visualizerTrail: settings.visualizerTrail, visualizerSpiral: settings.visualizerSpiral, visualizerRingMode: settings.visualizerRingMode, visualizerTimeStep: settings.visualizerTimeStep, visualizerTimeSkew: settings.visualizerTimeSkew, visualizerRingStep: settings.visualizerRingStep, visualizerAmplitude: settings.visualizerAmplitude, saveFormat: settings.saveFormat, viewMode: settings.viewMode, autoCover: settings.autoCover, outputDirectory: path.relative(root, outputDirectory) || '.', hasApiKey: Boolean(env.apiKey), apiKey: env.apiKey ? '***' : null, apiKeyStorage: 'env' };
   };
   async function localFile(relativePath) {
     const file = path.join(root, relativePath);
@@ -1906,8 +1961,9 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           if (input.visualizerRingStep !== undefined) next.visualizerRingStep = Math.max(0.1, Math.min(20, Number.isFinite(Number(input.visualizerRingStep)) ? Number(input.visualizerRingStep) : DEFAULT_VISUALIZER_RING_STEP));
           if (input.visualizerAmplitude !== undefined) next.visualizerAmplitude = Math.max(0.1, Math.min(10, Number.isFinite(Number(input.visualizerAmplitude)) ? Number(input.visualizerAmplitude) : DEFAULT_VISUALIZER_AMPLITUDE));
           if (input.saveFormat !== undefined) next.saveFormat = input.saveFormat;
+          if (input.autoCover !== undefined) next.autoCover = input.autoCover === true;
           if (input.viewMode !== undefined) next.viewMode = input.viewMode;
-          await saveJson(settingsFile, { provider: next.provider, enginePath: next.enginePath, pythonEnginePath: next.pythonEnginePath, pythonScriptPath: next.pythonScriptPath, pythonMemoryBudgetGib: next.pythonMemoryBudgetGib, sheetSagePythonPath: next.sheetSagePythonPath, comfyUiEndpoint: next.comfyUiEndpoint, comfyUiEnginePath: next.comfyUiEnginePath, ddspSvcPath: next.ddspSvcPath, settingPath: next.settingPath, musicPath: next.musicPath, examplesPath: next.examplesPath, coversPath: next.coversPath, abcNotesPath: next.abcNotesPath, stylePresets: next.stylePresets, visualizerEnabled: next.visualizerEnabled, visualizerRingCount: next.visualizerRingCount, visualizerHue: next.visualizerHue, visualizerLineWidth: next.visualizerLineWidth, visualizerTrail: next.visualizerTrail, visualizerSpiral: next.visualizerSpiral, visualizerRingMode: next.visualizerRingMode, visualizerTimeStep: next.visualizerTimeStep, visualizerTimeSkew: next.visualizerTimeSkew, visualizerRingStep: next.visualizerRingStep, visualizerAmplitude: next.visualizerAmplitude, saveFormat: next.saveFormat, viewMode: next.viewMode });
+          await saveJson(settingsFile, { provider: next.provider, enginePath: next.enginePath, pythonEnginePath: next.pythonEnginePath, pythonScriptPath: next.pythonScriptPath, pythonMemoryBudgetGib: next.pythonMemoryBudgetGib, sheetSagePythonPath: next.sheetSagePythonPath, comfyUiEndpoint: next.comfyUiEndpoint, comfyUiEnginePath: next.comfyUiEnginePath, ddspSvcPath: next.ddspSvcPath, settingPath: next.settingPath, musicPath: next.musicPath, examplesPath: next.examplesPath, coversPath: next.coversPath, abcNotesPath: next.abcNotesPath, stylePresets: next.stylePresets, visualizerEnabled: next.visualizerEnabled, visualizerRingCount: next.visualizerRingCount, visualizerHue: next.visualizerHue, visualizerLineWidth: next.visualizerLineWidth, visualizerTrail: next.visualizerTrail, visualizerSpiral: next.visualizerSpiral, visualizerRingMode: next.visualizerRingMode, visualizerTimeStep: next.visualizerTimeStep, visualizerTimeSkew: next.visualizerTimeSkew, visualizerRingStep: next.visualizerRingStep, visualizerAmplitude: next.visualizerAmplitude, saveFormat: next.saveFormat, viewMode: next.viewMode, autoCover: next.autoCover });
           settings = next;
           if (input.settingPath !== undefined) await mkdir(settingDir(), { recursive: true });
           if (input.musicPath !== undefined) await mkdir(musicDir(), { recursive: true });
@@ -2618,11 +2674,12 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           const dir = coversDir();
           await mkdir(dir, { recursive: true });
           if (found.note.coverPath) await unlink(path.join(dir, found.note.coverPath)).catch(() => {});
-          const coverName = `abcnote-${found.note.id}.${COVER_MIME[match[1]]}`;
-          await writeFile(path.join(dir, coverName), buffer);
+          const normalized = await normalizeUploadedCover(buffer, COVER_MIME[match[1]]);
+          const coverName = `abcnote-${found.note.id}.${normalized.extension}`;
+          await writeFile(path.join(dir, coverName), normalized.buffer);
           const updated = { ...found.note, coverPath: coverName, updatedAt: new Date().toISOString() };
           await saveJson(found.file, updated);
-          return updated;
+          return { ...updated, coverNotice: normalized.notice };
         }));
       }
       if (abcNoteCoverMatch && req.method === 'DELETE') {
@@ -2660,11 +2717,12 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           const dir = coversDir();
           await mkdir(dir, { recursive: true });
           if (entry.project.coverPath) await unlink(path.join(dir, entry.project.coverPath)).catch(() => {});
-          const coverName = `${entry.project.id}.${COVER_MIME[match[1]]}`;
-          await writeFile(path.join(dir, coverName), buffer);
+          const normalized = await normalizeUploadedCover(buffer, COVER_MIME[match[1]]);
+          const coverName = `${entry.project.id}.${normalized.extension}`;
+          await writeFile(path.join(dir, coverName), normalized.buffer);
           const updated = { ...entry.project, coverPath: coverName, updatedAt: new Date().toISOString() };
           await saveJson(entry.file, updated);
-          return updated;
+          return { ...updated, coverNotice: normalized.notice };
         }));
       }
       if (coverMatch && req.method === 'DELETE') {

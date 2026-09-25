@@ -378,7 +378,9 @@ test('audio.cpp generation copies the song into library/music, leaving the sourc
   const settingDir = path.join(root, 'library', 'setting');
   const musicDir = path.join(root, 'library', 'music');
 
-  await callJson('/api/settings', 'PUT', { enginePath });
+  assert.equal((await callJson('/api/settings')).data.autoCover, true, 'covers are made automatically by default');
+  await callJson('/api/settings', 'PUT', { enginePath, autoCover: false });
+  assert.equal((await callJson('/api/settings')).data.autoCover, false);
   assert.equal((await callJson('/api/health')).data.engineReady, true);
 
   const original = (await callJson('/api/projects', 'POST', { title: '원본', lyrics: '가사', style: '스타일', modelId: 'yue2-original' })).data;
