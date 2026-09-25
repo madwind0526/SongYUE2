@@ -119,7 +119,7 @@ test('importing local files copies them into a new adapter and refuses wrong inp
 test('adapter selections are limited to installed adapters and mapped to the engine request', () => {
   const installed = [{ name: 'a' }, { name: 'b' }];
   assert.deepEqual(normalizeAdapterSelection([{ name: 'a', arScale: 0.5, narScale: 3 }, { name: 'a' }, { name: 'zzz' }, { name: 'b', scale: 0.7 }, null], installed),
-    [{ name: 'a', arScale: 0.5, narScale: 3 }, { name: 'b', arScale: 0.7, narScale: 0.7 }]);
+    [{ name: 'a', arScale: 0.5, narScale: 2 }, { name: 'b', arScale: 0.7, narScale: 0.7 }]);
   assert.deepEqual(normalizeAdapterSelection('x', installed), []);
   assert.deepEqual(toEngineAdapters([{ name: 'a', arScale: 1, narScale: 0.5 }]), [{ name: 'a', ar_scale: 1, nar_scale: 0.5 }]);
 });

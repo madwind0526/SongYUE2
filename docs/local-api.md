@@ -142,7 +142,7 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 | POST `/api/adapters/upload?uploadId=<uuid v4>&filename=<이름>` | 브라우저에서 고른 파일 하나를 요청 본문(`application/octet-stream`) 그대로 임시 폴더(`runs/adapter-upload-<uploadId>`)에 올린다. `.safetensors`와 `adapter_config.json`만 허용, 최대 2 GB, 서버를 다시 시작하면 남은 임시 폴더는 지워진다 |
 | POST `/api/adapters/import` | `{name?, uploadId}`(위에서 올린 파일들을 LoRA 하나로 만들고 임시 폴더를 지움) 또는 `{name?, paths:[전체 경로 .safetensors 1~2개]}`(서버가 있는 PC의 파일). 화면의 "파일 가져오기"(파일 선택·끌어다 놓기)가 앞의 방식을 쓴다 |
 
-곡 만들기: `POST /api/projects`의 `adapters: [{name, arScale, narScale}]`(0 이상 아무 값, 서버는 100까지 허용, 설치되지 않은 이름은 저장 시 버려짐)를 저장하고, `POST /api/generate`는 `adapters`가 있는 곡을 yue-server로 만듭니다(없으면 기존 엔진). 완성된 곡의 JSON에는 `engine: "yue-server"`와 사용한 `adapters`가 남습니다. `instrumental: true`인 곡은 400.
+곡 만들기: `POST /api/projects`의 `adapters: [{name, arScale, narScale}]`(0~2, 넘으면 2로 잘라 냄, 설치되지 않은 이름은 저장 시 버려짐)를 저장하고, `POST /api/generate`는 `adapters`가 있는 곡을 yue-server로 만듭니다(없으면 기존 엔진). 완성된 곡의 JSON에는 `engine: "yue-server"`와 사용한 `adapters`가 남습니다. `instrumental: true`인 곡은 400.
 
 ## AI 곡 다듬기 (노이즈 제거 · Spectral Lifter · 보컬 자연화 · 기준곡 마스터링)
 

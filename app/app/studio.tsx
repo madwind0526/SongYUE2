@@ -3525,12 +3525,12 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
 
 // LoRA choice inside the song form: which installed adapters to apply and how strongly each half of the model follows them.
 const DEFAULT_ADAPTER_SCALE = 0.7;
-// Strength field: any number >= 0 (values above 1 exaggerate the LoRA); the text is kept while typing so "0." and "" work.
+// Strength field: 0..2 (values above 1 exaggerate the LoRA; the server caps at 2); the text is kept while typing so "0." and "" work.
 function ScaleInput({ value, label, onChange }: { value: number; label: string; onChange: (next: number) => void }) {
   const [text, setText] = useState(String(value));
   useEffect(() => { if (Number(text) !== value) setText(String(value)); }, [value]);
-  return <input className="adapter-scale-input" type="number" inputMode="decimal" min={0} step={0.05} value={text} aria-label={label}
-    onChange={event => { setText(event.target.value); const next = Number(event.target.value); if (event.target.value.trim() !== '' && Number.isFinite(next) && next >= 0) onChange(next); }}
+  return <input className="adapter-scale-input" type="number" inputMode="decimal" min={0} max={2} step={0.05} value={text} aria-label={label}
+    onChange={event => { setText(event.target.value); const next = Number(event.target.value); if (event.target.value.trim() !== '' && Number.isFinite(next) && next >= 0) onChange(Math.min(2, next)); }}
     onBlur={() => setText(String(value))}/>;
 }
 
@@ -3562,7 +3562,7 @@ function AdapterPicker({ selected, onChange, style, onInsertTrigger, notify }: {
         {item.tip && <span className="vocal-gender-hint">{item.tip}</span>}
       </div>;
     })}
-    {chosen.length > 0 && <span className="vocal-gender-hint">강도는 0 이상의 아무 값이나 넣을 수 있습니다(기본 0.7, 1보다 크면 더 강하게). LoRA를 쓰면 곡이 별도 엔진(yue-server)으로 만들어집니다. 추론 단계는 32 정도를 권장합니다.</span>}
+    {chosen.length > 0 && <span className="vocal-gender-hint">강도는 0~2 사이 값을 넣을 수 있습니다(기본 0.7, 1보다 크면 더 강하게, 2가 최대). LoRA를 쓰면 곡이 별도 엔진(yue-server)으로 만들어집니다. 추론 단계는 32 정도를 권장합니다.</span>}
     {open && <Dialog open onOpenChange={next => { if (!next) setOpen(false); }}>
       <DialogContent className="studio-dialog adapter-picker-dialog">
         <DialogTitle>LoRA 선택</DialogTitle>

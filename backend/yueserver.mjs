@@ -55,12 +55,12 @@ export async function listAdapters(adapterDir) {
   return adapters.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-// The request's adapters: [{ name, arScale, narScale }] limited to installed adapters, strengths 0..100 (any value >= 0; above 1 exaggerates the LoRA). A plain `scale`
+// The request's adapters: [{ name, arScale, narScale }] limited to installed adapters, strengths 0..2 (above 1 exaggerates the LoRA; larger values are not meaningful). A plain `scale`
 // (older saved songs) sets both halves.
 export function normalizeAdapterSelection(input, installed) {
   if (!Array.isArray(input)) return [];
   const names = new Set(installed.map((item) => item.name));
-  const clamp = (value, fallback) => { const number = Number(value); return Number.isFinite(number) ? Math.max(0, Math.min(100, number)) : fallback; };
+  const clamp = (value, fallback) => { const number = Number(value); return Number.isFinite(number) ? Math.max(0, Math.min(2, number)) : fallback; };
   const result = [];
   for (const item of input) {
     const name = typeof item?.name === 'string' ? item.name : '';
