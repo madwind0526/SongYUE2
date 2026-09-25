@@ -3678,7 +3678,7 @@ function AudioPolishDialog({ audioDataUrl, onClose, onApply, kind = 'sound' }: {
       </div>}
       {errorText && <p className="field-hint warning">{errorText}</p>}
       <div className="stem-list">
-        {row('source', '원본', sourceBuffer, false, '')}
+        {row('source', '처리 전', sourceBuffer, false, '')}
         {row('output', '처리 후', outputBuffer, true, '')}
       </div>
       {result?.report && <PolishReportPanel report={result.report}/>}
