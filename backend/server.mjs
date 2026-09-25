@@ -1455,6 +1455,37 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     await writeFile(notesFile, JSON.stringify(notes), 'utf8');
     return midiFile;
   }
+  // Resource usage for the top bar: GPU (nvidia-smi), CPU (delta of os.cpus() times between two calls), RAM (os.totalmem / freemem).
+  // The reading is cached for a second so several open tabs do not start nvidia-smi over and over.
+  let statsCache = null;
+  let cpuSnapshot = null;
+  const cpuTimes = () => os.cpus().reduce((sum, cpu) => { const t = cpu.times; return { idle: sum.idle + t.idle, total: sum.total + t.user + t.nice + t.sys + t.idle + t.irq }; }, { idle: 0, total: 0 });
+  async function readGpuStats() {
+    return new Promise((resolve) => {
+      let out = '';
+      let child;
+      try { child = spawnImpl('nvidia-smi', ['--query-gpu=name,utilization.gpu,memory.used,memory.total', '--format=csv,noheader,nounits'], { windowsHide: true }); }
+      catch { return resolve(null); }
+      child.stdout?.on('data', (chunk) => { out += chunk; });
+      child.once('error', () => resolve(null));
+      child.once('close', (code) => {
+        const parts = out.trim().split('\n')[0]?.split(',').map((item) => item.trim()) || [];
+        const [name, util, used, total] = [parts[0], Number(parts[1]), Number(parts[2]), Number(parts[3])];
+        resolve(code === 0 && name && Number.isFinite(total) ? { name: name.replace(/^NVIDIA\s+GeForce\s+/i, ''), utilization: Number.isFinite(util) ? util : null, vramUsedMb: Number.isFinite(used) ? used : null, vramTotalMb: total } : null);
+      });
+    });
+  }
+  async function systemStats() {
+    if (statsCache && Date.now() - statsCache.at < 1000) return statsCache.value;
+    const now = cpuTimes();
+    const before = cpuSnapshot || now;
+    cpuSnapshot = now;
+    const totalDelta = now.total - before.total;
+    const cpuPercent = totalDelta > 0 ? Math.round((1 - (now.idle - before.idle) / totalDelta) * 100) : null;
+    const value = { gpu: await readGpuStats(), cpuPercent, ramUsedMb: Math.round((os.totalmem() - os.freemem()) / 1048576), ramTotalMb: Math.round(os.totalmem() / 1048576) };
+    statsCache = { at: Date.now(), value };
+    return value;
+  }
   let gpuInfoCache = null;
   async function detectGpu() {
     if (gpuInfoCache) return gpuInfoCache;
@@ -1813,6 +1844,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       }
       const requestUrl = new URL(req.url, `http://127.0.0.1:${ownPort}`);
       const pathname = requestUrl.pathname;
+      if (req.method === 'GET' && pathname === '/api/system/stats') return send(200, await systemStats());
       if (req.method === 'GET' && pathname === '/api/health') return send(200, { ok: true, engineReady: await engineReady(), mode: 'local', version: '0.1.0' });
       if (req.method === 'GET' && pathname === '/api/system') return send(200, await detectGpu());
       if (req.method === 'GET' && pathname === '/api/settings') return send(200, publicSettings());

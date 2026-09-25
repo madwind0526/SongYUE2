@@ -42,3 +42,6 @@
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 
 @media(min-width:741px){.player-wave{display:flex}}.player-wave{align-items:stretch;gap:4px}.player-wave-canvas{flex:1;min-width:0;width:auto}.player-wave-gain{display:flex;flex-direction:column;justify-content:space-between;flex:none;width:18px}.player-wave-gain button{height:14px;padding:0;display:flex;align-items:center;justify-content:center;border-radius:4px;color:#8da591;background:#20261f}.player-wave-gain button:hover:not(:disabled){color:#eef0e7;background:#2f382e}.player-wave-gain button:disabled{opacity:.35;cursor:default}
+
+.device-status .resource-usage{display:inline-flex;align-items:center;gap:12px;margin-left:8px;padding-left:12px;border-left:1px solid var(--border,#2b332c);font-variant-numeric:tabular-nums}.device-status .resource-usage>span{display:inline-flex;align-items:baseline;gap:5px;color:#cfe0c8}.device-status .resource-usage em{font-style:normal;font-size:9px;letter-spacing:.4px;color:#7d9884}
+@media(max-width:1500px){.device-status .resource-usage{gap:8px}.device-status .resource-usage em{display:none}}
