@@ -2056,7 +2056,7 @@ function TransportControls({ t, disabled }: { t: AudioTransport; disabled: boole
 }
 
 
-// Audio Tools TTS runs on audio.cpp (Qwen3-TTS / VoxCPM2 / Chatterbox ...); the backend splits long
+// Audio Tools TTS runs on audio.cpp (Qwen3-TTS / Supertonic / Chatterbox ...); the backend splits long
 // text into sentence segments and joins them. `mode` selects which model variants apply: 'design'
 // (voice from a text description) only exists for Qwen3-TTS VoiceDesign.
 type TtsPrecisionInfo = { precision: string; sizeMb: number; installed: boolean; download: { state: string; receivedBytes: number; totalBytes: number; error: string | null } | null };
@@ -2064,7 +2064,7 @@ type TtsVariantInfo = { mode: 'design' | 'ref' | 'preset' | 'asr'; size: string;
 type TtsFamilyInfo = { id: string; label: string; languages?: string[]; voices?: { id: string; label: string }[]; variants: TtsVariantInfo[] };
 const TTS_PRECISION_LABELS: Record<string, string> = { q8_0: 'INT8 (Q8_0)', bf16: 'BF16', f16: 'FP16', f32: 'FP32', orig: '원본(FP32)' };
 function ttsVariantsFor(families: TtsFamilyInfo[], familyId: string, mode: 'design' | 'ref' | 'preset') {
-  // Families with a native voice-design variant (Qwen3, VoxCPM2, OmniVoice) use it in the design tab;
+  // Families with a native voice-design variant (Qwen3) use it in the design tab;
   // the others use their reference variants and the backend builds a stand-in reference clip.
   const variants = families.find(family => family.id === familyId)?.variants || [];
   const wanted = mode === 'preset' ? 'preset' : variants.some(variant => variant.mode === mode) ? mode : 'ref';

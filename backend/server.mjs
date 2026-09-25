@@ -857,7 +857,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     await runFfmpegCli(['-y', '-i', source, '-ar', '44100', '-ac', '1', audioFilePath], '입력 오디오 변환');
     return audioFilePath;
   }
-  // Audio Tools TTS on audio.cpp (Qwen3-TTS / VoxCPM2 / Chatterbox ...). The text is split into
+  // Audio Tools TTS on audio.cpp (Qwen3-TTS / Supertonic / Chatterbox ...). The text is split into
   // sentence-packed segments, each synthesized by its own audiocpp_cli run, then concatenated.
   const ttsDownloads = new Map();
   const rvcDownloads = new Map();

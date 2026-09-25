@@ -1538,7 +1538,7 @@ test('Tools 메뉴 - audio.cpp TTS: 모델 목록/설치 확인, 문장 분할 �
 
   const listed = await callJson('/api/audio-tools/tts/models');
   assert.equal(listed.status, 200);
-  assert.deepEqual(listed.data.families.map(f => f.id), ['qwen3', 'voxcpm2', 'omnivoice', 'fish', 'supertonic', 'magpie', 'chatterbox']);
+  assert.deepEqual(listed.data.families.map(f => f.id), ['qwen3', 'omnivoice', 'fish', 'supertonic', 'magpie', 'chatterbox']);
   assert.ok(listed.data.families.every(f => f.variants.every(v => v.precisions.every(p => p.installed === false))));
 
   // not installed -> 409 with guidance, engine never spawned
@@ -1549,7 +1549,7 @@ test('Tools 메뉴 - audio.cpp TTS: 모델 목록/설치 확인, 문장 분할 �
   await install('Chatterbox-GGUF', 'chatterbox-q8_0.gguf');
   await install('Qwen3-TTS-12Hz-1.7B-VoiceDesign-GGUF', 'qwen3-tts-12hz-1.7b-voicedesign-q8_0.gguf');
   const after = await callJson('/api/audio-tools/tts/models');
-  assert.equal(after.data.families[6].variants[0].precisions[0].installed, true);
+  assert.equal(after.data.families[5].variants[0].precisions[0].installed, true);
 
   // chatterbox: Korean text -> --language ko, clon task with the reference clip
   const cli = () => fakeSpawn.calls.filter(c => !['ffmpeg', 'ffprobe'].includes(c.engine));
@@ -1584,19 +1584,8 @@ test('Tools 메뉴 - audio.cpp TTS: 모델 목록/설치 확인, 문장 분할 �
   const mixedCalls = cli().slice(mixedBefore).map(c => c.args[c.args.indexOf('--language') + 1]);
   assert.deepEqual(mixedCalls, ['korean', 'english']);
 
-  // VoxCPM2 has native voice design: the description goes inline, no stand-in clip
-  await install('VoxCPM2-GGUF', 'voxcpm2-q8_0.gguf');
   await install('OmniVoice-GGUF', 'omnivoice-q8_0.gguf');
-  const nativeBefore = cli().length;
-  await callJson('/api/audio-tools/tts', 'POST', { family: 'voxcpm2', mode: 'design', size: '2B', precision: 'q8_0', text: 'Hello there.', description: 'calm woman' });
-  const nativeCalls = cli().slice(nativeBefore);
-  assert.equal(nativeCalls.length, 1, 'expected exactly one engine run (no stand-in reference clip)');
-  assert.equal(nativeCalls[0].args[nativeCalls[0].args.indexOf('--text') + 1], '(calm woman)Hello there.');
-
-  // style instruction: VoxCPM2 prefixes "(style)"; models without style support ignore it
-  await callJson('/api/audio-tools/tts', 'POST', { family: 'voxcpm2', mode: 'ref', size: '2B', precision: 'q8_0', text: 'Hello there.', referenceDataUrl: refAudio, style: 'whispering' });
-  const voxArgs = cli().at(-1).args;
-  assert.equal(voxArgs[voxArgs.indexOf('--text') + 1], '(whispering)Hello there.');
+  // style instruction: models without style support ignore it
   await callJson('/api/audio-tools/tts', 'POST', { family: 'chatterbox', mode: 'ref', size: '기본', precision: 'q8_0', text: 'Hello there.', referenceDataUrl: refAudio, style: 'ignored' });
   assert.ok(!cli().at(-1).args.some(a => String(a).includes('ignored')));
 

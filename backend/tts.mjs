@@ -38,14 +38,6 @@ export const TTS_FAMILIES = [
     ],
   },
   {
-    // One file serves both modes: voice design via "(description)text" and cloning via --voice-ref.
-    id: 'voxcpm2', label: 'VoxCPM2', cliFamily: 'voxcpm2',
-    variants: ['design', 'ref'].map((mode) => ({ mode, size: '2B', files: {
-      q8_0: ['VoxCPM2-GGUF', 'voxcpm2-q8_0.gguf', 2955],
-      bf16: ['VoxCPM2-GGUF', 'voxcpm2-bf16.gguf', 4772],
-      orig: ['VoxCPM2-GGUF', 'voxcpm2-orig.gguf', 4961] } })),
-  },
-  {
     // Clone only: --instruct accepts just a fixed attribute vocabulary (no free-text voice description),
     // and cloning requires the reference transcript (auto-filled with ASR when left empty).
     id: 'omnivoice', label: 'OmniVoice', cliFamily: 'omnivoice',
@@ -289,7 +281,7 @@ const QWEN_LANG = { ko: 'korean', en: 'english', mixed: 'auto' };
 export const presetVoice = (model, voiceId) => (model.family.voices?.some((voice) => voice.id === voiceId) ? voiceId : model.family.voices?.[0]?.id);
 
 // Families that accept an optional free-text style/emotion instruction.
-export const STYLE_FAMILIES = ['voxcpm2', 'qwen3'];
+export const STYLE_FAMILIES = ['qwen3'];
 
 export function buildTtsArgs({ model, mode, text, description, style, voiceId, language, referenceWav, referenceText, outputWav, modelPath }) {
   const detected = language === 'ko' || language === 'en' ? language : detectSpeechLanguage(text);
@@ -313,11 +305,6 @@ export function buildTtsArgs({ model, mode, text, description, style, voiceId, l
   }
   if (cli === 'supertonic') {
     return ['--task', 'tts', '--family', cli, '--model', modelPath, '--language', detected === 'en' ? 'en' : 'ko', '--voice-id', presetVoice(model, voiceId), '--text', text, '--out', outputWav];
-  }
-  if (cli === 'voxcpm2') {
-    // Voice design is expressed as a "(description)" prefix on the text; cloning takes the reference clip.
-    if (mode === 'design') return ['--task', 'tts', '--family', cli, '--model', modelPath, '--text', `(${[description, style].filter(Boolean).join(', ')})${text}`, '--out', outputWav];
-    return ['--task', 'tts', '--family', cli, '--model', modelPath, '--voice-ref', referenceWav, ...(referenceText ? ['--reference-text', referenceText] : []), '--text', style ? `(${style})${text}` : text, '--out', outputWav];
   }
   if (cli === 'omnivoice') {
     return ['--task', 'tts', '--family', cli, '--model', modelPath, '--voice-ref', referenceWav, ...(referenceText ? ['--reference-text', referenceText] : []), '--text', text, '--out', outputWav];
