@@ -119,7 +119,7 @@ test('importing local files copies them into a new adapter and refuses wrong inp
 test('adapter selections are limited to installed adapters and mapped to the engine request', () => {
   const installed = [{ name: 'a' }, { name: 'b' }];
   assert.deepEqual(normalizeAdapterSelection([{ name: 'a', arScale: 0.5, narScale: 3 }, { name: 'a' }, { name: 'zzz' }, { name: 'b', scale: 0.7 }, null], installed),
-    [{ name: 'a', arScale: 0.5, narScale: 2 }, { name: 'b', arScale: 0.7, narScale: 0.7 }]);
+    [{ name: 'a', arScale: 0.5, narScale: 3 }, { name: 'b', arScale: 0.7, narScale: 0.7 }]);
   assert.deepEqual(normalizeAdapterSelection('x', installed), []);
   assert.deepEqual(toEngineAdapters([{ name: 'a', arScale: 1, narScale: 0.5 }]), [{ name: 'a', ar_scale: 1, nar_scale: 0.5 }]);
 });
@@ -194,7 +194,6 @@ test('API: adapters are listed, edited and deleted; songs with adapters are made
   }
   assert.equal((await call('/api/settings', 'PUT', { saveFormat: 'wav' })).status, 200);
   const instrumental = (await call('/api/projects', 'POST', { title: '악기 LoRA', lyrics: '[verse]\n가사', style: 'rock', modelId: 'yue2-q8', instrumental: true, adapters: [{ name: 'rock' }] })).data;
-  assert.equal((await call('/api/generate', 'POST', { projectId: instrumental.id })).status, 400);
   const made = await call('/api/generate', 'POST', { projectId: song.id });
   assert.equal(made.status, 200, JSON.stringify(made.data));
   assert.equal(made.data.engine, 'yue-server');
@@ -205,6 +204,10 @@ test('API: adapters are listed, edited and deleted; songs with adapters are made
   assert.equal(fake.requests[0].steps, 32);
   assert.equal(fake.requests[0].output_format, 'wav16');
   assert.equal((await readFile(path.join(root, 'library', 'music', 'LoRA 곡.wav'))).subarray(0, 4).toString(), 'RIFF');
+  // "instrumental" + LoRA is allowed now: only the section tags of the lyrics go to the engine, the plan defaults to melody
+  assert.equal((await call('/api/generate', 'POST', { projectId: instrumental.id })).status, 200);
+  assert.equal(fake.requests[1].lyrics, '[verse]');
+  assert.match(fake.requests[1].style, /instrumental, no vocals/);
   // rename / notes / delete
   const patched = await call('/api/adapters/rock', 'PATCH', { displayName: '내 록', note: '메모' });
   assert.equal(patched.data.displayName, '내 록');

@@ -163,3 +163,28 @@ button.adapter-card, label.adapter-card { cursor: pointer; }
 .adapter-detail-dialog audio, .adapter-samples audio { background-color: #131a12; }
 .adapter-detail-dialog audio::-webkit-media-controls-enclosure, .adapter-samples audio::-webkit-media-controls-enclosure { background-color: #131a12; }
 .adapter-detail-dialog audio::-webkit-media-controls-panel, .adapter-samples audio::-webkit-media-controls-panel { background-color: #131a12; }
+
+/* create page: the applied LoRAs with a strength field each */
+.adapter-picker-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.adapter-picker-head .field-label small { color: #8da591; font-weight: 400; margin-left: 6px; }
+.adapter-pick { border: 1px solid #2b332c; border-radius: 8px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; background: #161a16; }
+.adapter-pick-row { display: flex; align-items: center; gap: 8px; }
+.adapter-pick-name { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.adapter-pick-name strong { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.adapter-pick-name small { color: #8da591; font-size: 11px; }
+.adapter-pick-scales { display: flex; flex-direction: column; gap: 4px; }
+.adapter-pick .adapter-scale { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.adapter-pick .adapter-scale em { font-style: normal; font-size: 11px; color: #9aa89b; }
+.adapter-scale-input { width: 68px; height: 28px; text-align: right; padding: 0 6px; border-radius: 6px; border: 1px solid #364434; background: #101310; color: #eef0e7; font-size: 13px; }
+.adapter-scale-input:focus { outline: 1px solid #7fb069; }
+
+/* the LoRA picking dialog = the management page inside a window, with an apply bar at the bottom */
+.adapter-picker-dialog { width: min(1100px, 94vw) !important; max-width: none !important; height: 86vh; display: flex; flex-direction: column; gap: 8px; padding-bottom: 0 !important; }
+.adapter-picker-body { flex: 1; min-height: 0; overflow-y: auto; }
+.adapter-page.picking { padding-bottom: 0; min-height: 100%; }
+.adapter-pickwrap { display: flex; flex-direction: column; gap: 6px; border-radius: 12px; }
+.adapter-pickwrap.picked { outline: 2px solid #7fb069; outline-offset: 2px; }
+.adapter-pickbox { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: #cfe0c8; cursor: pointer; }
+.adapter-pickbox input { width: 16px; height: 16px; accent-color: #7fb069; }
+.adapter-pick-footer { position: sticky; bottom: 0; display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 12px 4px; margin-top: auto; background: #161a16; border-top: 1px solid #2b332c; }
+.adapter-pick-footer span { margin-right: auto; color: #cfe0c8; font-size: 13px; }

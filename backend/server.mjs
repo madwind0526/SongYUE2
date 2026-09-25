@@ -468,12 +468,13 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       if (!(await yueFileExists(target))) throw fail(400, `LoRA 곡 생성에 필요한 ${label}이(가) 없습니다: ${path.relative(root, target)}. docs/models.md의 "LoRA 엔진" 설명을 확인해 주세요.`);
     }
     if (!project.lyrics.trim() || !project.style.trim()) throw fail(400, '가사와 음악 스타일이 필요합니다.');
-    if (project.instrumental) throw fail(400, '"악기만" 생성은 LoRA와 함께 사용할 수 없습니다. LoRA를 해제하거나 "보컬+악기"로 바꿔 주세요.');
     if (project.abc && project.abc.trim() && project.cot === 'off') throw fail(400, '악보를 사용하려면 작곡 계획을 "멜로디 계획" 또는 "멜로디와 코드 계획"으로 설정해 주세요.');
     const adapters = normalizeAdapterSelection(project.adapters, await listAdapters(paths.adapters));
     if (!adapters.length) throw fail(400, '선택한 LoRA가 설치되어 있지 않습니다. models/yue-adapters 폴더를 확인해 주세요.');
+    // "악기만": the instrumental LoRA wants section tags only (no lyric lines); an empty result becomes a single [instrumental] tag.
+    const instrumentalLyrics = project.lyrics.split(/\r?\n/).filter((line) => /^\s*\[[^\]]+\]\s*$/.test(line)).join('\n') || '[instrumental]';
     const request = {
-      style: `${project.style}${styleHint(project)}`, lyrics: project.lyrics, cot: project.cot, steps: project.steps,
+      style: `${project.style}${styleHint(project)}`, lyrics: project.instrumental ? instrumentalLyrics : project.lyrics, cot: project.instrumental && project.cot === 'off' ? 'melody' : project.cot, steps: project.steps,
       lm_seed: project.seed, seed: project.seed, output_format: 'wav16', adapters: toEngineAdapters(adapters),
       ...(project.abc && project.abc.trim() ? { abc: project.abc } : {}),
     };
