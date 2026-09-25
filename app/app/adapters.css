@@ -1,7 +1,7 @@
 /* LoRA 관리 페이지와 곡 만들기의 LoRA 선택 */
 .adapter-page { display: flex; flex-direction: column; gap: 12px; padding-bottom: 60px; }
-.adapter-tabs { display: flex; gap: 4px; padding: 4px; border-radius: 10px; background: #1a211a; border: 1px solid #2f3a2f; max-width: 520px; }
-.adapter-tabs button { flex: 1; padding: 8px 12px; border-radius: 7px; font-size: 13px; color: #8fa280; background: transparent; border: 0; cursor: pointer; }
+.adapter-tabs { display: flex; gap: 4px; padding: 4px; border-radius: 10px; background: #1a211a; border: 1px solid #2f3a2f; max-width: 720px; }
+.adapter-tabs button { flex: 1 1 auto; white-space: nowrap; padding: 8px 14px; border-radius: 7px; font-size: 13px; color: #8fa280; background: transparent; border: 0; cursor: pointer; }
 .adapter-tabs button:hover { color: #c9d8bf; }
 .adapter-tabs button.active { background: #2b382a; color: #eaf3e2; font-weight: 600; }
 .adapter-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; align-items: start; }
