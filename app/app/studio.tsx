@@ -150,6 +150,9 @@ function AbcPreview({ abc, large, controlsSlot }: { abc: string; large?: boolean
 const PP_EQ_BANDS = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
 const PP_EQ_LABELS = ['31 Hz', '62 Hz', '125 Hz', '250 Hz', '500 Hz', '1 kHz', '2 kHz', '4 kHz', '8 kHz', '16 kHz'];
 const PP_CUSTOM_PRESET = '사용자 지정';
+// preset lists are always shown A-Z (Latin first, then Hangul)
+const byName = (a: string, b: string) => a.localeCompare(b, 'en', { numeric: true, sensitivity: 'base' });
+const sortedNames = (names: string[]) => [...names].sort(byName);
 const PP_EQ_PRESETS: Record<string, number[]> = {
   '평탄': [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
   '베이스 부스트': [46, 33, 21, 8, 0, -4, -8, -8, -4, 0],
@@ -180,7 +183,7 @@ const PP_DEFAULT_PARAMS: PostProcessParams = { eq: Array(10).fill(0), masterVolu
 // Compressor: the five values of Studio's audio editor (threshold dB, knee dB, ratio :1, attack s, release s) and its presets
 // ("Classic", "Light", "Dashed Distortion", "Chaotic Distortion"), played by the browser's compressor node like Studio does.
 type CompressorValues = { threshold: number; knee: number; ratio: number; attack: number; release: number };
-const COMPRESSOR_OFF = '끔 (1:1)';
+const COMPRESSOR_OFF = 'Off (1:1)';
 const COMPRESSOR_PRESETS: Record<string, CompressorValues> = {
   [COMPRESSOR_OFF]: { threshold: -24, knee: 30, ratio: 1, attack: 0.003, release: 0.25 },
   'Classic': { threshold: -40, knee: 5, ratio: 7, attack: 0.002, release: 0.1 },
@@ -213,7 +216,7 @@ const pickEffectValues = (params: PostProcessParams): EffectValues => Object.fro
 // built-in FX · 리버브 presets (starting points, tune by ear): FxSound values + reverb / echo values
 const fxPreset = (clarity: number, spaciousness: number, surround: number, dynamicBoost: number, bassBoost: number, reverbAmount: number, reverbLength: number, echoAmount: number, echoDelayMs: number): EffectValues => ({ fxEnabled: true, reverbEchoEnabled: true, clarity, spaciousness, surround, dynamicBoost, bassBoost, reverbAmount, reverbLength, echoAmount, echoDelayMs });
 const FX_PRESETS: Record<string, EffectValues> = {
-  '초기화 (Flat)': fxPreset(0, 0, 0, 0, 0, 0, 50, 0, 300),
+  'Flat (초기화)': fxPreset(0, 0, 0, 0, 0, 0, 50, 0, 300),
   'Vocal Presence': fxPreset(25, 10, 0, 20, 0, 12, 35, 0, 300),
   'Bright Air': fxPreset(45, 25, 15, 0, -10, 8, 40, 0, 300),
   'Warm Bass': fxPreset(-10, 0, 0, 15, 35, 0, 50, 0, 300),
@@ -1273,7 +1276,7 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
         <div className="pp-settings-io">
           <select className="pp-preset-select" value={postprocessPreset} onChange={event => applyPostprocessPreset(event.target.value)} aria-label="전체 설정 프리셋">
             <option value="">전체 설정 (Total)</option>
-            {Object.keys(postprocessPresets).map(name => <option key={name} value={name}>{name}</option>)}
+            {sortedNames(Object.keys(postprocessPresets)).map(name => <option key={name} value={name}>{name}</option>)}
           </select>
           <button type="button" className="pp-preset-btn" title="현재 전체 설정을 프리셋으로 저장" onClick={openSavePostprocessPresetDialog}><Save size={12}/></button>
           {postprocessPresets[postprocessPreset] && <button type="button" className="pp-preset-btn" title={`"${postprocessPreset}" 프리셋 삭제`} onClick={() => void deletePostprocessPreset(postprocessPreset)}><Trash2 size={12}/></button>}
@@ -1290,8 +1293,8 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
               <div className="pp-preset-controls">
                 <select className="pp-preset-select" value={eqPreset} onChange={event => applyEqPreset(event.target.value)} aria-label="EQ 프리셋">
                   {eqPreset === PP_CUSTOM_PRESET && <option value={PP_CUSTOM_PRESET}>{PP_CUSTOM_PRESET}</option>}
-                  <optgroup label="기본 프리셋">{PP_EQ_PRESET_NAMES.map(name => <option key={name} value={name}>{name}</option>)}</optgroup>
-                  {Object.keys(customPresets).length > 0 && <optgroup label="저장한 프리셋">{Object.keys(customPresets).map(name => <option key={name} value={name}>{name}</option>)}</optgroup>}
+                  <optgroup label="기본 프리셋">{sortedNames(PP_EQ_PRESET_NAMES).map(name => <option key={name} value={name}>{name}</option>)}</optgroup>
+                  {Object.keys(customPresets).length > 0 && <optgroup label="저장한 프리셋">{sortedNames(Object.keys(customPresets)).map(name => <option key={name} value={name}>{name}</option>)}</optgroup>}
                 </select>
                 <button type="button" className="pp-preset-btn" title="현재 EQ 설정을 프리셋으로 저장" onClick={() => void saveCurrentAsPreset()}><Save size={12}/></button>
                 {customPresets[eqPreset] && <button type="button" className="pp-preset-btn" title={`"${eqPreset}" 프리셋 삭제`} onClick={() => void deleteCustomPreset(eqPreset)}><Trash2 size={12}/></button>}
@@ -1336,16 +1339,16 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
               <div className="pp-preset-controls pp-fx-presets">
                 <select className="pp-preset-select" value={effectPreset} onChange={event => applyEffectPreset(event.target.value)} aria-label="FX · 리버브 프리셋">
                   <option value="">FX · 리버브 프리셋</option>
-                  {Object.keys(FX_PRESETS).map(name => <option key={name} value={name}>{name}</option>)}
-                  {Object.keys(effectPresets).length > 0 && <optgroup label="저장한 프리셋">{Object.keys(effectPresets).map(name => <option key={name} value={name}>{name}</option>)}</optgroup>}
+                  {sortedNames(Object.keys(FX_PRESETS)).map(name => <option key={name} value={name}>{name}</option>)}
+                  {Object.keys(effectPresets).length > 0 && <optgroup label="저장한 프리셋">{sortedNames(Object.keys(effectPresets)).map(name => <option key={name} value={name}>{name}</option>)}</optgroup>}
                 </select>
                 <button type="button" className="pp-preset-btn" title="현재 FX Sound · 리버브/에코 설정을 프리셋으로 저장" onClick={() => void saveEffectPreset()}><Save size={12}/></button>
                 {effectPresets[effectPreset] && <button type="button" className="pp-preset-btn" title={`"${effectPreset}" 프리셋 삭제`} onClick={() => void deleteEffectPreset(effectPreset)}><Trash2 size={12}/></button>}
               </div>
               <div className="pp-preset-controls pp-comp-presetbar">
                 <select className="pp-preset-select" value={compPreset} onChange={event => applyCompPreset(event.target.value)} aria-label="Compressor 프리셋">
-                  {Object.keys(COMPRESSOR_PRESETS).map(name => <option key={name} value={name}>{name}</option>)}
-                  {Object.keys(customCompPresets).length > 0 && <optgroup label="저장한 프리셋">{Object.keys(customCompPresets).map(name => <option key={name} value={name}>{name}</option>)}</optgroup>}
+                  {sortedNames(Object.keys(COMPRESSOR_PRESETS)).map(name => <option key={name} value={name}>{name}</option>)}
+                  {Object.keys(customCompPresets).length > 0 && <optgroup label="저장한 프리셋">{sortedNames(Object.keys(customCompPresets)).map(name => <option key={name} value={name}>{name}</option>)}</optgroup>}
                   {!(compPreset in COMPRESSOR_PRESETS) && !(compPreset in customCompPresets) && <option value={compPreset}>{compPreset}</option>}
                 </select>
                 <button type="button" className="pp-preset-btn" title="현재 Compressor 설정을 프리셋으로 저장" onClick={() => void saveCompPreset()}><Save size={12}/></button>
