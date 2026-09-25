@@ -579,6 +579,11 @@ function CompareSpectrogram({ buffer, fraction }: { buffer: AudioBuffer | null; 
 function snapTo5(value: number): number { return Math.round(value / 5) * 5; }
 const snapToStep = (value: number, step: number) => Math.round(value / step) * step;
 
+// horizontal slider row for the post-process dialog ("음량 · 시간"): label, slider, value + unit
+function PpSlider({ label, unit, value, min, max, step, onChange }: { label: string; unit: string; value: number; min: number; max: number; step: number; onChange: (next: number) => void }) {
+  return <label className="pp-slider"><span className="pp-slider-label">{label}</span><input type="range" min={min} max={max} step={step} value={value} aria-label={`${label} (${unit})`} onChange={event => onChange(Number(event.target.value))}/><span className="pp-slider-value">{Number.isInteger(value) ? value : value.toFixed(1)} {unit}</span></label>;
+}
+
 function EqBar({ label, value, onChange }: { label: string; value: number; onChange: (next: number) => void }) {
   const dragRef = useRef<{ startY: number; startValue: number } | null>(null);
   function onPointerDown(event: React.PointerEvent<HTMLDivElement>) {
@@ -1174,13 +1179,13 @@ function PostProcessDialog({ project, onClose, notify, visualizerEnabled, visual
               </div>
             </div>
           </div>
-          <div className="pp-knob-grid pp-extra-grid">
-            <Knob label="게인 (dB)" value={params.gainDb} min={-12} max={12} step={1} onChange={value => updateParam('gainDb', value)} variant="fx"/>
-            <Knob label="노멀라이즈 목표 (dB)" value={params.normalizeDb} min={-12} max={0} step={1} onChange={value => updateParam('normalizeDb', value)} variant="fx"/>
-            <Knob label="리미터 상한 (dB)" value={params.limiterDb} min={-12} max={0} step={1} onChange={value => updateParam('limiterDb', value)} variant="fx"/>
-            <Knob label="페이드 인 (초)" value={params.fadeInSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeInSec', value)} variant="reverb"/>
-            <Knob label="페이드 아웃 (초)" value={params.fadeOutSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeOutSec', value)} variant="reverb"/>
-            <Knob label="무음 기준 (dB)" value={params.silenceDb} min={-80} max={-20} step={5} onChange={value => updateParam('silenceDb', value)} variant="reverb"/>
+          <div className="pp-extra-sliders">
+            <PpSlider label="게인" unit="dB" value={params.gainDb} min={-12} max={12} step={1} onChange={value => updateParam('gainDb', value)}/>
+            <PpSlider label="노멀라이즈 목표" unit="dB" value={params.normalizeDb} min={-12} max={0} step={1} onChange={value => updateParam('normalizeDb', value)}/>
+            <PpSlider label="리미터 상한" unit="dB" value={params.limiterDb} min={-12} max={0} step={1} onChange={value => updateParam('limiterDb', value)}/>
+            <PpSlider label="무음 기준" unit="dB" value={params.silenceDb} min={-80} max={-20} step={5} onChange={value => updateParam('silenceDb', value)}/>
+            <PpSlider label="페이드 인" unit="초" value={params.fadeInSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeInSec', value)}/>
+            <PpSlider label="페이드 아웃" unit="초" value={params.fadeOutSec} min={0} max={10} step={0.5} onChange={value => updateParam('fadeOutSec', value)}/>
           </div>
         </div>
         <div className={`pp-waveform-row${activeTrack === 'original' && isPlaying ? ' pp-row-playing-original' : ''}`}>
