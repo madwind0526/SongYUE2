@@ -3615,16 +3615,30 @@ function PolishReportPanel({ report }: { report: PolishReport }) {
 // defaults (denoise + vocal naturalize on, spectral lifter off; no reference mastering). The result replaces the tool's result on "적용".
 const AUDIO_POLISH_DEFAULT: PolishSettings = { denoise: { enabled: true, strength: 0.3 }, lifter: { enabled: false, gate: 0.3, shimmerDb: 4, hfMix: 0, punch: 0 }, naturalize: { enabled: true, amount: 0.5 }, master: { enabled: false } };
 function AudioPolishDialog({ audioDataUrl, onClose, onApply }: { audioDataUrl: string; onClose: () => void; onApply: (dataUrl: string) => Promise<void> }) {
+  const t = useAudioTransport();
   const [settings, setSettings] = useState<PolishSettings>(AUDIO_POLISH_DEFAULT);
   const [running, setRunning] = useState(false);
   const [applying, setApplying] = useState(false);
   const [result, setResult] = useState<{ dataUrl: string; report: PolishReport | null } | null>(null);
   const [errorText, setErrorText] = useState('');
-  const patch = <K extends keyof PolishSettings>(key: K, value: Partial<PolishSettings[K]>) => { setResult(null); setSettings(previous => ({ ...previous, [key]: { ...previous[key], ...value } })); };
+  const patch = <K extends keyof PolishSettings>(key: K, value: Partial<PolishSettings[K]>) => { setResult(null); t.setBuffer('output', null); setSettings(previous => ({ ...previous, [key]: { ...previous[key], ...value } })); };
   const anyStage = settings.denoise.enabled || settings.lifter.enabled || settings.naturalize.enabled;
+  const decode = async (dataUrl: string) => t.ensureAudioContext().decodeAudioData(await (await fetch(dataUrl)).arrayBuffer());
+  // the current result is listed as "원본" so it can be compared with the processed one
+  useEffect(() => { decode(audioDataUrl).then(buffer => t.setBuffer('source', buffer)).catch(() => setErrorText('원본 오디오를 불러오지 못했습니다.')); }, [audioDataUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+  const sourceBuffer = t.bufferForKey('source');
+  const outputBuffer = t.bufferForKey('output');
+  const row = (key: 'source' | 'output', label: string, buffer: AudioBuffer | null, processed: boolean, note: string) => <div className={t.rowClass(key, 'stem-row')}>
+    <div className="audio-compare-toolbar">
+      <button type="button" className="pp-waveform-label" aria-label={`${label} 재생/일시정지`} onClick={() => t.handleKeyClick(key)} disabled={!buffer}>{t.activeKey === key && t.isPlaying ? <Pause size={15}/> : <Play size={15}/>}</button>
+      <span className="stem-label audio-compare-label"><strong>{label}</strong><small>{note}</small></span>
+      {buffer && <span className="pp-seek-time audio-compare-duration">{formatSeekTime(buffer.duration)}</span>}
+    </div>
+    <div className="audio-compare-charts"><CompareWaveform peaks={t.peaksForKey(key)} fraction={t.positionSeconds / (buffer?.duration || 1)} processed={processed}/></div>
+  </div>;
   async function start() {
-    setRunning(true); setErrorText(''); setResult(null);
-    try { setResult(await api<{ dataUrl: string; report: PolishReport | null }>('/audio-tools/polish', 'POST', { audioDataUrl, settings })); }
+    setRunning(true); setErrorText(''); setResult(null); t.setBuffer('output', null);
+    try { const done = await api<{ dataUrl: string; report: PolishReport | null }>('/audio-tools/polish', 'POST', { audioDataUrl, settings }); t.setBuffer('output', await decode(done.dataUrl)); setResult(done); }
     catch (error) { setErrorText((error as Error).message); }
     finally { setRunning(false); }
   }
@@ -3654,9 +3668,16 @@ function AudioPolishDialog({ audioDataUrl, onClose, onApply }: { audioDataUrl: s
         {settings.lifter.enabled && <PolishSlider label="줄이는 정도" value={settings.lifter.shimmerDb} min={0} max={12} step={1} unit=" dB" onChange={value => patch('lifter', { shimmerDb: value })} disabled={running}/>}
       </div>
       {errorText && <p className="field-hint warning">{errorText}</p>}
+      <div className="stem-list">
+        {row('source', '원본', sourceBuffer, false, '지금의 처리본')}
+        {row('output', '처리 후', outputBuffer, true, outputBuffer ? '노이즈 제거 · 보컬 자연화 등 적용' : '아직 처리하지 않았습니다')}
+      </div>
       {result?.report && <PolishReportPanel report={result.report}/>}
       {result && !result.report && <p className="field-hint">처리를 마쳤습니다.</p>}
+      <span className="field-hint">두 줄의 재생 버튼을 번갈아 누르면 같은 재생 위치에서 이어서 들려서 차이만 비교할 수 있습니다.</span>
+      <SeekRow t={t}/>
       <div className="dialog-actions">
+        <TransportControls t={t} disabled={!sourceBuffer}/>
         <Button variant="outline" onClick={onClose} disabled={running || applying}>닫기</Button>
         <Button variant="outline" onClick={() => void start()} disabled={!anyStage || running || applying}>{running ? <LoaderCircle className="spin" size={15}/> : <WandSparkles size={15}/>}{result ? '다시 처리' : '처리 시작'}</Button>
         <Button onClick={() => void apply()} disabled={!result || running || applying}>{applying ? <LoaderCircle className="spin" size={15}/> : <Check size={15}/>}적용</Button>
