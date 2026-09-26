@@ -274,10 +274,11 @@ button.adapter-card, label.adapter-card { cursor: pointer; }
 .vst-preset-bar select { flex: 1; min-width: 0; height: 32px; border-radius: 8px; border: 1px solid #3b493d; background: #131a13; color: inherit; padding: 0 8px; }
 .vst-preset-bar input { flex: 1; min-width: 0; height: 32px; }
 .audio-compare-dialog.vst-test-dialog { width: 760px !important; }
-.vst-test-controls { display: flex; align-items: center; gap: 10px; }
+.vst-test-controls { display: flex; align-items: flex-end; gap: 10px; }
 .vst-test-song { flex: 1 1 auto; min-width: 0; }
 .vst-test-num { flex: 0 0 96px; }
-.vst-test-controls > button { flex: none; }
+.vst-test-action { flex: none; }
+.vst-test-action > button { height: 40px; min-height: 40px; }
 .vst-match-row { display: flex; align-items: center; gap: 12px; }
 .vst-match-row .field-hint { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .vst-match-loudness { flex: none; }

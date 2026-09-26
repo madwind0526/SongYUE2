@@ -4565,7 +4565,7 @@ function VstTestDialog({ plugin, songs, onClose, notify }: { plugin: VstPlugin; 
           <label className="train-field vst-test-song">곡<select value={songId} onChange={event => { setSongId(event.target.value); clearTest(); }} disabled={running}>{songs.map(song => <option key={song.id} value={song.id}>{song.title}</option>)}</select></label>
           <label className="train-field vst-test-num">시작 (초)<Input type="number" min={0} value={start} onChange={event => { setStart(event.target.value); clearTest(); }} disabled={running}/></label>
           <label className="train-field vst-test-num">길이 (초)<Input type="number" min={5} max={60} value={seconds} onChange={event => { setSeconds(event.target.value); clearTest(); }} disabled={running}/></label>
-          <Button onClick={() => void run()} disabled={running || !songId}>{running ? <LoaderCircle className="spin" size={15}/> : <Play size={15}/>}{test ? '다시 만들기' : '시험 만들기'}</Button>
+          <div className="train-field vst-test-action"><span>실행</span><Button onClick={() => void run()} disabled={running || !songId}>{running ? <LoaderCircle className="spin" size={15}/> : <Play size={15}/>}{test ? '다시 만들기' : '시험 만들기'}</Button></div>
         </div>
         {test && <>
           <div className="vst-match-row">
