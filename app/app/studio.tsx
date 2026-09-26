@@ -4200,7 +4200,8 @@ function AdapterPicker({ selected, onChange, style, onInsertTrigger, notify }: {
 
 // What a polish run really changed, measured on the audio (before vs. after): so the effect can be checked by numbers, not only by ear.
 type PolishReport = { changeDb: number; verdict: string; loudnessDb: { before: number; after: number }; peakDb: { before: number; after: number }; quietDb: { before: number; after: number }; bands: { label: string; deltaDb: number }[] };
-const POLISH_STRONG: PolishSettings = { denoise: { enabled: true, strength: 0.9 }, lifter: { enabled: true, gate: 0.7, shimmerDb: 12, hfMix: 0.3, punch: 0.5 }, naturalize: { enabled: true, amount: 1 }, master: { enabled: false } };
+const NATURALIZE_DEFAULT: Omit<NaturalizeSettings, 'enabled'> = { amount: 0.5, vibratoRate: 4.5, vibratoDepth: 1, formantStrength: 1, metallicReduction: 1, quantizationMask: 0, transitionSmooth: 1, seed: 1 };
+const POLISH_STRONG: PolishSettings = { denoise: { enabled: true, strength: 0.9 }, lifter: { enabled: true, gate: 0.7, shimmerDb: 12, hfMix: 0.3, punch: 0.5 }, naturalize: { enabled: true, ...NATURALIZE_DEFAULT, amount: 1 }, master: { enabled: false } };
 function PolishReportPanel({ report }: { report: PolishReport }) {
   const weak = report.changeDb < -30;
   const scale = (value: number) => `${Math.min(50, Math.abs(value) / 10 * 50)}%`;
@@ -4214,7 +4215,7 @@ function PolishReportPanel({ report }: { report: PolishReport }) {
 
 // "AI 처리" for sound made in Audio Tools (speech, effects, converted voices): the same chain as "AI 곡 다듬기", with speech-friendly
 // defaults (denoise + vocal naturalize on, spectral lifter off; no reference mastering). The result replaces the tool's result on "적용".
-const AUDIO_POLISH_DEFAULT: PolishSettings = { denoise: { enabled: true, strength: 0.3 }, lifter: { enabled: false, gate: 0.3, shimmerDb: 4, hfMix: 0, punch: 0 }, naturalize: { enabled: true, amount: 0.5 }, master: { enabled: false } };
+const AUDIO_POLISH_DEFAULT: PolishSettings = { denoise: { enabled: true, strength: 0.3 }, lifter: { enabled: false, gate: 0.3, shimmerDb: 4, hfMix: 0, punch: 0 }, naturalize: { enabled: true, ...NATURALIZE_DEFAULT }, master: { enabled: false } };
 function AudioPolishDialog({ audioDataUrl, onClose, onApply, kind = 'sound' }: { audioDataUrl: string; onClose: () => void; onApply: (dataUrl: string) => Promise<void>; kind?: 'sound' | 'song' }) {
   const t = useAudioTransport();
   const song = kind === 'song';
@@ -4364,20 +4365,32 @@ function ResultEnhanceButtons({ buffer, onReplace, notify, title, disabled, kind
 
 // "AI 곡 다듬기": AI로 만든 곡의 결함(잡음, 반짝임, 기계적인 보컬)을 다듬는 후처리 체인. 사용자가 단계를 켜고
 // 시작하면 서버가 미리듣기를 만들고, 원본과 같은 위치에서 번갈아 들어 본 뒤 새 곡으로 저장하거나 버린다.
+type NaturalizeSettings = {
+  enabled: boolean;
+  amount: number;
+  vibratoRate: number;
+  vibratoDepth: number;
+  formantStrength: number;
+  metallicReduction: number;
+  quantizationMask: number;
+  transitionSmooth: number;
+  seed: number;
+};
 type PolishSettings = {
   denoise: { enabled: boolean; strength: number };
   lifter: { enabled: boolean; gate: number; shimmerDb: number; hfMix: number; punch: number };
-  naturalize: { enabled: boolean; amount: number };
+  naturalize: NaturalizeSettings;
   master: { enabled: boolean };
 };
 const POLISH_DEFAULT: PolishSettings = {
   denoise: { enabled: true, strength: 0.4 },
   lifter: { enabled: true, gate: 0.3, shimmerDb: 6, hfMix: 0, punch: 0 },
-  naturalize: { enabled: true, amount: 0.5 },
+  naturalize: { enabled: true, ...NATURALIZE_DEFAULT },
   master: { enabled: false },
 };
-function PolishSlider({ label, value, min, max, step, unit, onChange, disabled }: { label: string; value: number; min: number; max: number; step: number; unit?: string; onChange: (next: number) => void; disabled?: boolean }) {
-  return <label className="polish-slider"><span>{label}<b>{Number.isInteger(step) ? value : value.toFixed(2)}{unit || ''}</b></span><input type="range" min={min} max={max} step={step} value={value} disabled={disabled} onChange={event => onChange(Number(event.target.value))} style={{ accentColor: '#7fb069' }}/></label>;
+function PolishSlider({ label, value, min, max, step, unit, onChange, disabled, editable = false }: { label: string; value: number; min: number; max: number; step: number; unit?: string; onChange: (next: number) => void; disabled?: boolean; editable?: boolean }) {
+  const clamp = (next: number) => Number.isFinite(next) ? Math.min(max, Math.max(min, next)) : value;
+  return <label className="polish-slider"><span>{label}{editable ? <span className="polish-slider-number-wrap"><input className="polish-slider-number" type="number" min={min} max={max} step={step} value={Number.isInteger(step) ? value : value.toFixed(2)} disabled={disabled} onChange={event => onChange(clamp(Number(event.target.value)))} aria-label={`${label} 값`}/>{unit || ''}</span> : <b>{Number.isInteger(step) ? value : value.toFixed(2)}{unit || ''}</b>}</span><input type="range" min={min} max={max} step={step} value={value} disabled={disabled} onChange={event => onChange(Number(event.target.value))} style={{ accentColor: '#7fb069' }}/></label>;
 }
 // VST3 plugins in "AI 곡 다듬기" (vst-host runs them as a separate process): search / add, the plugin's own settings window (its state is saved when
 // that window is closed), on / off, order and removal. The chain is applied between the vocal naturalizer and mastering.
@@ -4725,6 +4738,8 @@ function AiPolishDialog({ project, onClose, notify, onCreated }: { project: Proj
   const [title, setTitle] = useState(`${project.title} (다듬기)`);
   const [saving, setSaving] = useState(false);
   const [errorText, setErrorText] = useState('');
+  const [naturalizeAdvancedOpen, setNaturalizeAdvancedOpen] = useState(false);
+  const [naturalizeDraft, setNaturalizeDraft] = useState<NaturalizeSettings>(POLISH_DEFAULT.naturalize);
   const previewRef = useRef<string | null>(null);
   const sourceBuffer = t.bufferForKey('source');
   const outputBuffer = t.bufferForKey('output');
@@ -4754,6 +4769,8 @@ function AiPolishDialog({ project, onClose, notify, onCreated }: { project: Proj
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function patch<K extends keyof PolishSettings>(key: K, value: Partial<PolishSettings[K]>) { setSettings(previous => ({ ...previous, [key]: { ...previous[key], ...value } })); }
+  function openNaturalizeAdvanced() { setNaturalizeDraft({ ...settings.naturalize }); setNaturalizeAdvancedOpen(true); }
+  function applyNaturalizeAdvanced() { setSettings(previous => ({ ...previous, naturalize: { ...naturalizeDraft } })); setNaturalizeAdvancedOpen(false); void discardPreview(); }
   async function discardPreview() {
     const id = previewRef.current;
     previewRef.current = null;
@@ -4762,7 +4779,7 @@ function AiPolishDialog({ project, onClose, notify, onCreated }: { project: Proj
     matched.clear();
     if (id) await fetch(`/api/polish/${id}`, { method: 'DELETE' }).catch(() => {});
   }
-  async function start() {
+  async function start(settingsInput: PolishSettings = settings) {
     setRunning(true);
     setErrorText('');
     setProgress(0);
@@ -4777,7 +4794,7 @@ function AiPolishDialog({ project, onClose, notify, onCreated }: { project: Proj
       }).catch(() => {});
     }, 700);
     try {
-      const result = await api<{ previewId: string; stages: string[]; report: PolishReport | null }>(`/projects/${project.id}/polish`, 'POST', { settings: { ...settings, vst: vstChain }, referencePath: settings.master.enabled ? referencePath : undefined });
+      const result = await api<{ previewId: string; stages: string[]; report: PolishReport | null }>(`/projects/${project.id}/polish`, 'POST', { settings: { ...settingsInput, vst: vstChain }, referencePath: settingsInput.master.enabled ? referencePath : undefined });
       previewRef.current = result.previewId;
       setPreviewId(result.previewId);
       setAppliedStages(result.stages);
@@ -4804,12 +4821,12 @@ function AiPolishDialog({ project, onClose, notify, onCreated }: { project: Proj
   const row = (key: 'source' | 'output', label: string, buffer: AudioBuffer | null, processed: boolean, note: string) => <div className={t.rowClass(key, 'stem-row')}>
     <div className="audio-compare-toolbar">
       <button type="button" className="pp-waveform-label" aria-label={`${label} 재생/일시정지`} onClick={() => t.handleKeyClick(key)} disabled={!buffer}>{t.activeKey === key && t.isPlaying ? <Pause size={15}/> : <Play size={15}/>}</button>
-      <span className="stem-label audio-compare-label"><strong>{label}</strong><small>{note}</small></span>
+      <span className="stem-label audio-compare-label"><strong>{label}</strong>{note && <small>{note}</small>}</span>
       {buffer && <span className="pp-seek-time audio-compare-duration">{formatSeekTime(buffer.duration)}</span>}
     </div>
     <div className="audio-compare-charts">
       <CompareWaveform peaks={t.peaksForKey(key)} fraction={t.positionSeconds / (buffer?.duration || 1)} processed={processed}/>
-      <CompareSpectrogram buffer={buffer} fraction={t.positionSeconds / (buffer?.duration || 1)}/>
+      {buffer && <CompareSpectrogram buffer={buffer} fraction={t.positionSeconds / (buffer.duration || 1)}/>}
     </div>
   </div>;
 
@@ -4837,8 +4854,8 @@ function AiPolishDialog({ project, onClose, notify, onCreated }: { project: Proj
             </>}
           </div>
           <div className="polish-step">
-            <label className="at-function"><input type="checkbox" checked={settings.naturalize.enabled} onChange={event => patch('naturalize', { enabled: event.target.checked })} disabled={running}/>보컬 자연화</label>
-            <p className="field-hint">생성된 목소리의 기계적으로 고른 느낌을 풀어 줍니다(보컬을 따로 분리하지 않고 전체 믹스에 적용).</p>
+            <div className="polish-step-head"><label className="at-function"><input type="checkbox" checked={settings.naturalize.enabled} onChange={event => patch('naturalize', { enabled: event.target.checked })} disabled={running}/>보컬 자연화</label><Button type="button" variant="outline" size="sm" onClick={openNaturalizeAdvanced} disabled={running}>Advanced</Button></div>
+            <p className="field-hint">AI 특유의 금속성 고음을 줄이고 소리를 조금 부드럽게 합니다.</p>
             {settings.naturalize.enabled && <PolishSlider label="양" value={settings.naturalize.amount} min={0.05} max={1} step={0.05} onChange={value => patch('naturalize', { amount: value })} disabled={running}/>}
           </div>
           <VstChainPanel chain={vstChain} onChange={setVstChain} disabled={running} notify={notify}/>
@@ -4874,6 +4891,27 @@ function AiPolishDialog({ project, onClose, notify, onCreated }: { project: Proj
         </div>
       </div>
     </DialogContent>
+    <Dialog open={naturalizeAdvancedOpen} onOpenChange={next => { if (!next) setNaturalizeAdvancedOpen(false); }}>
+      <DialogContent className="studio-dialog polish-advanced-dialog">
+        <DialogTitle>보컬 자연화 고급 설정</DialogTitle>
+        <DialogDescription>현재 설정값을 기준으로 조정합니다. 적용 후 다시 처리해야 새 값이 결과에 반영됩니다.</DialogDescription>
+        <div className="polish-advanced-grid">
+          <PolishSlider label="전체 양" value={naturalizeDraft.amount} min={0.05} max={1} step={0.05} onChange={value => setNaturalizeDraft(previous => ({ ...previous, amount: value }))} editable/>
+          <PolishSlider label="미세 흔들림 속도 (Hz)" value={naturalizeDraft.vibratoRate} min={3} max={7} step={0.1} onChange={value => setNaturalizeDraft(previous => ({ ...previous, vibratoRate: value }))} editable/>
+          <PolishSlider label="미세 흔들림 깊이" value={naturalizeDraft.vibratoDepth} min={0} max={2} step={0.05} onChange={value => setNaturalizeDraft(previous => ({ ...previous, vibratoDepth: value }))} editable/>
+          <PolishSlider label="보컬 질감" value={naturalizeDraft.formantStrength} min={0} max={2} step={0.05} onChange={value => setNaturalizeDraft(previous => ({ ...previous, formantStrength: value }))} editable/>
+          <PolishSlider label="금속성 고음 감소" value={naturalizeDraft.metallicReduction} min={0} max={2} step={0.05} onChange={value => setNaturalizeDraft(previous => ({ ...previous, metallicReduction: value }))} editable/>
+          <PolishSlider label="디지털 질감 마스킹" value={naturalizeDraft.quantizationMask} min={0} max={1} step={0.05} onChange={value => setNaturalizeDraft(previous => ({ ...previous, quantizationMask: value }))} editable/>
+          <PolishSlider label="전환 부드럽게" value={naturalizeDraft.transitionSmooth} min={0} max={2} step={0.05} onChange={value => setNaturalizeDraft(previous => ({ ...previous, transitionSmooth: value }))} editable/>
+          <PolishSlider label="질감 패턴(시드)" value={naturalizeDraft.seed} min={0} max={9999} step={1} onChange={value => setNaturalizeDraft(previous => ({ ...previous, seed: value }))} editable/>
+        </div>
+        <div className="polish-advanced-compare">
+          <div className="stem-list">{row('source', '원본', sourceBuffer, false, '')}{row('output', '다듬은 곡', outputBuffer, true, '')}</div>
+        </div>
+                <SeekRow t={t}/>
+        <div className="dialog-actions polish-advanced-actions"><TransportControls t={t} disabled={!sourceBuffer}/><div className="polish-advanced-actions-right"><Button variant="outline" onClick={() => setNaturalizeAdvancedOpen(false)}>취소</Button><Button type="button" variant="outline" onClick={() => void start({ ...settings, naturalize: { ...naturalizeDraft } })} disabled={running || saving || !settings.naturalize.enabled}>{running ? <LoaderCircle className="spin" size={14}/> : <Play size={14}/>}미리보기</Button><Button onClick={applyNaturalizeAdvanced}>적용</Button></div></div>
+      </DialogContent>
+    </Dialog>
     <MultiFileLibraryPicker open={referencePickerOpen} onClose={() => setReferencePickerOpen(false)} onConfirm={paths => paths[0] && setReferencePath(paths[0])} title="기준곡 선택" description="음량과 음색 균형을 맞출 기준곡을 라이브러리에서 고릅니다."/>
   </Dialog>;
 }

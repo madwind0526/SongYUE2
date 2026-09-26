@@ -1,5 +1,18 @@
 # TODO
 
+## 현재 남은 일 요약 (2026-09-25)
+
+- **LoRA 학습 화면**: 완료(2026-09-26, 곡 선택·옵션·진행률·EMA/raw 선택·Installed 등록·보관함 수정/삭제). 남은 것: 캡션(.txt) 작업 폴더 처리 확인, rank16/32 비교 LoRA·곡 정리.
+- **LoRA 운영 마무리**: 악기만+LoRA 동시 사용 검증·보완, yue-server 경로 설정, 설치/다운로드 스크립트.
+- **AI 곡 다듬기**: VST3 단계와 "VST3 관리" 페이지 완료(2026-09-26, Dragonfly Reverb로 검증). 남은 것: 다른 플러그인 동작 시험, Audio Tools "AI 처리"에 VST3 UI, 실제 곡 청취 평가. 자연화 세부 옵션 노출은 선택 과제.
+- **곡 표지 자동 생성**: 완료(2026-09-26, Z-Image Turbo → Pixabay → 그래픽). 남은 것: 가사를 반영한 표지(LLM 번역 필요), Pixabay 검색어 개선.
+- **앱 버전**: 1.0(2026-09-26).
+- **가사 싱크**: 단어별 하이라이트, 화자/듀엣 구분. 문장 단위 LRC는 완료.
+- **Audio Tools 개선**: 실시간 변환의 마이크·헤드폰 체감 확인, 출력 장치 선택, 지연/끊김 지표. 효과음 한국어 자동 번역 검토. 대사 편집·효과음 생성·실시간 변환 자체는 구현 완료.
+- **보류**: ACE-Step 편집, 추가 화자 분리·VAD, 음성 인식 결과 SRT/LRC 저장, 비-Chromium 저장 검증, 프론트 회귀 자동화. Forced Aligner는 대사 정밀 편집에 이미 사용.
+- **UI 검증 후속**: 실제 모바일 키보드/OS 큰 글꼴. 데스크톱 390×420 선택 팝업 확인과는 구분.
+- **이번 작업**: Installed 분류·언어 옵션은 허깅페이스와 동일하게 유지. 월드/민속·중국어 버튼 제외, 분류·언어·정렬을 한 줄에 배치(좁으면 줄바꿈). 현재 변경은 미커밋.
+
 ## ▶ 진행 중 계획 (2026-09-24): AuK 완전 제거 + Audio Tools를 audio.cpp 기반으로 재구성
 
 **결정 사항(사용자 확정)**
@@ -144,3 +157,12 @@ DDSP-SVC 탭은 실제 GPU로 목표 스텝을 작게 잡아(`targetStep: 300`) 
 - [x] **2. 가사 싱크(LRC)** (완료): `backend/lyricsync.mjs`(편집거리 매칭), `/api/projects/:id/lyrics-sync`·`/lrc`, 화면 `LyricsSyncDialog`(곡 메뉴 "가사 싱크 (LRC)") + 플레이어 하단 현재 가사. 3곡 실측 한국어 100%·영어 92%·일본어 96%. 음원 응답에 HTTP Range 지원 추가. 남은 것: 단어 단위 하이라이트(데이터는 `words`에 이미 있음), 화자/듀엣 구분.
 - [x] **3. LoRA** (통합 완료, 학습은 아직): 타당성 시험(Studio의 `yue-server`는 이 앱의 audio.cpp용 GGUF를 못 읽고 자기 GGUF가 필요, LoRA·ComfyUI·bf16 형식 모두 로드됨, 공개 LoRA 적용 시 소리가 실제로 바뀜)을 거쳐 **LoRA를 고른 곡만** yue-server로 만들도록 통합했다(`backend/yueserver.mjs`, `backend/adapters.mjs`, "LoRA 관리" 화면, 곡 만들기의 작곡/사운드 강도). 남은 것: LoRA 학습(Studio 트레이너: LoKr 64/4, ≥11 GB VRAM, 곡 5~20개), "악기만"과 LoRA 동시 사용, 설정 화면에서 yue-server 경로 지정, 다운로드 스크립트.
   - **LoRA 학습 타당성 시험 (2026-09-25, 통과)**: ComfyUI 노드 `Starnodes2024/ComfyUI-YuE2-Trainer`를 `engine/ComfyUI/custom_nodes/`에 설치하고 BF16 체크포인트(`yue2_3b_bf16.safetensors`, 7.8 GB, `engine/ComfyUI/models/checkpoints/`)를 받아, `library/Audio-Ref`의 지수 4곡(12분)으로 학습. 조건 clip 6초 · rank 32 · adamw_8bit · 1500스텝 → 약 9분(0.35~0.45 s/step), RTX 5070 12 GB에서 완주(VRAM 최대 약 11.7 GB, 곡 생성과 동시 불가). 결과는 사운드(NAR) LoRA 하나(213 MB, `models/loras`)이고 yue-server가 읽음(엔진 검사 통과, NAR만). 트리거 단어 `jisoo_voice`. 남은 일: LoRA 관리에 "학습" 탭(곡 고르기, 이름·트리거·스텝, 진행률, 완료 시 Installed 등록). 시험 스크립트: `scratch/lora-train-test/`.
+
+
+## Completed in the current polish wave (2026-09-26)
+
+- [x] Add Advanced controls for all eight vocal-naturalization parameters.
+- [x] Add bounded numeric entry for Advanced slider values.
+- [x] Add preview and before/after waveform-spectrogram comparison.
+- [x] Match the comparison footer to the standard audio-compare transport layout.
+- [ ] Continue listening evaluation of naturalization strength; measured behavior is primarily high-frequency attenuation.

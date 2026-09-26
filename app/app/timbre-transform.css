@@ -263,10 +263,30 @@
 /* AI 곡 다듬기 */
 .polish-step { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; margin-top: 8px; border: 1px solid #3b493d; border-radius: 10px; background: #1d251d; }
 .polish-step .at-function { align-self: flex-start; }
+.polish-step-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.polish-step-head .at-function { align-self: auto; }
 .polish-step .field-hint { margin: 0; }
 .polish-slider { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: #a9b8a4; }
 .polish-slider > span { display: flex; justify-content: space-between; }
 .polish-slider b { color: #e4ece0; font-weight: 600; }
+.polish-slider-number-wrap { display: inline-flex; align-items: center; gap: 3px; color: #e4ece0; font-weight: 600; }
+.polish-slider-number { width: 58px; padding: 2px 4px; border: 1px solid #4a5c40; border-radius: 4px; background: #182018; color: #e4ece0; font: inherit; text-align: right; }
+.polish-advanced-dialog { width: min(760px, 94vw) !important; max-height: calc(100vh - 32px); overflow-y: auto; }
+.polish-advanced-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 18px; }
+.polish-advanced-compare { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid #3b493d; }
+.polish-advanced-compare .stem-row { display: flex !important; flex-direction: column; align-items: stretch; gap: 8px; padding: 8px 0 14px; }
+.polish-advanced-compare .stem-list { margin: 0; gap: 4px; }
+.polish-advanced-compare .audio-compare-toolbar { width: 100%; margin: 0; }
+.polish-advanced-compare .audio-compare-label { width: auto; flex: 1; flex-direction: row; align-items: center; gap: 8px; }
+.polish-advanced-compare .audio-compare-charts { width: 100%; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.polish-advanced-compare .audio-compare-charts .compare-waveform { width: 100%; min-width: 0; }
+.polish-advanced-compare .audio-compare-charts .compare-spectrogram { width: 100%; }
+.polish-advanced-compare .compare-spectrogram-plot { height: 140px; }
+.polish-advanced-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid #384038; padding-top: 12px; }
+.polish-advanced-actions-right { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+@media (max-width: 700px) { .polish-advanced-grid { grid-template-columns: 1fr; } }
+@media (max-width: 560px) { .polish-advanced-actions { align-items: stretch; flex-direction: column; } .polish-advanced-actions-right { justify-content: flex-end; } }
+@media (max-width: 560px) { .polish-advanced-compare .compare-spectrogram-plot { height: 112px; } }
 
 /* 가사 싱크 */
 .lyric-sync-dialog { max-width: 640px; }

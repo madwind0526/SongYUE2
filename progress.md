@@ -213,3 +213,13 @@
 - EQ 프리셋 / 전체 설정 프리셋 파일 내보내기·가져오기(다른 PC로 옮기기 쉽게) — 다이얼로그에 저장(POST)만 있고 내보내기/가져오기 버튼 없음 (Playwright로 2026-09-12 재확인, 여전히 미구현)
 
 ~~후처리 다이얼로그에 "전체 초기화" 버튼~~ — 애초 EQ/FX/리버브·에코를 한 번에 초기화하는 버튼으로 의도했으나, 실제로는 셋을 각각 초기화하는 버튼으로 구현되어 통합 버튼은 드롭하기로 결정. 각 섹션의 개별 초기화 버튼(`EQ 초기화`/`FX Sound 초기화`/`리버브/에코 초기화`)으로 충분하다고 판단.
+
+
+## AI song polish naturalization controls (2026-09-26)
+
+- [x] Advanced dialog beside Vocal Naturalization with eight sliders using the current defaults.
+- [x] Numeric values are editable and clamped to each slider's low/high range.
+- [x] Preview action uses the draft values and refreshes the processed comparison result.
+- [x] Comparison layout follows the audio-compare pattern: header, full-width waveform, then full-width spectrogram for each source/result.
+- [x] Transport controls and seek bar are grouped at the bottom with Cancel, Preview, and Apply actions.
+- [x] Backend normalization forwards vibrato, formant, masking, metallic-reduction, transition, and seed settings.

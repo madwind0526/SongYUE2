@@ -2,14 +2,14 @@
 // naturalizer -> VST3 plugins -> mastering to a reference track. Audio is { left, right, rate } with Float32Array channels.
 import { denoise } from './denoise.mjs';
 import { lift } from './lifter.mjs';
-import { naturalize } from './naturalize.mjs';
+import { NATURALIZE_DEFAULTS, naturalize } from './naturalize.mjs';
 import { master } from './mastering.mjs';
 import { VST_MAX_PLUGINS } from './vst-stage.mjs';
 
 export const POLISH_DEFAULTS = {
   denoise: { enabled: false, strength: 0.4 },
   lifter: { enabled: false, gate: 0.3, shimmerDb: 6, hfMix: 0, punch: 0 },
-  naturalize: { enabled: false, amount: 0.5 },
+  naturalize: { enabled: false, ...NATURALIZE_DEFAULTS },
   vst: { enabled: false, plugins: [] },
   master: { enabled: false },
 };
@@ -29,7 +29,17 @@ export function normalizePolishSettings(input = {}) {
   return {
     denoise: { enabled: d.enabled === true, strength: clamp(d.strength, 0.05, 1, POLISH_DEFAULTS.denoise.strength) },
     lifter: { enabled: l.enabled === true, gate: clamp(l.gate, 0, 1, 0.3), shimmerDb: clamp(l.shimmerDb, 0, 12, 6), hfMix: clamp(l.hfMix, 0, 0.5, 0), punch: clamp(l.punch, 0, 1, 0) },
-    naturalize: { enabled: n.enabled === true, amount: clamp(n.amount, 0.05, 1, 0.5) },
+    naturalize: {
+      enabled: n.enabled === true,
+      amount: clamp(n.amount, 0.05, 1, NATURALIZE_DEFAULTS.amount),
+      vibratoRate: clamp(n.vibratoRate, 3, 7, NATURALIZE_DEFAULTS.vibratoRate),
+      vibratoDepth: clamp(n.vibratoDepth, 0, 2, NATURALIZE_DEFAULTS.vibratoDepth),
+      formantStrength: clamp(n.formantStrength, 0, 2, NATURALIZE_DEFAULTS.formantStrength),
+      metallicReduction: clamp(n.metallicReduction, 0, 2, NATURALIZE_DEFAULTS.metallicReduction),
+      quantizationMask: clamp(n.quantizationMask, 0, 1, NATURALIZE_DEFAULTS.quantizationMask),
+      transitionSmooth: clamp(n.transitionSmooth, 0, 2, NATURALIZE_DEFAULTS.transitionSmooth),
+      seed: Math.round(clamp(n.seed, 0, 9999, NATURALIZE_DEFAULTS.seed)),
+    },
     vst: { enabled: v.enabled === true && plugins.some((plugin) => plugin.enabled), plugins },
     master: { enabled: m.enabled === true },
   };
@@ -52,7 +62,7 @@ export function runPolishChain(audio, settingsInput, { reference = null, vstProc
     onProgress(Math.round((index / stages.length) * 100), labels[stage]);
     if (stage === 'denoise') current = denoise(current, { strength: settings.denoise.strength });
     else if (stage === 'lifter') current = lift(current, { denoiseStrength: settings.lifter.gate, shimmerReductionDb: settings.lifter.shimmerDb, hfMix: settings.lifter.hfMix, transientBoost: settings.lifter.punch });
-    else if (stage === 'naturalize') current = naturalize(current, { amount: settings.naturalize.amount });
+    else if (stage === 'naturalize') current = naturalize(current, settings.naturalize);
     else if (stage === 'vst') current = vstProcess(current, settings.vst.plugins);
     else current = master(current, reference);
   });

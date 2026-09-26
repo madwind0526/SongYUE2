@@ -558,3 +558,24 @@ const patched = template
 - **증상**: 테스트 실행 후 `scripts/start-studio.mjs`가 더미 텍스트로 덮어써짐. **원인**: fake spawn이 `--out` 없을 때 args[0]에 기록. **해결**: 복구 + 실제 프로세스 기동 경로 차단.
 
 - **증상**: RVC 변환이 "종료 코드 3221225477"(0xC0000005, 접근 위반)로 실패. **원인**: 내장 목소리 `default`에서 `retrieval_blend>0`이면 audiocpp_cli가 죽음(검색 인덱스 없음). manthos/chocola/fraise는 0.5에서도 정상, 음높이(semitone)는 무관. **해결**: `default`는 블렌딩을 0으로 강제하고 UI에서 입력 비활성화.
+
+## Wave 50: Installed 필터 누락 (2026-09-25)
+
+- 원인: Installed 분기는 전체 mine.adapters를 정렬만 했다.
+- 해결: 허깅페이스와 categoryOptions/languages 및 판정 공유. mineCategory/mineLanguage의 교집합 필터 후 기존 정렬 적용.
+- 검증: 두 탭 옵션 일치, 록/메탈 1개·영어 7개·사운드+영어 1개·빈 결과·전체 12개 복원, 메모 저장/취소, 정렬, 팝업 필터 변경 시 기존 2개 선택 유지. 390×420 팝업 필터 행 폭=스크롤 폭 317, 취소 정상. 타입 검사 통과. 실제 모바일 키보드/OS 글꼴 검증은 후속.
+
+## Wave 51: 표지 자동 생성 / VST3 / LoRA 학습 (2026-09-26)
+
+- **Z-Image Turbo가 프롬프트의 글자를 그림에 그린다**: 제목·가사(특히 한글)를 프롬프트에 넣으면 깨진 한글이 그림 속에 나타난다. cfg 1.0(Turbo 기본)에서는 negative prompt가 무시되고, cfg 2.0에 negative(text, letters, …)를 넣어도 막지 못했다. 해결: 프롬프트에는 스타일의 영어 단어만 쓰고 "wordless purely visual … without any signs, captions, letters" 문구를 붙인다(한글은 걸러 냄).
+- **Pixabay는 한글 검색이 안 된다**(`lang=ko`여도 10개 단어 전부 0건). 가사의 한글 단어를 영어 검색어로 바꾸는 사전을 쓴다. 무료 API의 `largeImageURL`은 긴 변 1280px까지라 세로로 긴 사진을 정사각형으로 자르면 작아진다 → `per_page=200`에서 정사각형에 가까운 것만 고르고 자른 변이 너무 작은 것은 제외, 남은 것은 1400px로 확대.
+- **VST3 설정 상태는 플러그인 창을 정상적으로 닫을 때만 저장된다**(`vst-host --gui --state`). 프로세스를 죽이면 저장이 안 된다. `Process.CloseMainWindow()`(또는 `taskkill /PID`, /F 없음)는 정상 종료로 저장된다.
+- **vst-host의 표준 검색은 표준 VST3 폴더만 본다.** 앱 전용 폴더(`engine/vst-host/plugins/`)는 앱이 직접 찾는다. `--process-chain`의 체인 JSON은 `{plugins:[{path, enabled, state}]}`이고 스캔 결과는 stdout의 JSON 배열(로그는 stderr).
+- **Dragonfly Reverb가 처리 중 `assertion failure "outparamsptr != nullptr"`를 출력**하지만 종료 코드 0이고 결과는 정상이다.
+- **node로 실행하는 가짜 프로세스에 `-y` 같은 인자를 넘길 때** `node -e code -- ...args`처럼 `--`가 필요하다(없으면 node가 자기 옵션으로 읽어 "bad option").
+- **새 백엔드 라우트는 서버를 재시작해야 동작한다**(핫리로드 없음). 화면이 "요청한 기능을 찾을 수 없습니다"(404)이면 재시작을 먼저 확인.
+
+
+## AI polish Advanced naturalization preview (2026-09-26)
+
+The frontend and postfx chain must use the same naturalization parameter object. Keep defaults in sync with `backend/postfx/naturalize.mjs`, clamp API input in `backend/postfx/chain.mjs`, and pass the complete object to `naturalize()`. The Advanced dialog should keep a draft object until Apply, while Preview submits that draft directly. Numeric slider fields need min/max clamping so typed values cannot escape the backend range.

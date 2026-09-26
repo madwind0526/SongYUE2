@@ -2,13 +2,19 @@
 
 ## Current Focus
 
-- **Wave 49 정리 완료(2026-09-24)**: AuK 제거 + Audio Tools 재구성(audio.cpp). 상세 계획과 인수인계는 `todo.md` 최상단 "진행 중 계획"과 `progress.md` "다음 에이전트용 상세 계획".
-- **P1 완료(RVC)**, MeanVC2는 Audio Tools '음색 변조'(말소리, 마이크 녹음 입력)로 이동. **다음 작업**: P3 대사 편집 탭 또는 P5 실시간 스트리밍 변환(Vevo2 editing 등 한국어 실측) → P4 효과음 생성 탭. Pending: 강제 정렬, 화자 분리, ACE-Step 편집.
-
-## Pending
-
-- 없음(사용자가 Typecast 유료 복제·화면 실확인·VibeVoice-ASR을 직접 확인함).
+- 앱 버전 1.0(2026-09-26). 남은 일은 `todo.md` 최상단 요약 참조.
+- 방금 끝낸 것: LoRA 학습 탭, 곡 표지 자동 생성(Z-Image Turbo → Pixabay → 그래픽), VST3(AI 곡 다듬기 단계 + VST3 관리 페이지), 문서 갱신.
+- 다음 후보: 다른 VST3 플러그인 동작 시험, Audio Tools "AI 처리"에 VST3 UI, 가사 반영 표지(LLM 필요), 캡션(.txt) 학습 확인, 곡 청취 평가.
+- UI 검증 후속: 실제 모바일 키보드/OS 큰 글꼴.
 
 ## Commit Notes
 
-- Wave 47~49 변경을 한 번에 커밋(새 파일 `backend/tts.mjs`, `backend/typecast.mjs` 포함, `docs/auk-integration.md` 삭제). `.vscode/`는 제외.
+- 이번 Installed 필터 및 남은 일 문서 정리는 미커밋. 기존 미추적 `.vscode/`, `scripts/lora_compare.py`는 수정하지 않음.
+
+
+## Current focus update (2026-09-26)
+
+- AI song polish Advanced vocal-naturalization controls are implemented and documented.
+- Preview uses draft values; Apply commits them; Cancel discards them.
+- Comparison uses the standard audio-compare footer and compact spectrogram heights.
+- Next focus remains browser regression checks and listening evaluation of naturalization strength.

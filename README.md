@@ -228,3 +228,8 @@ Audio Tools의 TTS 모델 버튼에 "Typecast (클라우드)"가 있습니다. `
 - **Ref-T2S**: 참조 오디오(5~150초)로 즉시 목소리 복제를 만들어 읽고 임시 목소리를 삭제합니다(복제는 유료 요금제 전용).
 - 감정: 스마트(문맥 자동) 또는 보통/기쁨/슬픔/화남/속삭임/톤 올림/톤 내림. 텍스트는 클라우드로 전송되고 크레딧이 차감됩니다.
 - 구현: `backend/typecast.mjs`(직접 HTTP, User-Agent에 `source=api-page; generated_by=claude-code` 표기).
+
+
+### Recent AI polish update (2026-09-26)
+
+AI song polish now includes an Advanced vocal-naturalization dialog. It exposes the eight naturalization controls, supports bounded numeric entry, previews the draft settings, and compares the original and processed audio with synchronized transport, waveforms, and spectrograms.

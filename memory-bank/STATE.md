@@ -2,9 +2,11 @@
 
 ## Current Wave
 
-- **Wave:** 49
+- **Wave:** 52
 - **Status:** Done
 - **Cache Status:** CLEAN
+- **Last Checkpoint:** 2026-09-26 AI polish naturalization Advanced dialog, preview transport, bounded numeric inputs and compare layout.
+- **Last Checkpoint:** 2026-09-25 Installed 필터 추가 및 허깅페이스와 옵션 공유. 월드/민속·중국어 제외, 한 줄 배치. 타입 검사·브라우저 검증 및 남은 일 정리. 실제 모바일 키보드/OS 큰 글꼴은 후속.
 - **Last Checkpoint:** 2026-09-24 Wave 47~49 — 포트 정리(PORTS.md), AuK 전면 제거, Audio Tools를 audio.cpp 기반으로 재구성(TTS 7모델+Typecast, 음성 인식 3모델, 음성 조절), 상세는 todo.md/progress.md.
 - **Last Checkpoint:** 2026-09-22 코드 리뷰(에러/성능/보안 관점) 후 확정된 항목 3개 수정. (E1) ffmpeg 실행부 전부에 하드 타임아웃 추가 — `runBufferedProcess`(timer+kill+clearTimeout, 로그 512KB 캡)+`runFfmpegCli`(라벨별 한국어 에러 메시지, signal이면 "제한 시간 초과") 신설하고, SVC/AuK/Seed-VC/Vevo2/Tools의 모든 ffmpeg 인라인 promise(참조 정규화, 조각 자르기/정리/연결, 입력 정규화, 최종 변환)를 대체. (E2) AuK fetch 전부에 per-request 타임아웃 — `aukFetchJson`에 `signal: AbortSignal.timeout`(설정/작업 등록 5분, 폴 10초·남은시간에 비례, 결과 3분), 20분 폴 deadline은 fetch 간에만 적용되는 함정 해소. (P1) 청크/멀티잡 시 동일 설정 반복 PUT 건너뛰기 — `selectAukConfiguration`에 instance-scoped(`createStudioServer` 소유) `configCache` 도입, AudioAuK 모델 재로드 절약. 테스트 23개·tsc 통과. 지식 `PATTERNS.md`(프로세스 deadline/cache 패턴)·`trouble-shooting.md`(E1/E2 기록)에 flush.
 - **Last Checkpoint:** 2026-09-22 AuK 노래 음색 변조의 기본 프롬프트를 `Keep the lyrics, melody, phrasing and rhythm unchanged and change the timbre to: "${textDescription}".`로 확정하고, 기본 목표 음색을 `a deep adult male with a warm, resonant baritone voice`로 설정. 백엔드 테스트 23개와 TypeScript 검사 통과.

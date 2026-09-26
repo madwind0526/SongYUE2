@@ -280,3 +280,12 @@ README 도입부에서 Suno 직접 언급을 제거.
 ## `a77af9f` — Initial commit: SongYUE2 local music studio (2026-09-12)
 
 YuE2(audio.cpp GGUF + 공식 Python 파이프라인)를 감싸는 로컬 웹 앱 최초 커밋. Suno에서 영감을 받은 라이브러리/프로젝트/재생목록/커버/다운로드 UI, Electron 스타일 로컬 실행 구조.
+
+
+## Current working tree update: AI polish vocal-naturalization advanced controls (2026-09-26)
+
+- Added an Advanced dialog to the AI song polish vocal-naturalization step.
+- Exposed all eight naturalization parameters with editable numeric values and range clamping.
+- Added before/after waveform and spectrogram comparison rows, compact transport controls, and a preview action.
+- Preview requests now pass every naturalization parameter through the postfx chain.
+- Corrected the user-facing description to describe the measured high-frequency softening behavior.
