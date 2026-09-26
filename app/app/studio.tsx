@@ -4426,7 +4426,7 @@ function VstChainPanel({ chain, onChange, disabled, notify }: { chain: VstChain;
       {catalog && !catalog.hostReady && <p className="field-hint warning">VST3 호스트(engine/vst-host/vst-host.exe)를 찾을 수 없습니다.</p>}
       {catalog?.hostReady && <div className="vst-add-row">
         <select value={adding} onChange={event => setAdding(event.target.value)} disabled={disabled || !addable.length} aria-label="추가할 플러그인">
-          <option value="">{addable.length ? '추가 선택' : '추가할 플러그인이 없습니다'}</option>
+          <option value="">{addable.length ? '추가 선택' : 'Empty'}</option>
           {addable.map(plugin => <option key={plugin.path} value={plugin.path}>{plugin.name}{plugin.vendor ? ` — ${plugin.vendor}` : ''}</option>)}
         </select>
         <Button size="sm" variant="outline" disabled={disabled || !adding} onClick={() => { onChange({ ...chain, plugins: [...chain.plugins, { path: adding, enabled: true }] }); setAdding(''); }}><Plus size={14}/>추가</Button>
@@ -4438,8 +4438,6 @@ function VstChainPanel({ chain, onChange, disabled, notify }: { chain: VstChain;
         const editing = editorPath === item.path;
         return <div key={item.path} className={`vst-plugin-row${item.enabled ? '' : ' off'}`}>
           <label className="at-function"><input type="checkbox" checked={item.enabled} onChange={event => patchPlugin(index, { enabled: event.target.checked })} disabled={disabled}/><span className="vst-plugin-name" title={item.path}>{plugin?.name || item.path.split(/[\\/]/).pop()}</span></label>
-          {plugin && !plugin.hasState && <em className="vst-badge">기본 설정</em>}
-          {plugin?.hasState && <em className="vst-badge saved">저장된 설정</em>}
           {!plugin && catalog && <em className="vst-badge missing">찾을 수 없음</em>}
           <span className="vst-plugin-actions">
             {editing
