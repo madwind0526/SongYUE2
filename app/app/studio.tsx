@@ -4441,14 +4441,14 @@ function VstChainPanel({ chain, onChange, disabled, notify }: { chain: VstChain;
           {!plugin && catalog && <em className="vst-badge missing">찾을 수 없음</em>}
           <span className="vst-plugin-actions">
             {editing
-              ? <Button size="sm" variant="outline" onClick={() => void closeEditor()} title="열려 있는 설정 창을 강제로 닫습니다(설정은 저장되지 않을 수 있습니다)"><X size={14}/>창 강제 종료</Button>
+              ? <Button size="sm" variant="outline" onClick={() => void closeEditor()} title="열려 있는 설정 창을 강제로 닫습니다(설정은 저장되지 않을 수 있습니다)"><X size={14}/>강제 종료</Button>
               : <Button size="sm" variant="outline" disabled={disabled || !!editorPath || !plugin} onClick={() => void openEditor(item.path)} title="플러그인 자체 설정 창을 엽니다. 창을 닫으면 설정이 저장됩니다."><Settings2 size={14}/>설정</Button>}
             {plugin?.hasState && <button type="button" className="adapter-icon-btn" onClick={() => void resetState(item.path)} disabled={disabled || !!editorPath} title="저장된 설정 지우기" aria-label="저장된 설정 지우기"><RotateCcw size={14}/></button>}
             <button type="button" className="adapter-icon-btn" onClick={() => move(index, -1)} disabled={disabled || index === 0} title="위로" aria-label="위로"><ChevronUp size={14}/></button>
             <button type="button" className="adapter-icon-btn" onClick={() => move(index, 1)} disabled={disabled || index === chain.plugins.length - 1} title="아래로" aria-label="아래로"><ChevronDown size={14}/></button>
             <button type="button" className="adapter-icon-btn danger" onClick={() => onChange({ ...chain, plugins: chain.plugins.filter((_, position) => position !== index) })} disabled={disabled || editing} title="체인에서 제거" aria-label="체인에서 제거"><Trash2 size={14}/></button>
           </span>
-          {editing && <p className="field-hint vst-editing">플러그인 창이 열려 있습니다. 값을 조절한 뒤 그 창을 닫으면 저장됩니다.</p>}
+          {editing && <p className="field-hint vst-editing">값을 조절한 뒤 그 창을 닫으면 저장됩니다.</p>}
         </div>;
       })}
       {!chain.plugins.length && catalog?.hostReady && <p className="field-hint">체인에 플러그인이 없습니다. 위에서 골라 추가해 주세요. 위에서 아래 순서로 적용됩니다.</p>}
