@@ -22,6 +22,7 @@ import { createLoraTrainer } from './lora-trainer.mjs';
 import { listLoraLibrary, browseFolders, editLoraLibraryItem, deleteLoraLibraryItem } from './lora-train.mjs';
 import { searchHub, hubDetail, installHubUnits, installCatalogEntry, loadCatalog, catalogSummary, importLocalFiles, updateMeta } from './adapters.mjs';
 import { runPolishChain, normalizePolishSettings, enabledStages } from './postfx/chain.mjs';
+import { createVstManager, stateFileFor } from './vst.mjs';
 import { startRealtimeVcProcess, REALTIME_CHUNK_SAMPLES, REALTIME_INPUT_RATE } from './realtimevc.mjs';
 import { readWavPcm16, wavFromPcm16, findSpeechSegments, spliceSegments, locateWords, planWindows, snapToQuietPoint } from './speechedit.mjs';
 import { ASR_FAMILIES, VC_FAMILIES, EDIT_FAMILIES, ALIGN_FAMILIES, SFX_FAMILIES, buildEditText, applyEditText, TTS_FAMILIES, STYLE_FAMILIES, presetVoice, findTtsModel, isTtsModelInstalled, listTtsModels, splitTtsText, splitTtsByScript, buildTtsArgs, downloadTtsModel } from './tts.mjs';
@@ -206,7 +207,7 @@ function providerFromEnv(id) {
   return { endpoint: '', model: '', apiKey: '' };
 }
 
-export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl = fetch, spawnImpl = spawn, polishRunner = null, yueServerPort = YUE_SERVER_PORT } = {}) {
+export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl = fetch, spawnImpl = spawn, polishRunner = null, yueServerPort = YUE_SERVER_PORT, vstHost = null } = {}) {
   try { process.loadEnvFile(path.join(root, '.env')); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
   const data = path.join(root, 'data');
@@ -1380,6 +1381,17 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   // The DSP runs in a worker thread on raw float32 stereo files; ffmpeg decodes the song (and the reference, at the
   // song's sample rate) and encodes the preview as 24-bit FLAC. Previews are temporary until the user saves one.
   const polishPreviews = new Map();
+  // VST3 plugins (search, settings window, state files) run through engine/vst-host/vst-host.exe as a separate process
+  const vst = createVstManager({ root, statesDir: path.join(root, 'Setting', 'VST-states'), spawnImpl, host: vstHost });
+  // The host settings for the polish worker when the VST3 stage is on: the plugins must come from the scan, their saved states go along
+  async function prepareVst(polishSettings) {
+    if (!polishSettings.vst.enabled) return null;
+    if (!(await vst.hostReady())) throw fail(409, 'VST3 호스트(engine/vst-host/vst-host.exe)를 찾을 수 없습니다.');
+    const used = polishSettings.vst.plugins.filter((plugin) => plugin.enabled).map((plugin) => plugin.path);
+    try { await vst.requireKnown(used); } catch (error) { throw error?.status ? fail(error.status, error.message) : error; }
+    const { exe, args } = vst.command();
+    return { exe, args, states: await vst.stateMap(used) };
+  }
   async function probeSampleRate(file) {
     const text = await new Promise((resolve) => {
       const chunks = [];
@@ -1403,7 +1415,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     if (!(await exists(target))) throw fail(404, '기준곡 파일을 찾을 수 없습니다.');
     return target;
   }
-  async function defaultPolishRunner({ inputFile, referenceFile, outputFile, settings, workDir, onProgress }) {
+  async function defaultPolishRunner({ inputFile, referenceFile, outputFile, settings, workDir, onProgress, vstHost: vstHostSettings = null }) {
     const rate = await probeSampleRate(inputFile);
     const inputRaw = path.join(workDir, 'input.f32');
     const referenceRaw = path.join(workDir, 'reference.f32');
@@ -1412,7 +1424,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     if (referenceFile) await runFfmpegCli(['-y', '-i', referenceFile, '-f', 'f32le', '-ac', '2', '-ar', String(rate), referenceRaw], '기준곡 디코딩');
     let report = null;
     await new Promise((resolve, reject) => {
-      const worker = new Worker(new URL('./postfx/worker.mjs', import.meta.url), { workerData: { inputRaw, referenceRaw: referenceFile ? referenceRaw : null, outputRaw, rate, settings } });
+      const worker = new Worker(new URL('./postfx/worker.mjs', import.meta.url), { workerData: { inputRaw, referenceRaw: referenceFile ? referenceRaw : null, outputRaw, rate, settings, vstHost: vstHostSettings ? { ...vstHostSettings, workDir: path.join(workDir, 'vst') } : null } });
       let failure = null;
       worker.on('message', (message) => {
         if (message.type === 'progress') onProgress(message.percent, message.label);
@@ -3097,6 +3109,29 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           finally { generating = false; generationStatus = null; }
         }
       }
+      // ---- VST3 plugins for the polish chain ----
+      if (pathname.startsWith('/api/vst/')) {
+        const vstFail = (error) => (error?.status ? fail(error.status, error.message) : fail(502, `VST3 처리에 실패했습니다. ${error?.message || ''}`.trim()));
+        if (req.method === 'GET' && pathname === '/api/vst/plugins') {
+          try { const found = await vst.scan({ refresh: requestUrl.searchParams.get('refresh') === '1' }); return send(200, { hostReady: found.hostReady, plugins: await vst.withStates(found.plugins), editor: vst.editorStatus() }); }
+          catch (error) { throw vstFail(error); }
+        }
+        if (req.method === 'GET' && pathname === '/api/vst/editor') return send(200, vst.editorStatus());
+        if (req.method === 'POST' && pathname === '/api/vst/editor') {
+          const input = await body(req, 8 * 1024);
+          const pluginPath = text(input.path, 1024).trim();
+          if (!pluginPath) throw fail(400, '플러그인을 골라 주세요.');
+          try { await vst.openEditor(pluginPath); return send(200, vst.editorStatus()); } catch (error) { throw vstFail(error); }
+        }
+        if (req.method === 'POST' && pathname === '/api/vst/editor/close') { await body(req); return send(200, { closed: vst.closeEditor() }); }
+        if (req.method === 'DELETE' && pathname === '/api/vst/state') {
+          const input = await body(req, 8 * 1024);
+          const pluginPath = text(input.path, 1024).trim();
+          try { await vst.requireKnown([pluginPath]); } catch (error) { throw vstFail(error); }
+          await unlink(stateFileFor(path.join(root, 'Setting', 'VST-states'), pluginPath)).catch(() => {});
+          return send(200, { ok: true });
+        }
+      }
       const polishStartMatch = pathname.match(/^\/api\/projects\/([^/]+)\/polish$/);
       if (polishStartMatch && req.method === 'POST') {
         const input = await body(req, 64 * 1024);
@@ -3108,6 +3143,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         const stages = enabledStages(settings);
         if (!stages.length) throw fail(400, '적용할 단계를 하나 이상 켜 주세요.');
         const referenceFile = await polishReferenceFile(settings, input);
+        const vstHostSettings = await prepareVst(settings);
         if (generating) throw fail(409, '이미 다른 작업을 실행 중입니다. 완료 후 다시 시도해 주세요.');
         generating = true;
         generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 15000, progress: 0, detail: '준비 중' };
@@ -3118,7 +3154,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           const outputFile = path.join(dir, 'preview.flac');
           const onProgress = (percent, label) => { if (generationStatus) { generationStatus.progress = percent; generationStatus.detail = label; } };
           let report = null;
-          try { report = (await (polishRunner || defaultPolishRunner)({ inputFile, referenceFile, outputFile, settings, workDir: dir, onProgress }))?.report || null; }
+          try { report = (await (polishRunner || defaultPolishRunner)({ inputFile, referenceFile, outputFile, settings, workDir: dir, onProgress, vstHost: vstHostSettings }))?.report || null; }
           catch (error) { throw error?.status ? error : fail(502, `곡 다듬기에 실패했습니다. ${error?.message || ''}`.trim()); }
           if (!(await exists(outputFile))) throw fail(502, '곡 다듬기 결과가 만들어지지 않았습니다.');
           polishPreviews.set(previewId, { dir, file: outputFile, project: entry.project, stages });
@@ -3135,6 +3171,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         const settings = normalizePolishSettings(input.settings);
         if (!enabledStages(settings).length) throw fail(400, '적용할 단계를 하나 이상 켜 주세요.');
         const referenceFile = await polishReferenceFile(settings, input);
+        const vstHostSettings = await prepareVst(settings);
         if (generating) throw fail(409, '이미 다른 작업을 실행 중입니다. 완료 후 다시 시도해 주세요.');
         generating = true;
         generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 8000, progress: 0, detail: '준비 중' };
@@ -3145,7 +3182,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           const flacFile = path.join(dir, 'polished.flac');
           const onProgress = (percent, label) => { if (generationStatus) { generationStatus.progress = percent; generationStatus.detail = label; } };
           let report = null;
-          try { report = (await (polishRunner || defaultPolishRunner)({ inputFile, referenceFile, outputFile: flacFile, settings, workDir: dir, onProgress }))?.report || null; }
+          try { report = (await (polishRunner || defaultPolishRunner)({ inputFile, referenceFile, outputFile: flacFile, settings, workDir: dir, onProgress, vstHost: vstHostSettings }))?.report || null; }
           catch (error) { throw error?.status ? error : fail(502, `AI 처리에 실패했습니다. ${error?.message || ''}`.trim()); }
           if (!(await exists(flacFile))) throw fail(502, 'AI 처리 결과가 만들어지지 않았습니다.');
           const wavFile = path.join(dir, 'polished.wav');
