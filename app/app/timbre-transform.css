@@ -321,3 +321,7 @@
 .vst-badge.missing { color: #f0a0a0; }
 .vst-plugin-actions { display: flex; align-items: center; justify-content: flex-start; gap: 4px; flex-basis: 100%; }
 .vst-editing { flex-basis: 100%; color: #e8c874; }
+
+/* AI 곡 다듬기: when every step is open the left column is taller than the window, so it scrolls on its own instead of being cut off */
+.ai-polish-dialog .timbre-transform-body { flex: 1 1 auto; min-height: 0; align-items: stretch; }
+.ai-polish-dialog .timbre-left-panel { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-right: 10px; }

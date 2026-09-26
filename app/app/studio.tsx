@@ -4558,7 +4558,7 @@ function AiPolishDialog({ project, onClose, notify, onCreated }: { project: Proj
   </div>;
 
   return <Dialog open onOpenChange={next => { if (!next && !saving) onClose(); }}>
-    <DialogContent className="studio-dialog audio-compare-dialog timbre-transform-dialog">
+    <DialogContent className="studio-dialog audio-compare-dialog timbre-transform-dialog ai-polish-dialog">
       <DialogTitle>AI 곡 다듬기</DialogTitle>
       <DialogDescription>{project.title} — 원본은 그대로 두고, 다듬은 결과를 들어 본 뒤 새 곡으로 저장합니다.</DialogDescription>
       <div className="timbre-transform-body">
