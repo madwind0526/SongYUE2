@@ -332,3 +332,6 @@
 /* the 설정 / 강제 종료 button and the name pill keep the same size in every plugin row */
 .vst-plugin-actions > button:not(.adapter-icon-btn) { min-width: 96px; justify-content: center; }
 .vst-plugin-row > .at-function { min-width: 190px; }
+/* the plugin list and the preset list are the same size: one wide box and one icon button next to it */
+.vst-add-row select, .vst-preset-bar select { flex: 1 1 0; min-width: 0; height: 32px; }
+.vst-add-row > button, .vst-preset-bar > button { flex: none; width: 36px; padding: 0; justify-content: center; }
