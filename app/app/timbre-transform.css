@@ -329,3 +329,6 @@
 /* wider window and left column so the plugin buttons fit on one line at their normal size */
 .audio-compare-dialog.ai-polish-dialog { width: 1150px !important; }
 .ai-polish-dialog .timbre-left-panel { flex: 0 0 300px; }
+/* the 설정 / 강제 종료 button and the name pill keep the same size in every plugin row */
+.vst-plugin-actions > button:not(.adapter-icon-btn) { min-width: 96px; justify-content: center; }
+.vst-plugin-row > .at-function { min-width: 190px; }
