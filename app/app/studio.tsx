@@ -4421,7 +4421,7 @@ function VstChainPanel({ chain, onChange, disabled, notify }: { chain: VstChain;
   }
   return <div className="polish-step">
     <label className="at-function"><input type="checkbox" checked={chain.enabled} onChange={event => onChange({ ...chain, enabled: event.target.checked })} disabled={disabled}/>VST3 플러그인</label>
-    <p className="field-hint">내 컴퓨터에 있는 VST3 플러그인(리버브, EQ, 마스터링 도구 등)을 거칩니다. 보컬 자연화 다음, 기준곡 마스터링 앞에서 적용됩니다.</p>
+    <p className="field-hint">내 컴퓨터에 있는 VST3 플러그인(리버브, EQ, 마스터링 도구 등)을 거칩니다.</p>
     {chain.enabled && <>
       {catalog && !catalog.hostReady && <p className="field-hint warning">VST3 호스트(engine/vst-host/vst-host.exe)를 찾을 수 없습니다.</p>}
       {catalog?.hostReady && <div className="vst-add-row">
