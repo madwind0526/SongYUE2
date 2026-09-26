@@ -192,3 +192,37 @@ export async function makeFallbackCover({ title, style, spawnImpl, fileExists })
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }
 }
+
+// ---- Free web photo (Pixabay) when ComfyUI cannot make the picture; the key comes from .env (PIXABAY_API_KEY) ----
+export const PIXABAY_MIN_SIZE = 1280; // original size asked for; Pixabay serves at most 1280 px on the long side without full API access, so the squarer the photo the larger the square crop
+
+// Search words from the music style (ASCII only); progressively broader fallbacks so a rare style still finds something
+export function pixabayQueries(style) {
+  const tags = String(style || '').replace(/[^\x20-\x7E]/g, ' ').split(',').map((tag) => oneLine(tag, 40)).filter(Boolean);
+  const queries = [tags.slice(0, 3).join(' '), tags[0] || '', 'music'].map((query) => query.slice(0, 100)).filter(Boolean);
+  return [...new Set(queries)];
+}
+
+// Prefers photos that are close to square (little is lost when cropping) and picks one of the best by the song's seed, so a style does not always give the same picture
+export function pickPixabayHit(hits, seed) {
+  const usable = (hits || []).filter((hit) => hit.largeImageURL && hit.imageWidth >= PIXABAY_MIN_SIZE && hit.imageHeight >= PIXABAY_MIN_SIZE);
+  usable.sort((a, b) => Math.abs(Math.log(a.imageWidth / a.imageHeight)) - Math.abs(Math.log(b.imageWidth / b.imageHeight)));
+  const best = usable.slice(0, 10);
+  return best.length ? best[Math.abs(Number(seed) || 0) % best.length] : null;
+}
+
+// Returns the JPEG bytes of one matching free photo, or null (no key, nothing found, or a request failed)
+export async function fetchPixabayCover({ fetchImpl, apiKey, style, seed }) {
+  if (!apiKey) return null;
+  for (const query of pixabayQueries(style)) {
+    const params = new URLSearchParams({ key: apiKey, q: query, image_type: 'photo', min_width: String(PIXABAY_MIN_SIZE), min_height: String(PIXABAY_MIN_SIZE), safesearch: 'true', order: 'popular', per_page: '200' });
+    const response = await fetchImpl(`https://pixabay.com/api/?${params}`);
+    if (!response.ok) throw new Error(`Pixabay ${response.status}`);
+    const hit = pickPixabayHit((await response.json()).hits, seed);
+    if (!hit) continue;
+    const picture = await fetchImpl(hit.largeImageURL);
+    if (!picture.ok) throw new Error(`Pixabay image ${picture.status}`);
+    return Buffer.from(await picture.arrayBuffer());
+  }
+  return null;
+}

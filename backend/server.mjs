@@ -17,7 +17,7 @@ import { TYPECAST_LANGUAGES, typecastSubscription, listTypecastVoices, typecastS
 import { Worker } from 'node:worker_threads';
 import { lyricLines, detectLanguage, alignLyrics, toLrc } from './lyricsync.mjs';
 import { YUE_SERVER_PORT, yueServerPaths, yuePrecisionFor, isInstrumentalAdapter, listAdapters, normalizeAdapterSelection, toEngineAdapters, synthesize as yueServerSynthesize, probeAdapters, fileExists as yueFileExists } from './yueserver.mjs';
-import { generateCoverPicture, makeFallbackCover, normalizeCover, COVER_MIN_SIZE } from './cover-art.mjs';
+import { generateCoverPicture, fetchPixabayCover, makeFallbackCover, normalizeCover, COVER_MIN_SIZE } from './cover-art.mjs';
 import { createLoraTrainer } from './lora-trainer.mjs';
 import { listLoraLibrary, browseFolders, editLoraLibraryItem, deleteLoraLibraryItem } from './lora-train.mjs';
 import { searchHub, hubDetail, installHubUnits, installCatalogEntry, loadCatalog, catalogSummary, importLocalFiles, updateMeta } from './adapters.mjs';
@@ -369,7 +369,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     } catch { return { buffer, extension, notice: '' }; }
   }
   // A new song without a cover gets a Z-Image Turbo picture from ComfyUI (title / style / lyrics as the prompt); without ComfyUI or its image models
-  // (or when it fails) a simple gradient cover with the title is drawn instead. Only a failure of both leaves the song without a cover.
+  // (or when it fails) a free Pixabay photo is used when PIXABAY_API_KEY is set, and last a simple gradient cover with the title is drawn.
   async function makeAutoCover(project) {
     if (!settings.autoCover || project.coverPath || !project.style || !project.title) return { project, temp: null };
     let cover = null;
@@ -382,6 +382,15 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       console.warn(`AI cover skipped: ${error.message}`);
     } finally {
       await fetchImpl(`${settings.comfyUiEndpoint || DEFAULT_COMFYUI_ENDPOINT}/free`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ unload_models: true, free_memory: true }) }).catch(() => {});
+    }
+    if (!cover) {
+      try {
+        if (generationStatus) generationStatus.detail = '표지를 찾는 중';
+        const photo = await fetchPixabayCover({ fetchImpl, apiKey: (process.env.PIXABAY_API_KEY || '').trim(), style: project.style, seed: project.seed });
+        if (photo) cover = await normalizeCover({ buffer: photo, extension: 'jpg', outputExtension: 'jpg', spawnImpl });
+      } catch (error) {
+        console.warn(`Pixabay cover skipped: ${error.message}`);
+      }
     }
     try {
       if (!cover) cover = { buffer: await makeFallbackCover({ title: project.title, style: project.style, spawnImpl, fileExists: exists }), extension: 'jpg' };
