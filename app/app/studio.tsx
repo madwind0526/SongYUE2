@@ -4561,15 +4561,17 @@ function VstTestDialog({ plugin, songs, onClose, notify }: { plugin: VstPlugin; 
       <DialogTitle>{plugin.name} 시험 듣기</DialogTitle>
       <DialogDescription>곡의 일부분에 이 플러그인만 적용해서 원본과 비교해 들어 봅니다. 플러그인의 저장된 설정이 사용됩니다.</DialogDescription>
       {songs.length === 0 ? <p className="field-hint">시험할 완성된 곡이 없습니다.</p> : <>
-        <label className="train-field">곡<select value={songId} onChange={event => { setSongId(event.target.value); clearTest(); }} disabled={running}>{songs.map(song => <option key={song.id} value={song.id}>{song.title}</option>)}</select></label>
-        <div className="vst-test-range">
-          <label className="train-field">시작 위치 (초)<Input type="number" min={0} value={start} onChange={event => { setStart(event.target.value); clearTest(); }} disabled={running}/></label>
-          <label className="train-field">길이 (초, 5~60)<Input type="number" min={5} max={60} value={seconds} onChange={event => { setSeconds(event.target.value); clearTest(); }} disabled={running}/></label>
+        <div className="vst-test-controls">
+          <label className="train-field vst-test-song">곡<select value={songId} onChange={event => { setSongId(event.target.value); clearTest(); }} disabled={running}>{songs.map(song => <option key={song.id} value={song.id}>{song.title}</option>)}</select></label>
+          <label className="train-field vst-test-num">시작 (초)<Input type="number" min={0} value={start} onChange={event => { setStart(event.target.value); clearTest(); }} disabled={running}/></label>
+          <label className="train-field vst-test-num">길이 (초)<Input type="number" min={5} max={60} value={seconds} onChange={event => { setSeconds(event.target.value); clearTest(); }} disabled={running}/></label>
+          <Button onClick={() => void run()} disabled={running || !songId}>{running ? <LoaderCircle className="spin" size={15}/> : <Play size={15}/>}{test ? '다시 만들기' : '시험 만들기'}</Button>
         </div>
-        <Button onClick={() => void run()} disabled={running || !songId}>{running ? <LoaderCircle className="spin" size={15}/> : <Play size={15}/>}{test ? '다시 만들기' : '시험 만들기'}</Button>
         {test && <>
-          <label className="at-function vst-match-loudness"><input type="checkbox" checked={matchLoudness} onChange={event => { setMatchLoudness(event.target.checked); if (sourceBuffer && processedRaw) showProcessed(sourceBuffer, processedRaw, event.target.checked); }}/>음량 맞추기</label>
-          {matchLoudness && matchGainDb !== null && <p className="field-hint">처리한 소리의 음량을 원본에 맞췄습니다({matchGainDb >= 0 ? '+' : ''}{matchGainDb.toFixed(1)} dB).</p>}
+          <div className="vst-match-row">
+            <label className="at-function vst-match-loudness"><input type="checkbox" checked={matchLoudness} onChange={event => { setMatchLoudness(event.target.checked); if (sourceBuffer && processedRaw) showProcessed(sourceBuffer, processedRaw, event.target.checked); }}/>음량 맞추기</label>
+            {matchLoudness && matchGainDb !== null && <span className="field-hint">처리한 소리의 음량을 원본에 맞췄습니다({matchGainDb >= 0 ? '+' : ''}{matchGainDb.toFixed(1)} dB).</span>}
+          </div>
           <div className="stem-list">
             {row('source', '원본 구간', sourceBuffer, false, `${test.startSeconds}초부터 ${test.seconds}초`)}
             {row('output', `${plugin.name} 적용`, outputBuffer, true, '저장된 설정으로 처리')}
