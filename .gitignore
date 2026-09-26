@@ -26,3 +26,4 @@ __pycache__/
 *.partial
 .playwright-mcp/
 scratch/
+Setting/VST-states/
