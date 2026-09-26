@@ -319,9 +319,13 @@
 .vst-badge { font-style: normal; font-size: 11px; color: #8b978a; }
 .vst-badge.saved { color: #7fcf8f; }
 .vst-badge.missing { color: #f0a0a0; }
-.vst-plugin-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 4px; flex-basis: 100%; min-width: 0; }
+.vst-plugin-actions { display: flex; flex-wrap: nowrap; align-items: center; justify-content: flex-start; gap: 4px; flex-basis: 100%; min-width: 0; }
+.vst-plugin-actions > * { flex: none; }
 .vst-editing { flex-basis: 100%; color: #e8c874; }
 
 /* AI 곡 다듬기: when every step is open the left column is taller than the window, so it scrolls on its own instead of being cut off */
 .ai-polish-dialog .timbre-transform-body { flex: 1 1 auto; min-height: 0; align-items: stretch; }
 .ai-polish-dialog .timbre-left-panel { min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding-right: 10px; }
+/* wider window and left column so the plugin buttons fit on one line at their normal size */
+.audio-compare-dialog.ai-polish-dialog { width: 1150px !important; }
+.ai-polish-dialog .timbre-left-panel { flex: 0 0 300px; }
