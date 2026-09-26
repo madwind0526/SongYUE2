@@ -319,5 +319,5 @@
 .vst-badge { font-style: normal; font-size: 11px; color: #8b978a; }
 .vst-badge.saved { color: #7fcf8f; }
 .vst-badge.missing { color: #f0a0a0; }
-.vst-plugin-actions { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.vst-plugin-actions { display: flex; align-items: center; justify-content: flex-start; gap: 4px; flex-basis: 100%; }
 .vst-editing { flex-basis: 100%; color: #e8c874; }

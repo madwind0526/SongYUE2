@@ -4426,11 +4426,11 @@ function VstChainPanel({ chain, onChange, disabled, notify }: { chain: VstChain;
       {catalog && !catalog.hostReady && <p className="field-hint warning">VST3 호스트(engine/vst-host/vst-host.exe)를 찾을 수 없습니다.</p>}
       {catalog?.hostReady && <div className="vst-add-row">
         <select value={adding} onChange={event => setAdding(event.target.value)} disabled={disabled || !addable.length} aria-label="추가할 플러그인">
-          <option value="">{addable.length ? '추가할 플러그인 선택' : '추가할 플러그인이 없습니다'}</option>
+          <option value="">{addable.length ? '추가 선택' : '추가할 플러그인이 없습니다'}</option>
           {addable.map(plugin => <option key={plugin.path} value={plugin.path}>{plugin.name}{plugin.vendor ? ` — ${plugin.vendor}` : ''}</option>)}
         </select>
         <Button size="sm" variant="outline" disabled={disabled || !adding} onClick={() => { onChange({ ...chain, plugins: [...chain.plugins, { path: adding, enabled: true }] }); setAdding(''); }}><Plus size={14}/>추가</Button>
-        <Button size="sm" variant="outline" disabled={disabled || searching} onClick={() => void load(true)} title="플러그인 다시 검색">{searching ? <LoaderCircle className="spin" size={14}/> : <RefreshCw size={14}/>}검색</Button>
+        <Button size="sm" variant="outline" disabled={disabled || searching} onClick={() => void load(true)} title="플러그인 다시 검색" aria-label="플러그인 다시 검색">{searching ? <LoaderCircle className="spin" size={14}/> : <RefreshCw size={14}/>}</Button>
       </div>}
       {catalog?.hostReady && !catalog.plugins.length && !searching && <p className="field-hint">검색된 플러그인이 없습니다. .vst3 파일을 engine/vst-host/plugins/ 폴더에 넣거나 표준 VST3 폴더에 설치한 뒤 "검색"을 눌러 주세요.</p>}
       {chain.plugins.map((item, index) => {
