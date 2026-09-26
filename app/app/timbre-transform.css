@@ -313,15 +313,15 @@
 
 .vst-add-row { display: flex; gap: 6px; align-items: center; }
 .vst-add-row select { flex: 1; min-width: 0; height: 32px; border-radius: 8px; border: 1px solid #3b493d; background: #131a13; color: inherit; padding: 0 8px; }
-.vst-plugin-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 6px 8px; border: 1px solid #33413a; border-radius: 8px; background: #172017; }
+.vst-plugin-row { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 6px 8px; border: 1px solid #33413a; border-radius: 8px; background: #172017; }
 .vst-plugin-row.off { opacity: 0.55; }
 .vst-plugin-name { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .vst-badge { font-style: normal; font-size: 11px; color: #8b978a; }
 .vst-badge.saved { color: #7fcf8f; }
 .vst-badge.missing { color: #f0a0a0; }
-.vst-plugin-actions { display: flex; align-items: center; justify-content: flex-start; gap: 4px; flex-basis: 100%; }
+.vst-plugin-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-start; gap: 4px; flex-basis: 100%; min-width: 0; }
 .vst-editing { flex-basis: 100%; color: #e8c874; }
 
 /* AI 곡 다듬기: when every step is open the left column is taller than the window, so it scrolls on its own instead of being cut off */
 .ai-polish-dialog .timbre-transform-body { flex: 1 1 auto; min-height: 0; align-items: stretch; }
-.ai-polish-dialog .timbre-left-panel { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-right: 10px; }
+.ai-polish-dialog .timbre-left-panel { min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; padding-right: 10px; }
