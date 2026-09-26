@@ -1,0 +1,39 @@
+{
+  "id": "482d1e48-af99-4df6-ae94-43393f9908df",
+  "title": "연주곡-1",
+  "lyrics": "[Intro]\n[Instrumental]\n\n[Verse]\n[Instrumental]\n\n[Bridge]\n[Instrumental]\n\n[Outro]\n[Instrumental]\n",
+  "style": "Jazz ballad, slow unhurried tempo, cinematic warmth and intimate close recording, warm piano sound, upright bass, soft brushed drums, gentle acoustic guitar",
+  "modelId": "yue2-int8-convrot",
+  "seed": 761808857,
+  "steps": 32,
+  "cot": "full",
+  "vocalGender": "duet",
+  "instrumental": true,
+  "abc": "",
+  "adapters": [
+    {
+      "name": "instrumental",
+      "arScale": 0.7,
+      "narScale": 0.7
+    },
+    {
+      "name": "instrumental-cot-full-loras-ar_lora_inst_v3abc",
+      "arScale": 0,
+      "narScale": 0.7
+    }
+  ],
+  "mode": "custom",
+  "status": "completed",
+  "favorite": false,
+  "notes": "",
+  "createdAt": "2026-09-25T06:59:23.606Z",
+  "updatedAt": "2026-09-26T13:05:13.057Z",
+  "durationMs": 182679,
+  "rtf": null,
+  "engine": "yue-server",
+  "enginePrecision": "q8",
+  "sourceProjectId": "634e6880-7c2e-4e6d-bb7e-687b206e9300",
+  "audioPath": "연주곡-1.flac",
+  "coverPath": "482d1e48-af99-4df6-ae94-43393f9908df.jpg",
+  "saveError": null
+}

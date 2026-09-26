@@ -1,0 +1,34 @@
+{
+  "id": "6be07a8a-7957-4934-8ddc-70f141a8c5fb",
+  "title": "김현식 여성보컬 rank16",
+  "lyrics": "[verse]\n조용한 밤에 혼자 걸어요\n작은 불빛이 나를 따라와요\n\n[chorus]\n이 노래가 닿기를\n내 마음이 닿기를",
+  "style": "kimhs_voice, korean ballad, soft female vocal, acoustic guitar, piano",
+  "modelId": "yue2-q8",
+  "seed": 4242,
+  "steps": 16,
+  "cot": "off",
+  "vocalGender": "",
+  "instrumental": false,
+  "abc": "",
+  "adapters": [
+    {
+      "name": "rank16",
+      "arScale": 0,
+      "narScale": 1
+    }
+  ],
+  "mode": "custom",
+  "status": "completed",
+  "favorite": false,
+  "notes": "",
+  "createdAt": "2026-09-25T18:10:52.474Z",
+  "updatedAt": "2026-09-26T13:04:50.621Z",
+  "durationMs": 48519,
+  "rtf": null,
+  "engine": "yue-server",
+  "enginePrecision": "q8",
+  "sourceProjectId": "d63cd5b4-6405-4eda-abc9-8382b6832f4f",
+  "audioPath": "김현식 여성보컬 rank16.flac",
+  "coverPath": "6be07a8a-7957-4934-8ddc-70f141a8c5fb.jpg",
+  "saveError": null
+}

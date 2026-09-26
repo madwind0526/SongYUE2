@@ -1,0 +1,31 @@
+{
+  "id": "e451fa50-828f-4c31-9f94-377c7d37eb71",
+  "title": "연주곡-2",
+  "lyrics": "[Intro]\n[Instrumental]\n\n[Verse]\n[Instrumental]\n\n[Bridge]\n[Instrumental]\n\n[Outro]\n[Instrumental]\n",
+  "style": "Jazz ballad, slow unhurried tempo, cinematic warmth and intimate close recording, warm piano sound, upright bass, soft brushed drums, gentle acoustic guitar",
+  "modelId": "yue2-int8-convrot",
+  "seed": 1200888703,
+  "steps": 16,
+  "cot": "full",
+  "vocalGender": "duet",
+  "instrumental": true,
+  "abc": "",
+  "adapters": [
+    {
+      "name": "instrumental",
+      "arScale": 0,
+      "narScale": 0.7
+    },
+    {
+      "name": "instrumental-cot-full-loras-ar_lora_inst_v3abc",
+      "arScale": 0.7,
+      "narScale": 0.7
+    }
+  ],
+  "mode": "custom",
+  "status": "draft",
+  "favorite": false,
+  "notes": "",
+  "createdAt": "2026-09-25T07:04:10.538Z",
+  "updatedAt": "2026-09-25T07:04:10.538Z"
+}

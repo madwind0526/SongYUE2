@@ -1,0 +1,34 @@
+{
+  "id": "468eb0e4-30b3-4539-a483-5aa6163f27ff",
+  "title": "LoRA 학습-원곡 (남자 보컬)",
+  "lyrics": "[verse]\n조용한 밤에 혼자 걸어요\n작은 불빛이 나를 따라와요\n\n[chorus]\n이 노래가 닿기를\n내 마음이 닿기를",
+  "style": "korean pop ballad, deep male vocal, piano",
+  "modelId": "yue2-q8",
+  "seed": 4242,
+  "steps": 16,
+  "cot": "off",
+  "vocalGender": "",
+  "instrumental": false,
+  "abc": "",
+  "adapters": [
+    {
+      "name": "slider-female",
+      "arScale": 0,
+      "narScale": 0
+    }
+  ],
+  "mode": "custom",
+  "status": "completed",
+  "favorite": false,
+  "notes": "",
+  "createdAt": "2026-09-25T08:53:50.907Z",
+  "updatedAt": "2026-09-26T13:06:29.859Z",
+  "durationMs": 32079,
+  "rtf": null,
+  "engine": "yue-server",
+  "enginePrecision": "q8",
+  "sourceProjectId": "71e86b85-3f7e-4438-9295-081d2e208a2b",
+  "audioPath": "LoRA 학습-원곡 (남자 보컬).flac",
+  "coverPath": "468eb0e4-30b3-4539-a483-5aa6163f27ff.jpg",
+  "saveError": null
+}

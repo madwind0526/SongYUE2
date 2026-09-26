@@ -2,7 +2,14 @@ models/
 data/
 runs/
 engine/
-library/
+# Keep the generated library private by default, but version the shareable song artifacts.
+library/*
+!library/Music/
+!library/Music/**
+!library/Setting/
+!library/Setting/**
+!library/Cover/
+!library/Cover/**
 test/
 node_modules/
 app/node_modules/

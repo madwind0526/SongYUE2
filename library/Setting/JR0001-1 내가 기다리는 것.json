@@ -1,0 +1,19 @@
+{
+  "id": "4cf55d19-9222-4bcb-9d31-7f883988a827",
+  "title": "JR0001-1 내가 기다리는 것",
+  "lyrics": "[Intro]\n가을은\n\n언제 오려나 했는데\n벌써 와 있다\n\n[Verse]\n내 머리 위에도\n내 발끝에도\n\n와 있는 가을에\n내 마음이 물든다\n\n[Instrumental]\n\n[Bridge]\n익숙해질 즈음\n\n떨어진다.\n\n[Outro]\n사랑처럼.",
+  "style": "Jazz ballad, slow unhurried tempo, cinematic warmth and intimate close recording, warm piano voicings, upright bass, soft brushed drums, gentle acoustic guitar, restrained expressive female and male vocal with smooth phrasing, spacious pauses and a lingering quiet ending",
+  "modelId": "yue2-int8-convrot",
+  "seed": 997554898,
+  "steps": 16,
+  "cot": "full",
+  "vocalGender": "duet",
+  "instrumental": false,
+  "abc": "",
+  "mode": "custom",
+  "status": "draft",
+  "favorite": false,
+  "notes": "",
+  "createdAt": "2026-09-15T13:23:35.244Z",
+  "updatedAt": "2026-09-15T13:23:35.244Z"
+}

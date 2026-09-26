@@ -1,0 +1,34 @@
+{
+  "id": "73117719-7c56-4bbf-b7c2-8101c096e6d2",
+  "title": "LoRA 학습-지수 목소리",
+  "lyrics": "[verse]\n조용한 밤에 혼자 걸어요\n작은 불빛이 나를 따라와요\n\n[chorus]\n이 노래가 닿기를\n내 마음이 닿기를",
+  "style": "jisoo_voice, korean pop ballad, soft female vocal, piano",
+  "modelId": "yue2-q8",
+  "seed": 4242,
+  "steps": 16,
+  "cot": "off",
+  "vocalGender": "",
+  "instrumental": false,
+  "abc": "",
+  "adapters": [
+    {
+      "name": "jisoo-voice",
+      "arScale": 0,
+      "narScale": 1
+    }
+  ],
+  "mode": "custom",
+  "status": "completed",
+  "favorite": false,
+  "notes": "",
+  "createdAt": "2026-09-25T08:53:40.667Z",
+  "updatedAt": "2026-09-26T13:06:09.936Z",
+  "durationMs": 31919,
+  "rtf": null,
+  "engine": "yue-server",
+  "enginePrecision": "q8",
+  "sourceProjectId": "6cd14765-6511-486b-837d-63c1b677869e",
+  "audioPath": "LoRA 학습-지수 목소리.flac",
+  "coverPath": "73117719-7c56-4bbf-b7c2-8101c096e6d2.jpg",
+  "saveError": null
+}
