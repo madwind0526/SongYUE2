@@ -4377,9 +4377,90 @@ const POLISH_DEFAULT: PolishSettings = {
 function PolishSlider({ label, value, min, max, step, unit, onChange, disabled }: { label: string; value: number; min: number; max: number; step: number; unit?: string; onChange: (next: number) => void; disabled?: boolean }) {
   return <label className="polish-slider"><span>{label}<b>{Number.isInteger(step) ? value : value.toFixed(2)}{unit || ''}</b></span><input type="range" min={min} max={max} step={step} value={value} disabled={disabled} onChange={event => onChange(Number(event.target.value))} style={{ accentColor: '#7fb069' }}/></label>;
 }
+// VST3 plugins in "AI 곡 다듬기" (vst-host runs them as a separate process): search / add, the plugin's own settings window (its state is saved when
+// that window is closed), on / off, order and removal. The chain is applied between the vocal naturalizer and mastering.
+type VstPlugin = { name: string; vendor: string; path: string; category: string; hasState: boolean; local?: boolean };
+type VstChain = { enabled: boolean; plugins: { path: string; enabled: boolean }[] };
+function VstChainPanel({ chain, onChange, disabled, notify }: { chain: VstChain; onChange: (next: VstChain) => void; disabled: boolean; notify: (text: string, error?: boolean) => void }) {
+  const [catalog, setCatalog] = useState<{ hostReady: boolean; plugins: VstPlugin[] } | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [editorPath, setEditorPath] = useState('');
+  const [adding, setAdding] = useState('');
+  async function load(refresh = false) {
+    setSearching(true);
+    try {
+      const result = await api<{ hostReady: boolean; plugins: VstPlugin[]; editor: { running: boolean; path?: string } }>(`/vst/plugins${refresh ? '?refresh=1' : ''}`);
+      setCatalog({ hostReady: result.hostReady, plugins: result.plugins });
+      setEditorPath(result.editor.running ? result.editor.path || '' : '');
+    } catch (error) { notify((error as Error).message, true); }
+    finally { setSearching(false); }
+  }
+  useEffect(() => { if (chain.enabled && !catalog) void load(); }, [chain.enabled]); // eslint-disable-line react-hooks/exhaustive-deps
+  // while a plugin window is open, ask the server when it has been closed (the state file is written then)
+  useEffect(() => {
+    if (!editorPath) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const status = await api<{ running: boolean }>('/vst/editor');
+        if (!status.running) { setEditorPath(''); void load(); notify('플러그인 설정을 저장했습니다.'); }
+      } catch { /* try again on the next tick */ }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [editorPath]); // eslint-disable-line react-hooks/exhaustive-deps
+  const byPath = new Map((catalog?.plugins || []).map(plugin => [plugin.path, plugin]));
+  const addable = (catalog?.plugins || []).filter(plugin => !chain.plugins.some(item => item.path === plugin.path));
+  const patchPlugin = (index: number, value: Partial<VstChain['plugins'][number]>) => onChange({ ...chain, plugins: chain.plugins.map((item, position) => position === index ? { ...item, ...value } : item) });
+  const move = (index: number, step: number) => { const next = [...chain.plugins]; const target = index + step; if (target < 0 || target >= next.length) return; [next[index], next[target]] = [next[target], next[index]]; onChange({ ...chain, plugins: next }); };
+  async function openEditor(pluginPath: string) {
+    try { await api('/vst/editor', 'POST', { path: pluginPath }); setEditorPath(pluginPath); }
+    catch (error) { notify((error as Error).message, true); }
+  }
+  async function closeEditor() { try { await api('/vst/editor/close', 'POST', {}); setEditorPath(''); void load(); } catch (error) { notify((error as Error).message, true); } }
+  async function resetState(pluginPath: string) {
+    try { await api('/vst/state', 'DELETE', { path: pluginPath }); void load(); notify('저장된 플러그인 설정을 지웠습니다.'); } catch (error) { notify((error as Error).message, true); }
+  }
+  return <div className="polish-step">
+    <label className="at-function"><input type="checkbox" checked={chain.enabled} onChange={event => onChange({ ...chain, enabled: event.target.checked })} disabled={disabled}/>VST3 플러그인</label>
+    <p className="field-hint">내 컴퓨터에 있는 VST3 플러그인(리버브, EQ, 마스터링 도구 등)을 거칩니다. 보컬 자연화 다음, 기준곡 마스터링 앞에서 적용됩니다.</p>
+    {chain.enabled && <>
+      {catalog && !catalog.hostReady && <p className="field-hint warning">VST3 호스트(engine/vst-host/vst-host.exe)를 찾을 수 없습니다.</p>}
+      {catalog?.hostReady && <div className="vst-add-row">
+        <select value={adding} onChange={event => setAdding(event.target.value)} disabled={disabled || !addable.length} aria-label="추가할 플러그인">
+          <option value="">{addable.length ? '추가할 플러그인 선택' : '추가할 플러그인이 없습니다'}</option>
+          {addable.map(plugin => <option key={plugin.path} value={plugin.path}>{plugin.name}{plugin.vendor ? ` — ${plugin.vendor}` : ''}</option>)}
+        </select>
+        <Button size="sm" variant="outline" disabled={disabled || !adding} onClick={() => { onChange({ ...chain, plugins: [...chain.plugins, { path: adding, enabled: true }] }); setAdding(''); }}><Plus size={14}/>추가</Button>
+        <Button size="sm" variant="outline" disabled={disabled || searching} onClick={() => void load(true)} title="플러그인 다시 검색">{searching ? <LoaderCircle className="spin" size={14}/> : <RefreshCw size={14}/>}검색</Button>
+      </div>}
+      {catalog?.hostReady && !catalog.plugins.length && !searching && <p className="field-hint">검색된 플러그인이 없습니다. .vst3 파일을 engine/vst-host/plugins/ 폴더에 넣거나 표준 VST3 폴더에 설치한 뒤 "검색"을 눌러 주세요.</p>}
+      {chain.plugins.map((item, index) => {
+        const plugin = byPath.get(item.path);
+        const editing = editorPath === item.path;
+        return <div key={item.path} className={`vst-plugin-row${item.enabled ? '' : ' off'}`}>
+          <label className="at-function"><input type="checkbox" checked={item.enabled} onChange={event => patchPlugin(index, { enabled: event.target.checked })} disabled={disabled}/><span className="vst-plugin-name" title={item.path}>{plugin?.name || item.path.split(/[\\/]/).pop()}</span></label>
+          {plugin && !plugin.hasState && <em className="vst-badge">기본 설정</em>}
+          {plugin?.hasState && <em className="vst-badge saved">저장된 설정</em>}
+          {!plugin && catalog && <em className="vst-badge missing">찾을 수 없음</em>}
+          <span className="vst-plugin-actions">
+            {editing
+              ? <Button size="sm" variant="outline" onClick={() => void closeEditor()} title="열려 있는 설정 창을 강제로 닫습니다(설정은 저장되지 않을 수 있습니다)"><X size={14}/>창 강제 종료</Button>
+              : <Button size="sm" variant="outline" disabled={disabled || !!editorPath || !plugin} onClick={() => void openEditor(item.path)} title="플러그인 자체 설정 창을 엽니다. 창을 닫으면 설정이 저장됩니다."><Settings2 size={14}/>설정</Button>}
+            {plugin?.hasState && <button type="button" className="adapter-icon-btn" onClick={() => void resetState(item.path)} disabled={disabled || !!editorPath} title="저장된 설정 지우기" aria-label="저장된 설정 지우기"><RotateCcw size={14}/></button>}
+            <button type="button" className="adapter-icon-btn" onClick={() => move(index, -1)} disabled={disabled || index === 0} title="위로" aria-label="위로"><ChevronUp size={14}/></button>
+            <button type="button" className="adapter-icon-btn" onClick={() => move(index, 1)} disabled={disabled || index === chain.plugins.length - 1} title="아래로" aria-label="아래로"><ChevronDown size={14}/></button>
+            <button type="button" className="adapter-icon-btn danger" onClick={() => onChange({ ...chain, plugins: chain.plugins.filter((_, position) => position !== index) })} disabled={disabled || editing} title="체인에서 제거" aria-label="체인에서 제거"><Trash2 size={14}/></button>
+          </span>
+          {editing && <p className="field-hint vst-editing">플러그인 창이 열려 있습니다. 값을 조절한 뒤 그 창을 닫으면 저장됩니다.</p>}
+        </div>;
+      })}
+      {!chain.plugins.length && catalog?.hostReady && <p className="field-hint">체인에 플러그인이 없습니다. 위에서 골라 추가해 주세요. 위에서 아래 순서로 적용됩니다.</p>}
+    </>}
+  </div>;
+}
 function AiPolishDialog({ project, onClose, notify, onCreated }: { project: Project; onClose: () => void; notify: (text: string, error?: boolean) => void; onCreated: (project: Project) => void }) {
   const t = useAudioTransport();
   const [settings, setSettings] = useState<PolishSettings>(POLISH_DEFAULT);
+  const [vstChain, setVstChain] = useState<VstChain>({ enabled: false, plugins: [] });
   const [referencePath, setReferencePath] = useState<string | null>(null);
   const [referencePickerOpen, setReferencePickerOpen] = useState(false);
   const [running, setRunning] = useState(false);
@@ -4394,9 +4475,10 @@ function AiPolishDialog({ project, onClose, notify, onCreated }: { project: Proj
   const previewRef = useRef<string | null>(null);
   const sourceBuffer = t.bufferForKey('source');
   const outputBuffer = t.bufferForKey('output');
-  const anyStage = settings.denoise.enabled || settings.lifter.enabled || settings.naturalize.enabled || settings.master.enabled;
+  const vstOn = vstChain.enabled && vstChain.plugins.some(item => item.enabled);
+  const anyStage = settings.denoise.enabled || settings.lifter.enabled || settings.naturalize.enabled || vstOn || settings.master.enabled;
   const canStart = anyStage && !running && !saving && (!settings.master.enabled || !!referencePath);
-  const stageLabels: Record<string, string> = { denoise: '노이즈 제거', lifter: 'Spectral Lifter', naturalize: '보컬 자연화', master: '기준곡 마스터링' };
+  const stageLabels: Record<string, string> = { denoise: '노이즈 제거', lifter: 'Spectral Lifter', naturalize: '보컬 자연화', vst: 'VST3 플러그인', master: '기준곡 마스터링' };
 
   useEffect(() => {
     let cancelled = false;
@@ -4441,7 +4523,7 @@ function AiPolishDialog({ project, onClose, notify, onCreated }: { project: Proj
       }).catch(() => {});
     }, 700);
     try {
-      const result = await api<{ previewId: string; stages: string[]; report: PolishReport | null }>(`/projects/${project.id}/polish`, 'POST', { settings, referencePath: settings.master.enabled ? referencePath : undefined });
+      const result = await api<{ previewId: string; stages: string[]; report: PolishReport | null }>(`/projects/${project.id}/polish`, 'POST', { settings: { ...settings, vst: vstChain }, referencePath: settings.master.enabled ? referencePath : undefined });
       previewRef.current = result.previewId;
       setPreviewId(result.previewId);
       setAppliedStages(result.stages);
@@ -4505,6 +4587,7 @@ function AiPolishDialog({ project, onClose, notify, onCreated }: { project: Proj
             <p className="field-hint">생성된 목소리의 기계적으로 고른 느낌을 풀어 줍니다(보컬을 따로 분리하지 않고 전체 믹스에 적용).</p>
             {settings.naturalize.enabled && <PolishSlider label="양" value={settings.naturalize.amount} min={0.05} max={1} step={0.05} onChange={value => patch('naturalize', { amount: value })} disabled={running}/>}
           </div>
+          <VstChainPanel chain={vstChain} onChange={setVstChain} disabled={running} notify={notify}/>
           <div className="polish-step">
             <label className="at-function"><input type="checkbox" checked={settings.master.enabled} onChange={event => patch('master', { enabled: event.target.checked })} disabled={running}/>기준곡 마스터링</label>
             <p className="field-hint">좋아하는 곡의 음량과 음색 균형에 맞춥니다(matchering). 마지막 단계로 적용됩니다.</p>

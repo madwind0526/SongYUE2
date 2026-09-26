@@ -310,3 +310,14 @@
 .polish-band-bar::after { background: #8fa280; }
 .polish-band-bar i.down { background: #f0906a; }
 .polish-band-bar i.up { background: #7fe07f; }
+
+.vst-add-row { display: flex; gap: 6px; align-items: center; }
+.vst-add-row select { flex: 1; min-width: 0; height: 32px; border-radius: 8px; border: 1px solid #3b493d; background: #131a13; color: inherit; padding: 0 8px; }
+.vst-plugin-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 6px 8px; border: 1px solid #33413a; border-radius: 8px; background: #172017; }
+.vst-plugin-row.off { opacity: 0.55; }
+.vst-plugin-name { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vst-badge { font-style: normal; font-size: 11px; color: #8b978a; }
+.vst-badge.saved { color: #7fcf8f; }
+.vst-badge.missing { color: #f0a0a0; }
+.vst-plugin-actions { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+.vst-editing { flex-basis: 100%; color: #e8c874; }
