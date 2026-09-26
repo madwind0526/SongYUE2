@@ -72,3 +72,11 @@ LoRA/LoKr 어댑터는 audio.cpp가 읽지 못해서, **어댑터를 고른 곡�
 - **허깅페이스 탭**은 `yue2` 검색 결과에서 YuE2 어댑터만 골라(다른 모델의 LoRA, 모델 변환본 제외) 태그·언어·라이선스·샘플 수·파일 이름에서 분류하고, 저장소를 열면 README 첫 문단과 샘플 음원, 받을 수 있는 파일을 보여 줍니다. 작곡(AR) 파일 1개와 사운드(NAR) 파일 1개를 함께 고르면 하나의 LoRA로 묶습니다.
 - "악기만": 원본(Python) 모델이 아닌 모델(GGUF, INT8 등)에서 "악기만"을 누르면 받아 둔 "연주곡(Instrumental)" LoRA가 모두 자동으로 선택되어 이 엔진으로 만듭니다(가사는 [Verse] 같은 구간 태그만 남깁니다). 그 LoRA가 없으면 기존 방식(audio.cpp + 악보 mute-voice)으로 만들고 화면에서 받도록 안내합니다. 같은 시드여도 audio.cpp와 yue-server의 결과는 다릅니다. 비상업(cc-by-nc) 라이선스인 LoRA가 많아 화면에 "비상업용"으로 표시합니다.
 - 실측(RTX 5070 12 GB): 30초 곡 약 14초, 1분 39초 곡 34초(추론 단계 32).
+
+## 표지 이미지 모델 (Z-Image Turbo) — 2026-09-26부터
+
+곡 표지 자동 생성(선택)이 ComfyUI로 돌리는 모델입니다. 앱이 받아 주지는 않으며 ComfyUI가 볼 수 있는 폴더에 있어야 합니다. 없으면 Pixabay 사진, 그래픽 표지로 넘어갑니다. 파일과 연결 방법은 [comfyui-setup.md](comfyui-setup.md)의 5번을 보세요. Z-Image Turbo와 Qwen3-4B 텍스트 인코더의 라이선스는 각 모델 페이지를 확인하세요.
+
+## LoRA 학습용 체크포인트
+
+"LoRA 관리 → 학습"은 ComfyUI의 `models/checkpoints/yue2_3b_bf16.safetensors`(약 7.8GB, Comfy-Org/YuE2)를 씁니다. 사운드(NAR) LoRA만 학습합니다. 준비는 [lora-training.md](lora-training.md)를 보세요.

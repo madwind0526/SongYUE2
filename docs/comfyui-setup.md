@@ -75,6 +75,32 @@ New-Item -ItemType HardLink `
 
 작곡 계획이 "계획 없이 생성"(`cot=off`)이 아닌 한(기본값은 "멜로디와 코드 계획"), ComfyUI로 생성하기 전에 심볼릭 작곡(ABC 악보) 단계를 먼저 거칩니다 — 이 단계는 ComfyUI가 아니라 기존 Python 엔진을 씁니다. 즉 이 모델을 기본 설정으로 쓰려면 [docs/python-engine-setup.md](python-engine-setup.md)의 Python 실행 파일/스크립트 경로도 설정되어 있어야 합니다. "계획 없이 생성"으로 바꾸면 이 요구사항은 없어집니다.
 
+## 5. 표지 이미지 모델 (Z-Image Turbo, 선택)
+
+곡 표지 자동 생성이 쓰는 모델입니다. 없으면 자동으로 Pixabay 사진이나 그래픽 표지로 넘어갑니다. ComfyUI가 기본으로 지원하므로 새 노드는 필요 없고, 아래 세 파일이 ComfyUI에 보이면 됩니다.
+
+| 파일 | 폴더 | 크기(권장 변형) |
+|---|---|---|
+| `z_image_turbo_nvfp4.safetensors` (없으면 fp8, bf16 순으로 사용) | `models/diffusion_models/` | 4.5GB |
+| `qwen_3_4b_fp8_mixed.safetensors` (없으면 fp4_mixed, qwen_3_4b 순) | `models/text_encoders/` | 5.6GB |
+| `ae.safetensors` | `models/vae/` | 0.34GB |
+
+받는 곳은 Hugging Face의 Comfy-Org/z_image_turbo(`split_files/`)입니다. 다른 ComfyUI의 모델 폴더를 그대로 쓰려면 `engine/ComfyUI/extra_model_paths.yaml`에 그 폴더를 적으세요(이 파일은 ComfyUI가 시작할 때 읽으므로 **ComfyUI를 다시 시작**해야 합니다). 예:
+
+```yaml
+sd_lib:
+    base_path: D:\sd-lib
+    diffusion_models: models\diffusion_models
+    text_encoders: models\text_encoders
+    vae: models\vae
+```
+
+파일 이름은 하위 폴더가 있어도 됩니다(패턴으로 찾음). 이 PC(RTX 5070 12GB)에서 nvfp4로 1536×1536 한 장에 약 14~20초 걸렸습니다.
+
+## 6. LoRA 학습기 (선택)
+
+"LoRA 관리 → 학습" 탭은 같은 ComfyUI에 ComfyUI-YuE2-Trainer 노드와 BF16 체크포인트(`yue2_3b_bf16.safetensors`)를 더 설치해서 씁니다. 자세한 준비는 [lora-training.md](lora-training.md)를 보세요.
+
 ## 검증한 버전 (2026-09-16)
 
 - ComfyUI `0.35.0`, 커밋 `7a0b5ee`(2026-09-15, YuE2 PR 병합 이후) — SongYUE2 전용 독립 설치(`engine/ComfyUI`)

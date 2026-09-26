@@ -1947,7 +1947,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       const requestUrl = new URL(req.url, `http://127.0.0.1:${ownPort}`);
       const pathname = requestUrl.pathname;
       if (req.method === 'GET' && pathname === '/api/system/stats') return send(200, await systemStats());
-      if (req.method === 'GET' && pathname === '/api/health') return send(200, { ok: true, engineReady: await engineReady(), mode: 'local', version: '0.1.0' });
+      if (req.method === 'GET' && pathname === '/api/health') return send(200, { ok: true, engineReady: await engineReady(), mode: 'local', version: '1.0.0' });
       if (req.method === 'GET' && pathname === '/api/system') return send(200, await detectGpu());
       if (req.method === 'GET' && pathname === '/api/settings') return send(200, publicSettings());
       if (req.method === 'PUT' && pathname === '/api/settings') {

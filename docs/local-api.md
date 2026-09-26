@@ -16,6 +16,7 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 | `ENGINE_PATH` | 음악 생성 엔진(audio.cpp) 실행 파일 경로 (선택, 설정 화면에서도 지정 가능) |
 | `PYTHON_ENGINE_PATH` | 공식 Python YuE2("원본" 모델) 실행 파일 경로. 원본 모델 생성, ABC 계획, 악보 검사에 사용 |
 | `SETTING_PATH` / `MUSIC_PATH` / `EXAMPLES_PATH` | 라이브러리 폴더(SongYUE2 루트 기준 **상대 경로**). 비우면 각각 `library/setting`/`library/music`/`library/examples` 사용. 설정 화면에도 placeholder로 기본값이 보임 |
+| `PIXABAY_API_KEY` | 곡 표지 자동 생성에서 ComfyUI가 안 될 때 쓰는 Pixabay 무료 사진 검색 키(비우면 그래픽 표지로 넘어감) |
 | `SAVE_FORMAT` | 완성곡을 `MUSIC_PATH`에 저장할 파일 형식: wav/flac/mp3/mp4 (기본 wav) |
 
 ## 라이브러리 폴더 구조
@@ -52,7 +53,7 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 
 | 메서드 / 주소 | 요청 / 응답 |
 |---|---|
-| GET `/api/health` | `{ok:true,engineReady,mode:'local',version:'0.1.0'}` — engineReady는 `enginePath`가 설정되어 있고 실제 파일이 존재하는지를 확인한 값 |
+| GET `/api/health` | `{ok:true,engineReady,mode:'local',version:'1.0.0'}` — engineReady는 `enginePath`가 설정되어 있고 실제 파일이 존재하는지를 확인한 값 |
 | GET `/api/settings` | `{provider,endpoint,llmModel,hasApiKey,apiKey,apiKeyStorage,enginePath,pythonEnginePath,settingPath,musicPath,examplesPath,saveFormat,outputDirectory}` — endpoint/llmModel/apiKey는 `.env`에서 읽은 값(읽기 전용) |
 | PUT `/api/settings` | `{provider?,enginePath?,pythonEnginePath?,settingPath?,musicPath?,examplesPath?,saveFormat?}`만 반영합니다. provider: none/ollama/claude/chatgpt/gemini. saveFormat: wav/flac/mp3/mp4. 경로를 바꾸면 그 폴더를 즉시 만듭니다(기존 파일은 옮기지 않음). endpoint/llmModel/apiKey는 더 이상 이 API로 바꿀 수 없으며(`.env`를 수정), 요청에 포함돼도 무시됩니다 |
 | GET `/api/models` | 다운로드 상태 원본 + `engineReady` (health와 동일 기준) |
@@ -69,7 +70,7 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 | PATCH `/api/projects/:id` | `{title?,notes?,favorite?}` → 수정된 프로젝트. 제목이 바뀌면 파일명(및 완성곡이면 오디오 파일명)도 함께 바뀜 |
 | DELETE `/api/projects/:id` | 프로젝트 JSON과(완성곡이면) 오디오, `runs/<id>/`를 삭제 → `{ok:true,id}`. 없는 프로젝트는 404 |
 | GET `/api/projects/:id/export` | 프로젝트 JSON 다운로드 |
-| POST `/api/projects/:id/cover` | `{dataUrl}`(PNG/JPEG/WEBP, base64, 최대 20MB) → 저장된 프로젝트(커버 경로 포함). 기존 커버는 교체 전 삭제 |
+| POST `/api/projects/:id/cover` | `{dataUrl}`(PNG/JPEG/WEBP, base64, 최대 20MB) → 저장된 프로젝트(커버 경로 포함, `coverNotice`는 1400px보다 작을 때의 안내). 그림은 가운데 기준 정사각형으로 자르고 2475px를 넘으면 줄임(PNG는 PNG, 나머지는 JPEG). 기존 커버는 교체 전 삭제 |
 | DELETE `/api/projects/:id/cover` | 커버 이미지 삭제 → `{ok:true}` |
 | GET `/api/projects/:id/cover` | 커버 이미지 바이트 스트리밍. 없으면 404 |
 | GET `/api/llm/models` | Ollama 설치 모델 `{models:[{name,size}]}` |
@@ -124,6 +125,48 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 | GET `/api/projects/:id/lrc` | LRC 텍스트(`[mm:ss.xx]가사`, `[ti:]`, `[length:]` 포함) |
 
 곡 목록은 `.notes.json`과 `.lyrics.json`을 곡으로 읽지 않는다. 곡 이름을 바꾸면 두 부속 파일도 같이 이동하고, 곡을 지우면 함께 지워진다. `GET /api/projects/:id/audio`는 HTTP Range(`bytes=a-b`, `bytes=a-`)에 206으로 답한다(플레이어가 재생 위치를 옮기는 데 필요, 범위 밖은 416). 실측(2분대 곡 3곡): 영어 글자 일치율 92%·26줄 중 23줄이 보컬 위, 한국어 100%·25/25, 일본어 96%·24/25, 처리 약 20~25초(보컬 분리 약 11초 + 인식 약 7초).
+
+## 곡 표지 자동 생성
+
+`PUT /api/settings`의 `autoCover`(기본 true)가 켜져 있으면 새 곡이 저장될 때(`finalizeToMusic`) 표지가 없는 곡(스타일과 제목이 있는 곡만)에 표지를 붙입니다. 순서는 ComfyUI Z-Image Turbo, Pixabay(`PIXABAY_API_KEY`), 그래픽입니다. 구현은 `backend/cover-art.mjs`이고, 진행 중에는 `GET /api/generate/status`의 `detail`이 "표지를 만드는 중"/"표지를 찾는 중"입니다.
+
+## LoRA 학습 (ComfyUI 학습기)
+
+준비와 화면은 [lora-training.md](lora-training.md)를 보세요.
+
+| 요청 | 설명 |
+|---|---|
+| GET `/api/lora-train/status` | 준비 상태(ComfyUI, 학습기 노드, BF16 체크포인트), 진행 중 작업의 단계·진행률·남은 시간, 결과 비교(EMA/raw) |
+| GET `/api/lora-train/browse?path=` | 폴더 찾기: 빈 경로는 드라이브 목록, 아니면 하위 폴더와 그 폴더의 곡 수, `@library`는 `library/Lora` |
+| POST `/api/lora-train/scan` | `{dir}` → 곡 목록(`files[{name, seconds}]`, 길이 합계, 캡션 파일 수) |
+| POST `/api/lora-train/start` | `{name, triggerWord, steps, rank(16/32/64/8), clipSeconds(2~10), sourceDir, files?}` → 학습 시작(하나씩만, 곡 생성과 GPU를 나눠 쓰지 않음). `files`가 있으면 그 곡만 사용 |
+| POST `/api/lora-train/cancel` | 학습 취소 |
+| POST `/api/lora-train/ab` | EMA/raw 시험곡 만들기(둘이 다를 때만 필요) |
+| GET `/api/lora-train/ab/(ema|raw)` | 시험곡 오디오 |
+| POST `/api/lora-train/finalize` | `{choice: 'ema'|'raw'}` → `library/Lora/<이름>/`에 보관, `models/yue-adapters/<이름>/`에 설치(하드 링크) |
+| POST `/api/lora-train/discard` | 결과를 버림 |
+| GET `/api/lora-train/library` | 보관함 목록(이름, 제목, 메모, 트리거, 스텝, rank, 곡 수, 학습일, 설치 이름, 용량) |
+| PATCH `/api/lora-train/library/:name` | `{title?, note?}` — 기록과 설치본의 표시 이름·메모를 함께 수정 |
+| DELETE `/api/lora-train/library/:name` | 보관함과 설치본을 함께 삭제 |
+
+## VST3 플러그인
+
+동작과 화면은 [vst3.md](vst3.md)를 보세요. 호스트는 `engine/vst-host/vst-host.exe`입니다.
+
+| 요청 | 설명 |
+|---|---|
+| GET `/api/vst/plugins[?refresh=1]` | `{hostReady, plugins:[{name, vendor, version, path, category, hasState, local?}], editor}` — 표준 VST3 폴더(호스트 검색)와 `engine/vst-host/plugins/`(앱이 직접 검색), 결과는 5분 캐시 |
+| GET `/api/vst/editor` | 플러그인 설정 창 상태 `{running, path?}` |
+| POST `/api/vst/editor` | `{path}` → 그 플러그인의 설정 창 열기(하나만, 이미 열려 있으면 409). 창을 닫을 때 `Setting/VST-states/`에 상태 저장. 검색된 플러그인만 가능 |
+| POST `/api/vst/editor/close` | 열려 있는 창을 강제 종료(상태는 저장되지 않을 수 있음) |
+| DELETE `/api/vst/state` | `{path}` — 저장된 상태 삭제 |
+| POST `/api/vst/open-folder` | 앱 플러그인 폴더를 탐색기로 열기 |
+| DELETE `/api/vst/plugin` | `{path}` — `engine/vst-host/plugins/` 안의 플러그인 삭제(그 밖은 400) |
+| GET·POST·DELETE `/api/vst/chains` | 체인 프리셋 목록 / 저장(`{name, plugins:[{path, enabled}]}`) / 삭제(`?name=`), `Setting/VST-chain/` |
+| POST `/api/vst/test` | `{projectId, path, startSeconds, seconds(5~60)}` → 곡의 그 구간에 플러그인 하나만 적용 `{testId}`(가장 최근 시험 하나만 유지) |
+| GET `/api/vst/test/:id/(original|processed)` | 시험한 구간의 원본(wav) / 처리 결과(flac) |
+
+곡 다듬기 요청(`POST /api/projects/:id/polish`, `POST /api/audio-tools/polish`)의 `settings.vst = {enabled, plugins:[{path, enabled}]}`가 체인입니다(자연화 다음, 마스터링 앞, 최대 8개). 검색되지 않은 경로는 400입니다.
 
 ## LoRA (yue-server 엔진)
 
