@@ -1,4 +1,4 @@
-export type Page = 'create' | 'library' | 'projects' | 'favorites' | 'playlists' | 'abc' | 'restore' | 'tools' | 'lora' | 'models' | 'settings';
+export type Page = 'create' | 'vst' | 'library' | 'projects' | 'favorites' | 'playlists' | 'abc' | 'restore' | 'tools' | 'lora' | 'models' | 'settings';
 export type Provider = 'none' | 'ollama' | 'claude' | 'chatgpt' | 'gemini';
 export type VocalGender = '' | 'male' | 'female' | 'duet';
 export type Draft = { title: string; lyrics: string; style: string; modelId: string; seed: number; steps: number; cot: string; vocalGender: VocalGender; instrumental: boolean; abc: string; mode: string; adapters: { name: string; arScale: number; narScale: number }[] };
@@ -60,7 +60,7 @@ export const providers: { id: Provider; label: string; mark: string; description
   { id: 'gemini', label: 'Gemini', mark: '✦', description: 'Google AI API' },
 ];
 export type Example = { id: string; title: string; genre?: string; caption?: string; color?: string; style: string; lyrics: string; createdAt?: string };
-export const titles: Record<Page, string> = { create: '만들기', library: '내 라이브러리', projects: '프로젝트', favorites: '좋아요', playlists: '재생목록', abc: 'ABC 악보', restore: '음원 복원', tools: 'Audio Tools', lora: 'LoRA 관리', models: '모델 관리', settings: '설정' };
+export const titles: Record<Page, string> = { create: '만들기', library: '내 라이브러리', projects: '프로젝트', favorites: '좋아요', playlists: '재생목록', abc: 'ABC 악보', restore: '음원 복원', tools: 'Audio Tools', lora: 'LoRA 관리', vst: 'VST3 관리', models: '모델 관리', settings: '설정' };
 export const gb = (bytes = 0) => `${(bytes / 1e9).toFixed(2)} GB`;
 export async function api<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   const sending = method !== 'GET';

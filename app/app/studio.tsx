@@ -6,7 +6,7 @@ import './timbre-transform.css';
 import './audio-tools.css';
 import './adapters.css';
 import * as ABCJS from 'abcjs';
-import { HardDrive, ChevronUp, AudioLines, ArrowDownAZ, ArrowDownZA, ArrowDownToLine, Clock, ArrowRight, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Combine, Cpu, Dices, Disc3, Download, FastForward, FileText, Folder, FolderOpen, GitCompare, Guitar, Headphones, Heart, Image as ImageIcon, Layers, LayoutGrid, ListMusic, ListPlus, LoaderCircle, Menu, Mic, MoreVertical, Music2, Pause, Pencil, Play, Plus, Power, RefreshCw, Rewind, RotateCcw, Save, Search, Settings2, ShieldCheck, SkipBack, SkipForward, SlidersHorizontal, Sparkles, Square, Trash2, Upload, Volume2, WandSparkles, X } from 'lucide-react';
+import { HardDrive, ChevronUp, AudioLines, ArrowDownAZ, ArrowDownZA, ArrowDownToLine, Clock, ArrowRight, Check, ChevronDown, ChevronLeft, ChevronRight, CircleHelp, Combine, Cpu, Dices, Disc3, Download, FastForward, FileText, Folder, FolderOpen, GitCompare, Guitar, Headphones, Heart, Image as ImageIcon, Layers, LayoutGrid, ListMusic, ListPlus, LoaderCircle, Menu, Mic, MoreVertical, Music2, Pause, Pencil, Play, Plug, Plus, Power, RefreshCw, Rewind, RotateCcw, Save, Search, Settings2, ShieldCheck, SkipBack, SkipForward, SlidersHorizontal, Sparkles, Square, Trash2, Upload, Volume2, WandSparkles, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -4379,9 +4379,13 @@ function PolishSlider({ label, value, min, max, step, unit, onChange, disabled }
 }
 // VST3 plugins in "AI 곡 다듬기" (vst-host runs them as a separate process): search / add, the plugin's own settings window (its state is saved when
 // that window is closed), on / off, order and removal. The chain is applied between the vocal naturalizer and mastering.
-type VstPlugin = { name: string; vendor: string; path: string; category: string; hasState: boolean; local?: boolean };
+type VstPlugin = { name: string; vendor: string; version?: string; path: string; category: string; hasState: boolean; local?: boolean };
 type VstChain = { enabled: boolean; plugins: { path: string; enabled: boolean }[] };
-function VstChainPanel({ chain, onChange, disabled, notify }: { chain: VstChain; onChange: (next: VstChain) => void; disabled: boolean; notify: (text: string, error?: boolean) => void }) {
+function VstChainPanel({ chain, onChange, disabled, notify, embedded = false }: { chain: VstChain; onChange: (next: VstChain) => void; disabled: boolean; notify: (text: string, error?: boolean) => void; embedded?: boolean }) {
+  const open = embedded || chain.enabled;
+  const [presets, setPresets] = useState<{ name: string; plugins: { path: string; enabled: boolean }[] }[]>([]);
+  const [namingPreset, setNamingPreset] = useState(false);
+  const [presetName, setPresetName] = useState('');
   const [catalog, setCatalog] = useState<{ hostReady: boolean; plugins: VstPlugin[] } | null>(null);
   const [searching, setSearching] = useState(false);
   const [editorPath, setEditorPath] = useState('');
@@ -4395,7 +4399,12 @@ function VstChainPanel({ chain, onChange, disabled, notify }: { chain: VstChain;
     } catch (error) { notify((error as Error).message, true); }
     finally { setSearching(false); }
   }
-  useEffect(() => { if (chain.enabled && !catalog) void load(); }, [chain.enabled]); // eslint-disable-line react-hooks/exhaustive-deps
+  const loadPresets = () => api<{ name: string; plugins: { path: string; enabled: boolean }[] }[]>('/vst/chains').then(setPresets).catch(() => {});
+  useEffect(() => { if (open && !catalog) { void load(); void loadPresets(); } }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  async function savePreset() {
+    try { await api('/vst/chains', 'POST', { name: presetName, plugins: chain.plugins }); notify('체인 프리셋을 저장했습니다.'); setNamingPreset(false); setPresetName(''); void loadPresets(); }
+    catch (error) { notify((error as Error).message, true); }
+  }
   // while a plugin window is open, ask the server when it has been closed (the state file is written then)
   useEffect(() => {
     if (!editorPath) return;
@@ -4419,10 +4428,21 @@ function VstChainPanel({ chain, onChange, disabled, notify }: { chain: VstChain;
   async function resetState(pluginPath: string) {
     try { await api('/vst/state', 'DELETE', { path: pluginPath }); void load(); notify('저장된 플러그인 설정을 지웠습니다.'); } catch (error) { notify((error as Error).message, true); }
   }
-  return <div className="polish-step">
-    <label className="at-function"><input type="checkbox" checked={chain.enabled} onChange={event => onChange({ ...chain, enabled: event.target.checked })} disabled={disabled}/>VST3 플러그인</label>
-    <p className="field-hint">내 컴퓨터에 있는 VST3 플러그인(리버브, EQ, 마스터링 도구 등)을 거칩니다.</p>
-    {chain.enabled && <>
+  return <div className={embedded ? 'vst-embedded' : 'polish-step'}>
+    {!embedded && <>
+      <label className="at-function"><input type="checkbox" checked={chain.enabled} onChange={event => onChange({ ...chain, enabled: event.target.checked })} disabled={disabled}/>VST3 플러그인</label>
+      <p className="field-hint">내 컴퓨터에 있는 VST3 플러그인(리버브, EQ, 마스터링 도구 등)을 거칩니다.</p>
+    </>}
+    {open && <>
+      {!embedded && <div className="vst-preset-bar">
+        <select value="" onChange={event => { const preset = presets.find(item => item.name === event.target.value); if (preset) onChange({ ...chain, plugins: preset.plugins }); }} disabled={disabled || !presets.length} aria-label="체인 프리셋 불러오기">
+          <option value="">{presets.length ? '체인 프리셋 불러오기' : '저장된 프리셋 없음'}</option>
+          {presets.map(preset => <option key={preset.name} value={preset.name}>{preset.name}</option>)}
+        </select>
+        {namingPreset
+          ? <><Input value={presetName} maxLength={120} placeholder="프리셋 이름" aria-label="프리셋 이름" onChange={event => setPresetName(event.target.value)}/><Button size="sm" onClick={() => void savePreset()} disabled={!presetName.trim()}><Check size={14}/></Button><Button size="sm" variant="outline" onClick={() => setNamingPreset(false)}><X size={14}/></Button></>
+          : <Button size="sm" variant="outline" disabled={disabled || !chain.plugins.length} onClick={() => setNamingPreset(true)} title="현재 체인을 프리셋으로 저장" aria-label="현재 체인을 프리셋으로 저장"><Save size={14}/></Button>}
+      </div>}
       {catalog && !catalog.hostReady && <p className="field-hint warning">VST3 호스트(engine/vst-host/vst-host.exe)를 찾을 수 없습니다.</p>}
       {catalog?.hostReady && <div className="vst-add-row">
         <select value={adding} onChange={event => setAdding(event.target.value)} disabled={disabled || !addable.length} aria-label="추가할 플러그인">
@@ -4454,6 +4474,191 @@ function VstChainPanel({ chain, onChange, disabled, notify }: { chain: VstChain;
       {!chain.plugins.length && catalog?.hostReady && <p className="field-hint">체인에 플러그인이 없습니다. 위에서 골라 추가해 주세요. 위에서 아래 순서로 적용됩니다.</p>}
     </>}
   </div>;
+}
+// Free plugins that were checked on the makers' pages (free, VST3, Windows). Dragonfly Reverb is the one that was also run through this app's host.
+// Meters / analyzers (SPAN, Youlean) are left out on purpose: the plugins run offline without a display, so they would not change or show anything.
+const VST_RECOMMENDED = [
+  { name: 'Dragonfly Reverb', use: '리버브 (홀, 플레이트, 룸, 초기 반사)', note: '오픈소스(GPL). 이 앱에서 처리까지 확인했습니다.', url: 'https://github.com/michaelwillis/dragonfly-reverb' },
+  { name: 'TDR Nova', use: '다이내믹 EQ (보컬 치찰음, 고음 제어)', note: '무료, Tokyo Dawn Labs', url: 'https://www.tokyodawn.net/tdr-nova/' },
+  { name: 'TDR Kotelnikov', use: '마스터링 컴프레서 (전체 음량, 다이내믹)', note: '무료, Tokyo Dawn Labs', url: 'https://www.tokyodawn.net/tdr-kotelnikov/' },
+  { name: 'Valhalla Supermassive', use: '공간감, 잔향, 에코', note: '무료. 완성곡 전체에 강하게 걸면 소리 색이 많이 바뀔 수 있습니다.', url: 'https://valhalladsp.com/shop/reverb/valhalla-supermassive/' },
+  { name: 'Kilohearts Essentials', use: '기본 효과 34종 (EQ, 컴프레서, 디스토션 등)', note: '무료, 설치 프로그램에 계정이 필요합니다.', url: 'https://kilohearts.com/products/kilohearts_essentials' },
+];
+type VstChainPreset = { name: string; plugins: { path: string; enabled: boolean }[] };
+
+// "시험 듣기": a part of a library song through one plugin (with its saved settings), next to the same part without it
+function VstTestDialog({ plugin, songs, onClose, notify }: { plugin: VstPlugin; songs: Project[]; onClose: () => void; notify: (text: string, error?: boolean) => void }) {
+  const [songId, setSongId] = useState(songs[0]?.id || '');
+  const [start, setStart] = useState('0');
+  const [seconds, setSeconds] = useState('20');
+  const [running, setRunning] = useState(false);
+  const [test, setTest] = useState<{ testId: string; startSeconds: number; seconds: number } | null>(null);
+  const t = useAudioTransport();
+  useEffect(() => () => t.closeContext(), []); // eslint-disable-line react-hooks/exhaustive-deps
+  const sourceBuffer = t.bufferForKey('source');
+  const outputBuffer = t.bufferForKey('output');
+  function clearTest() { setTest(null); t.setBuffer('source', null); t.setBuffer('output', null); }
+  async function run() {
+    setRunning(true); clearTest();
+    try {
+      const result = await api<{ testId: string; startSeconds: number; seconds: number }>('/vst/test', 'POST', { projectId: songId, path: plugin.path, startSeconds: Number(start) || 0, seconds: Number(seconds) || 20 });
+      const context = t.ensureAudioContext();
+      for (const [key, kind] of [['source', 'original'], ['output', 'processed']] as const) {
+        const response = await fetch(`/api/vst/test/${result.testId}/${kind}`);
+        if (!response.ok) throw new Error('시험 결과를 불러오지 못했습니다.');
+        t.setBuffer(key, await context.decodeAudioData(await response.arrayBuffer()));
+      }
+      setTest(result);
+    }
+    catch (error) { notify((error as Error).message, true); }
+    finally { setRunning(false); }
+  }
+  const row = (key: 'source' | 'output', label: string, buffer: AudioBuffer | null, processed: boolean, note: string) => <div className={t.rowClass(key, 'stem-row')}>
+    <div className="audio-compare-toolbar">
+      <button type="button" className="pp-waveform-label" aria-label={`${label} 재생/일시정지`} onClick={() => t.handleKeyClick(key)} disabled={!buffer}>{t.activeKey === key && t.isPlaying ? <Pause size={15}/> : <Play size={15}/>}</button>
+      <span className="stem-label audio-compare-label"><strong>{label}</strong><small>{note}</small></span>
+      {buffer && <span className="pp-seek-time audio-compare-duration">{formatSeekTime(buffer.duration)}</span>}
+    </div>
+    <div className="audio-compare-charts">
+      <CompareWaveform peaks={t.peaksForKey(key)} fraction={t.positionSeconds / (buffer?.duration || 1)} processed={processed}/>
+      <CompareSpectrogram buffer={buffer} fraction={t.positionSeconds / (buffer?.duration || 1)}/>
+    </div>
+  </div>;
+  return <Dialog open onOpenChange={next => { if (!next && !running) onClose(); }}>
+    <DialogContent className="studio-dialog audio-compare-dialog vst-test-dialog">
+      <DialogTitle>{plugin.name} 시험 듣기</DialogTitle>
+      <DialogDescription>곡의 일부분에 이 플러그인만 적용해서 원본과 비교해 들어 봅니다. 플러그인의 저장된 설정이 사용됩니다.</DialogDescription>
+      {songs.length === 0 ? <p className="field-hint">시험할 완성된 곡이 없습니다.</p> : <>
+        <label className="train-field">곡<select value={songId} onChange={event => { setSongId(event.target.value); clearTest(); }} disabled={running}>{songs.map(song => <option key={song.id} value={song.id}>{song.title}</option>)}</select></label>
+        <div className="vst-test-range">
+          <label className="train-field">시작 위치 (초)<Input type="number" min={0} value={start} onChange={event => { setStart(event.target.value); clearTest(); }} disabled={running}/></label>
+          <label className="train-field">길이 (초, 5~60)<Input type="number" min={5} max={60} value={seconds} onChange={event => { setSeconds(event.target.value); clearTest(); }} disabled={running}/></label>
+        </div>
+        <Button onClick={() => void run()} disabled={running || !songId}>{running ? <LoaderCircle className="spin" size={15}/> : <Play size={15}/>}{test ? '다시 만들기' : '시험 만들기'}</Button>
+        {test && <>
+          <div className="stem-list">
+            {row('source', '원본 구간', sourceBuffer, false, `${test.startSeconds}초부터 ${test.seconds}초`)}
+            {row('output', `${plugin.name} 적용`, outputBuffer, true, '저장된 설정으로 처리')}
+          </div>
+          <p className="field-hint">두 줄의 재생 버튼을 번갈아 누르면 같은 위치에서 이어서 들립니다. 소리가 마음에 들지 않으면 카드의 "설정"에서 값을 바꾼 뒤 다시 만듭니다.</p>
+          <SeekRow t={t}/>
+          <TransportControls t={t} disabled={!sourceBuffer}/>
+        </>}
+      </>}
+      <div className="dialog-actions"><Button variant="outline" onClick={onClose} disabled={running}>닫기</Button></div>
+    </DialogContent>
+  </Dialog>;
+}
+
+// "VST3 관리": search, plugin settings, listening test, deleting plugins of the app folder, chain presets and free plugins to get
+function VstManagePage({ notify, projects }: { notify: (text: string, error?: boolean) => void; projects: Project[] }) {
+  const [catalog, setCatalog] = useState<{ hostReady: boolean; plugins: VstPlugin[] } | null>(null);
+  const [searching, setSearching] = useState(false);
+  const [editorPath, setEditorPath] = useState('');
+  const [removing, setRemoving] = useState('');
+  const [testing, setTesting] = useState<VstPlugin | null>(null);
+  const [presets, setPresets] = useState<VstChainPreset[]>([]);
+  const [draftName, setDraftName] = useState('');
+  const [draft, setDraft] = useState<VstChain>({ enabled: true, plugins: [] });
+  const [removingPreset, setRemovingPreset] = useState('');
+  const songs = projects.filter(project => project.status === 'completed' && project.audioPath);
+  async function load(refresh = false) {
+    setSearching(true);
+    try {
+      const result = await api<{ hostReady: boolean; plugins: VstPlugin[]; editor: { running: boolean; path?: string } }>(`/vst/plugins${refresh ? '?refresh=1' : ''}`);
+      setCatalog({ hostReady: result.hostReady, plugins: result.plugins });
+      setEditorPath(result.editor.running ? result.editor.path || '' : '');
+    } catch (error) { notify((error as Error).message, true); }
+    finally { setSearching(false); }
+  }
+  const loadPresets = () => api<VstChainPreset[]>('/vst/chains').then(setPresets).catch(() => {});
+  useEffect(() => { void load(); void loadPresets(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!editorPath) return;
+    const timer = window.setInterval(async () => {
+      try { const status = await api<{ running: boolean }>('/vst/editor'); if (!status.running) { setEditorPath(''); void load(); notify('플러그인 설정을 저장했습니다.'); } } catch { /* next tick */ }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [editorPath]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!removing) return; const timer = window.setTimeout(() => setRemoving(''), 4000); return () => window.clearTimeout(timer); }, [removing]);
+  useEffect(() => { if (!removingPreset) return; const timer = window.setTimeout(() => setRemovingPreset(''), 4000); return () => window.clearTimeout(timer); }, [removingPreset]);
+  const nameOf = (pluginPath: string) => catalog?.plugins.find(plugin => plugin.path === pluginPath)?.name || pluginPath.split(/[\\/]/).pop() || pluginPath;
+  async function openEditor(plugin: VstPlugin) { try { await api('/vst/editor', 'POST', { path: plugin.path }); setEditorPath(plugin.path); } catch (error) { notify((error as Error).message, true); } }
+  async function closeEditor() { try { await api('/vst/editor/close', 'POST', {}); setEditorPath(''); void load(); } catch (error) { notify((error as Error).message, true); } }
+  async function resetState(plugin: VstPlugin) { try { await api('/vst/state', 'DELETE', { path: plugin.path }); void load(); notify('저장된 플러그인 설정을 지웠습니다.'); } catch (error) { notify((error as Error).message, true); } }
+  async function removePlugin(plugin: VstPlugin) { try { await api('/vst/plugin', 'DELETE', { path: plugin.path }); setRemoving(''); notify(`${plugin.name}을(를) 삭제했습니다.`); void load(true); } catch (error) { notify((error as Error).message, true); } }
+  async function openFolder() { try { await api('/vst/open-folder', 'POST', {}); } catch (error) { notify((error as Error).message, true); } }
+  async function savePreset() {
+    try { await api('/vst/chains', 'POST', { name: draftName, plugins: draft.plugins }); notify('체인 프리셋을 저장했습니다.'); setDraftName(''); setDraft({ enabled: true, plugins: [] }); void loadPresets(); }
+    catch (error) { notify((error as Error).message, true); }
+  }
+  async function removePreset(name: string) { try { await api(`/vst/chains?name=${encodeURIComponent(name)}`, 'DELETE'); setRemovingPreset(''); void loadPresets(); } catch (error) { notify((error as Error).message, true); } }
+  return <section className="adapter-page page-scroll vst-page">
+    <div className="page-heading">
+      <span className="eyebrow">소리를 다듬는 외부 플러그인</span>
+      <h1>VST3 관리</h1>
+      <p>내 컴퓨터의 VST3 플러그인(리버브, EQ, 컴프레서 등)을 찾고, 설정하고, 곡에 적용하기 전에 들어 봅니다. 곡에 적용하는 곳은 곡 목록의 "AI 곡 다듬기"입니다.</p>
+    </div>
+    <div className="vst-toolbar">
+      <Button variant="outline" onClick={() => void load(true)} disabled={searching} title="플러그인 다시 검색" aria-label="플러그인 다시 검색">{searching ? <LoaderCircle className="spin" size={15}/> : <RefreshCw size={15}/>}</Button>
+      <Button variant="outline" onClick={() => void openFolder()}><FolderOpen size={15}/>폴더 열기</Button>
+      <span className="field-hint">검색 위치: 표준 VST3 폴더(C:\Program Files\Common Files\VST3)와 앱 폴더(engine/vst-host/plugins)</span>
+    </div>
+    <h2 className="vst-section-title">플러그인</h2>
+    {catalog && !catalog.hostReady && <p className="field-hint warning">VST3 호스트(engine/vst-host/vst-host.exe)를 찾을 수 없습니다.</p>}
+    {catalog?.hostReady && !catalog.plugins.length && !searching && <p className="field-hint">검색된 플러그인이 없습니다. 아래 "추천 무료 플러그인"에서 받아 설치하거나, .vst3 파일을 앱 폴더에 넣은 뒤 검색해 주세요.</p>}
+    <div className="vst-card-grid">
+      {catalog?.plugins.map(plugin => {
+        const editing = editorPath === plugin.path;
+        return <div key={plugin.path} className="vst-card">
+          <div className="vst-card-head"><strong>{plugin.name}</strong><span className="vst-badge">{plugin.local ? '앱 폴더' : '시스템'}</span></div>
+          <span className="vst-card-meta">{[plugin.vendor, plugin.version, plugin.category].filter(Boolean).join(' · ') || 'VST3'}</span>
+          <span className="vst-card-path" title={plugin.path}>{plugin.path}</span>
+          <div className="vst-card-actions">
+            {editing
+              ? <Button size="sm" variant="outline" onClick={() => void closeEditor()} title="열려 있는 설정 창을 강제로 닫습니다(설정은 저장되지 않을 수 있습니다)"><X size={14}/>강제 종료</Button>
+              : <Button size="sm" variant="outline" disabled={!!editorPath} onClick={() => void openEditor(plugin)} title="플러그인 자체 설정 창을 엽니다. 창을 닫으면 설정이 저장됩니다."><Settings2 size={14}/>설정</Button>}
+            <Button size="sm" variant="outline" disabled={!!editorPath} onClick={() => setTesting(plugin)}><Play size={14}/>시험 듣기</Button>
+            {plugin.hasState && <button type="button" className="adapter-icon-btn" onClick={() => void resetState(plugin)} disabled={!!editorPath} title="저장된 설정 지우기" aria-label="저장된 설정 지우기"><RotateCcw size={14}/></button>}
+            {plugin.local && (removing === plugin.path
+              ? <button type="button" className="adapter-icon-btn danger confirm" autoFocus onClick={() => void removePlugin(plugin)} aria-label={`${plugin.name} 삭제 확인`}><Trash2 size={14}/>삭제?</button>
+              : <button type="button" className="adapter-icon-btn danger" onClick={() => setRemoving(plugin.path)} disabled={editing} title="앱 폴더에서 삭제" aria-label={`${plugin.name} 삭제`}><Trash2 size={14}/></button>)}
+          </div>
+          {editing && <p className="field-hint vst-editing">값을 조절한 뒤 그 창을 닫으면 저장됩니다.</p>}
+        </div>;
+      })}
+    </div>
+    <h2 className="vst-section-title">체인 프리셋</h2>
+    <p className="field-hint">자주 쓰는 플러그인 조합을 이름을 붙여 저장해 두면 "AI 곡 다듬기"에서 한 번에 불러올 수 있습니다.</p>
+    <div className="vst-preset-list">
+      {presets.length === 0 && <p className="field-hint">저장된 프리셋이 없습니다.</p>}
+      {presets.map(preset => <div key={preset.name} className="vst-preset-row">
+        <div className="vst-preset-main"><strong>{preset.name}</strong><span>{preset.plugins.map(item => `${nameOf(item.path)}${item.enabled ? '' : '(끔)'}`).join(' → ')}</span></div>
+        {removingPreset === preset.name
+          ? <button type="button" className="adapter-icon-btn danger confirm" autoFocus onClick={() => void removePreset(preset.name)} aria-label={`${preset.name} 삭제 확인`}><Trash2 size={14}/>삭제?</button>
+          : <button type="button" className="adapter-icon-btn danger" onClick={() => setRemovingPreset(preset.name)} title="프리셋 삭제" aria-label={`${preset.name} 삭제`}><Trash2 size={14}/></button>}
+      </div>)}
+    </div>
+    <div className="vst-preset-new">
+      <strong>새 프리셋</strong>
+      <VstChainPanel embedded chain={draft} onChange={setDraft} disabled={false} notify={notify}/>
+      <div className="vst-preset-save">
+        <Input value={draftName} maxLength={120} placeholder="프리셋 이름 (예: 마스터링 체인)" aria-label="프리셋 이름" onChange={event => setDraftName(event.target.value)}/>
+        <Button onClick={() => void savePreset()} disabled={!draftName.trim() || !draft.plugins.length}><Save size={15}/>저장</Button>
+      </div>
+    </div>
+    <h2 className="vst-section-title">추천 무료 플러그인</h2>
+    <p className="field-hint">공식 사이트에서 받아 설치하세요(VST3, 64비트 Windows). 설치 프로그램은 표준 폴더에 설치되어 자동으로 검색되고, 압축 파일은 앱 폴더에 넣으면 됩니다. 이 목록의 플러그인 중 Dragonfly Reverb만 이 앱에서 직접 처리해 확인했습니다.</p>
+    <div className="vst-card-grid">
+      {VST_RECOMMENDED.map(item => <div key={item.name} className="vst-card">
+        <div className="vst-card-head"><strong>{item.name}</strong></div>
+        <span className="vst-card-meta">{item.use}</span>
+        <span className="field-hint">{item.note}</span>
+        <div className="vst-card-actions"><a className="vst-link" href={item.url} target="_blank" rel="noreferrer">공식 사이트 열기</a></div>
+      </div>)}
+    </div>
+    {testing && <VstTestDialog plugin={testing} songs={songs} onClose={() => setTesting(null)} notify={notify}/>}
+  </section>;
 }
 function AiPolishDialog({ project, onClose, notify, onCreated }: { project: Project; onClose: () => void; notify: (text: string, error?: boolean) => void; onCreated: (project: Project) => void }) {
   const t = useAudioTransport();
@@ -6328,7 +6533,7 @@ export default function Studio() {
     return <section className="library-page page-scroll"><div className="page-heading library-heading"><div><span className="eyebrow">심볼릭 작곡 보관함</span><h1>ABC 악보</h1><p>열기로 검사·수정하고, 더블 클릭하면 지금 곡에 바로 불러옵니다.</p></div><div className="playlist-detail-actions"><Button variant="ghost" size="icon" aria-label={settings.viewMode === 'card' ? '목록 보기' : '카드 보기'} onClick={() => void setViewMode(settings.viewMode === 'card' ? 'list' : 'card')}>{settings.viewMode === 'card' ? <ListMusic/> : <LayoutGrid/>}</Button><Button onClick={() => navigate('create')}><Plus/>만들기로 이동</Button></div></div>{abcNotes.length ? <div className={`project-list ${settings.viewMode === 'card' ? 'card-view' : ''}`}>{abcNotes.map(note => <article className="song-card status-abc" key={note.id}><button className="song-symbol status-abc" aria-label={`${note.title} 열기`} onDoubleClick={() => loadAbcNote(note)} onClick={() => openAbcNote(note)}>{note.coverPath ? <img className="song-cover" src={abcNoteCoverUrl(note)} alt=""/> : <FileText size={24}/>}</button><button className="song-info" onDoubleClick={() => loadAbcNote(note)} onClick={() => openAbcNote(note)}><strong>{note.title}</strong><p>{new Date(note.createdAt).toLocaleDateString('ko-KR')}</p></button><Popover><PopoverTrigger render={<Button variant="ghost" size="icon" aria-label={`${note.title} 더보기`}/>}><MoreVertical/></PopoverTrigger><PopoverContent className="song-menu" align="end"><button className="song-menu-item" onClick={() => openAbcNote(note)}><Pencil size={15}/>열기</button><button className="song-menu-item" onClick={() => loadAbcNote(note)}><ArrowRight size={15}/>불러오기</button><button className="song-menu-item" onClick={() => openAbcNoteCoverPicker(note)}><ImageIcon size={15}/>앨범 표지 {note.coverPath ? '변경' : '등록'}</button>{note.coverPath && <button className="song-menu-item" onClick={() => void deleteAbcNoteCover(note)}><X size={15}/>앨범 표지 삭제</button>}<button className="song-menu-item danger" onClick={() => void deleteAbcNote(note)}><Trash2 size={15}/>삭제</button></PopoverContent></Popover></article>)}</div> : <div className="empty-library"><div className="empty-icon"><FileText size={42} strokeWidth={1.25}/></div><h2>저장된 악보가 없어요</h2><p>만들기 화면에서 심볼릭 작곡을 만들고 "라이브러리에 저장"을 눌러 보세요.</p></div>}</section>;
   }
   return <div className="studio-shell">
-    <aside className={`sidebar ${mobileNav ? 'mobile-open' : ''}`}><button className="brand" onClick={() => navigate('create')} aria-label="SongYUE2 만들기로 이동"><span className="brand-symbol"><AudioLines size={25}/></span><span>Song<b>YUE2</b><small>by madwind</small></span></button><div className="sidebar-main"><nav aria-label="주 메뉴">{([{ id: 'create', icon: Sparkles }, { id: 'projects', icon: Folder }, { id: 'library', icon: ListMusic }, { id: 'playlists', icon: ListPlus }, { id: 'abc', icon: FileText }, { id: 'favorites', icon: Heart }] as const).map(({ id, icon: Icon }) => <button className={`nav-item ${page === id ? 'active' : ''}`} onClick={() => navigate(id)} key={id} aria-current={page === id ? 'page' : undefined}><Icon size={19}/><span>{titles[id]}</span>{id === 'create' && <Plus size={15} className="nav-plus"/>}</button>)}</nav><div className="sidebar-divider"/><div className="sidebar-subhead"><span>최근 프로젝트</span><button aria-label="프로젝트 보기" onClick={() => navigate('projects')}><Plus size={14}/></button></div>{(() => { const recentDrafts = projects.filter(item => item.status === 'draft').slice(0, 4); return recentDrafts.length ? recentDrafts.map(item => <button className="recent-item" key={item.id} onClick={() => loadProject(item)}><span className="recent-dot"/>{item.title}</button>) : <p className="sidebar-empty">새로운 아이디어가<br/>음악이 되는 곳.</p>; })()}</div><div className="sidebar-bottom"><nav aria-label="도구 메뉴"><button className="nav-item" onClick={() => { setCompareOpen(true); setMobileNav(false); }}><GitCompare size={18}/>음원 비교</button><button className={`nav-item ${page === 'restore' ? 'active' : ''}`} onClick={() => navigate('restore')}><Upload size={18}/>음원 복원 (실험적)</button><button className="nav-item" onClick={() => { setTimbreTransformOpen(true); setMobileNav(false); }}><WandSparkles size={18}/>음색 변조 (평가중)</button><button className={`nav-item ${page === 'tools' ? 'active' : ''}`} onClick={() => navigate('tools')}><SlidersHorizontal size={18}/>Audio Tools</button><button className={`nav-item ${page === 'lora' ? 'active' : ''}`} onClick={() => navigate('lora')}><Layers size={18}/>LoRA 관리</button><button className={`nav-item ${page === 'models' ? 'active' : ''}`} onClick={() => navigate('models')}><Cpu size={18}/>모델 관리</button><button className={`nav-item ${page === 'settings' ? 'active' : ''}`} onClick={() => navigate('settings')}><Settings2 size={18}/>설정</button><button className="nav-item" onClick={() => { setHelp(true); setMobileNav(false); }}><CircleHelp size={18}/>도움말</button></nav><div className="profile"><span className="avatar"><Headphones size={18}/></span><div>나의 스튜디오<small>로컬 워크스페이스</small></div><span className="version">0.1</span></div></div></aside>
+    <aside className={`sidebar ${mobileNav ? 'mobile-open' : ''}`}><button className="brand" onClick={() => navigate('create')} aria-label="SongYUE2 만들기로 이동"><span className="brand-symbol"><AudioLines size={25}/></span><span>Song<b>YUE2</b><small>by madwind</small></span></button><div className="sidebar-main"><nav aria-label="주 메뉴">{([{ id: 'create', icon: Sparkles }, { id: 'projects', icon: Folder }, { id: 'library', icon: ListMusic }, { id: 'playlists', icon: ListPlus }, { id: 'abc', icon: FileText }, { id: 'favorites', icon: Heart }] as const).map(({ id, icon: Icon }) => <button className={`nav-item ${page === id ? 'active' : ''}`} onClick={() => navigate(id)} key={id} aria-current={page === id ? 'page' : undefined}><Icon size={19}/><span>{titles[id]}</span>{id === 'create' && <Plus size={15} className="nav-plus"/>}</button>)}</nav><div className="sidebar-divider"/><div className="sidebar-subhead"><span>최근 프로젝트</span><button aria-label="프로젝트 보기" onClick={() => navigate('projects')}><Plus size={14}/></button></div>{(() => { const recentDrafts = projects.filter(item => item.status === 'draft').slice(0, 4); return recentDrafts.length ? recentDrafts.map(item => <button className="recent-item" key={item.id} onClick={() => loadProject(item)}><span className="recent-dot"/>{item.title}</button>) : <p className="sidebar-empty">새로운 아이디어가<br/>음악이 되는 곳.</p>; })()}</div><div className="sidebar-bottom"><nav aria-label="도구 메뉴"><button className="nav-item" onClick={() => { setCompareOpen(true); setMobileNav(false); }}><GitCompare size={18}/>음원 비교</button><button className={`nav-item ${page === 'restore' ? 'active' : ''}`} onClick={() => navigate('restore')}><Upload size={18}/>음원 복원 (실험적)</button><button className="nav-item" onClick={() => { setTimbreTransformOpen(true); setMobileNav(false); }}><WandSparkles size={18}/>음색 변조 (평가중)</button><button className={`nav-item ${page === 'vst' ? 'active' : ''}`} onClick={() => navigate('vst')}><Plug size={18}/>VST3 관리</button><button className={`nav-item ${page === 'lora' ? 'active' : ''}`} onClick={() => navigate('lora')}><Layers size={18}/>LoRA 관리</button><button className={`nav-item ${page === 'tools' ? 'active' : ''}`} onClick={() => navigate('tools')}><SlidersHorizontal size={18}/>Audio Tools</button><button className={`nav-item ${page === 'models' ? 'active' : ''}`} onClick={() => navigate('models')}><Cpu size={18}/>모델 관리</button><button className={`nav-item ${page === 'settings' ? 'active' : ''}`} onClick={() => navigate('settings')}><Settings2 size={18}/>설정</button><button className="nav-item" onClick={() => { setHelp(true); setMobileNav(false); }}><CircleHelp size={18}/>도움말</button></nav><div className="profile"><span className="avatar"><Headphones size={18}/></span><div>나의 스튜디오<small>로컬 워크스페이스</small></div><span className="version">0.1</span></div></div></aside>
     {mobileNav && <button className="nav-scrim" aria-label="메뉴 닫기" onClick={() => setMobileNav(false)}/>}
     <main className="main-shell"><header className="topbar"><div className="topbar-title"><Button variant="ghost" size="icon" className="mobile-menu" aria-label="메뉴 열기" onClick={() => setMobileNav(true)}><Menu/></Button><span className="breadcrumb">작업 공간</span><ChevronRight size={14}/><strong>{titles[page]}</strong></div><Popover open={modelOpen} onOpenChange={setModelOpen}><PopoverTrigger render={<Button variant="outline" className="model-trigger" aria-label="음악 모델 선택"/>}><AudioLines size={17}/><span>{model.name}</span><span className="model-recommended">{model.id === 'yue2-q8' ? '추천' : model.engine}</span><ChevronDown size={15}/></PopoverTrigger><PopoverContent className="model-menu" align="start"><div className="menu-heading">음악 생성 모델<span>새 작업에 적용할 모델을 선택하세요</span></div>{models.map(item => { const missing = !!inventory && !installed(item); return <button key={item.id} className={`model-option ${draft.modelId === item.id ? 'selected' : ''}`} style={missing ? { opacity: 0.6 } : undefined} disabled={item.selectable === false} onClick={() => { if (item.selectable === false) return; if (missing) { notify(`${item.name} 모델은 다운로드가 필요합니다. 모델 파일을 내려받은 뒤 선택해 주세요.`, true); return; } update({ modelId: item.id }); setModelOpen(false); }}><Cpu size={18}/><span><strong>{item.name}<em>{missing ? '다운로드 필요' : item.badge}</em></strong><small>{item.detail} · {item.size}</small></span>{draft.modelId === item.id && <Check size={17}/>}</button>; })}<div className="model-menu-footer">모델 파일과 실행 엔진의 준비 상태는 별도로 확인합니다.<button onClick={() => { navigate('models'); setModelOpen(false); }}>모델 관리 <ArrowRight size={13}/></button></div></PopoverContent></Popover><div className="device-status"><span className={`status-dot ${online ? '' : 'offline'}`}/><span>{online ? '로컬 연결됨' : '로컬 연결 대기'}</span><span className="device-divider"/><Cpu size={14}/><span>{stats?.gpu?.name || 'RTX 5070'} <span className="muted">· {stats?.gpu ? Math.round(stats.gpu.vramTotalMb / 1024) : 12} GB</span></span>{stats && <span className="resource-usage" aria-label="자원 사용 현황">
       {stats.gpu && stats.gpu.utilization !== null && <span title="GPU 사용률"><b><em>GPU</em>{stats.gpu.utilization}%</b><i style={{ width: `${Math.min(100, stats.gpu.utilization)}%` }} className={usageLevel(stats.gpu.utilization)}/></span>}
@@ -6351,6 +6556,7 @@ export default function Studio() {
     : page === 'restore' ? restorePage()
     : page === 'tools' ? <AudioToolsPage notify={notify}/>
     : page === 'lora' ? <AdapterPage notify={notify}/>
+    : page === 'vst' ? <VstManagePage notify={notify} projects={projects}/>
     : <section className="library-page page-scroll"><div className="page-heading library-heading"><div><span className="eyebrow">나의 음악을 한곳에</span><h1>{titles[page]}</h1><p>{page === 'projects' ? '저장할 때마다 새 버전으로 남아, 이전 아이디어를 다시 꺼낼 수 있어요.' : '가사, 스타일, 설정까지 함께 보관하는 나만의 컬렉션.'}</p></div><Button onClick={() => navigate('create')}><Plus/>노래 만들기</Button></div>{projectList()}</section>}
     <audio ref={audioRef} onEnded={playNext} onTimeUpdate={event => setPlaybackTime(event.currentTarget.currentTime)} onLoadedMetadata={event => setPlaybackDuration(event.currentTarget.duration)} hidden/>
     <input ref={coverInputRef} type="file" accept="image/png,image/jpeg,image/webp" hidden onChange={event => void handleCoverFile(event)}/>

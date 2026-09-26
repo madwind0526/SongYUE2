@@ -251,3 +251,28 @@ button.adapter-card, label.adapter-card { cursor: pointer; }
 .train-lib-actions { display: flex; align-items: center; gap: 6px; flex: none; }
 .train-lib-edit { display: flex; flex-direction: column; gap: 8px; width: 100%; }.train-lib-edit textarea { min-height: 64px; }
 .folder-row.selected { background: #26402c; outline: 1px solid #4f8a5b; }
+
+/* VST3 관리 page */
+.vst-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 6px 0 4px; }
+.vst-section-title { margin: 22px 0 8px; font-size: 15px; font-weight: 600; }
+.vst-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.vst-card { display: flex; flex-direction: column; gap: 6px; padding: 14px; border: 1px solid #4a514a; border-radius: 12px; background: #0b0d0b; min-width: 0; }
+.vst-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.vst-card-meta { font-size: 12px; color: #a9b6a5; }
+.vst-card-path { font-size: 11px; color: #6d786b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vst-card-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.vst-link { font-size: 12px; color: #9fc4e8; text-decoration: underline; }
+.vst-preset-list { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 12px; }
+.vst-preset-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid #4a514a; border-radius: 10px; background: #0b0d0b; }
+.vst-preset-main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.vst-preset-main span { font-size: 12px; color: #a9b6a5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vst-preset-new { display: flex; flex-direction: column; gap: 8px; max-width: 520px; padding: 12px; border: 1px dashed #4a514a; border-radius: 12px; }
+.vst-embedded { display: flex; flex-direction: column; gap: 6px; }
+.vst-preset-save { display: flex; gap: 8px; }
+.vst-preset-save input { flex: 1; min-width: 0; }
+.vst-preset-bar { display: flex; gap: 6px; align-items: center; }
+.vst-preset-bar select { flex: 1; min-width: 0; height: 32px; border-radius: 8px; border: 1px solid #3b493d; background: #131a13; color: inherit; padding: 0 8px; }
+.vst-preset-bar input { flex: 1; min-width: 0; height: 32px; }
+.audio-compare-dialog.vst-test-dialog { width: 760px !important; }
+.vst-test-range { display: flex; gap: 12px; }
+.vst-test-range .train-field { flex: 1; }
