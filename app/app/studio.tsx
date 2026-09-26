@@ -4484,6 +4484,16 @@ const VST_RECOMMENDED = [
 ];
 type VstChainPreset = { name: string; plugins: { path: string; enabled: boolean }[] };
 
+// RMS level and peak over all channels of a decoded buffer
+function bufferLevel(buffer: AudioBuffer) {
+  let sum = 0; let peak = 0; let count = 0;
+  for (let channel = 0; channel < buffer.numberOfChannels; channel += 1) {
+    const data = buffer.getChannelData(channel);
+    for (let index = 0; index < data.length; index += 1) { const value = data[index]; sum += value * value; count += 1; if (Math.abs(value) > peak) peak = Math.abs(value); }
+  }
+  return { rms: Math.sqrt(sum / Math.max(1, count)), peak };
+}
+
 // "시험 듣기": a part of a library song through one plugin (with its saved settings), next to the same part without it
 function VstTestDialog({ plugin, songs, onClose, notify }: { plugin: VstPlugin; songs: Project[]; onClose: () => void; notify: (text: string, error?: boolean) => void }) {
   const [songId, setSongId] = useState(songs[0]?.id || '');
@@ -4491,21 +4501,45 @@ function VstTestDialog({ plugin, songs, onClose, notify }: { plugin: VstPlugin; 
   const [seconds, setSeconds] = useState('20');
   const [running, setRunning] = useState(false);
   const [test, setTest] = useState<{ testId: string; startSeconds: number; seconds: number } | null>(null);
+  // "음량 맞추기": the processed part is played at the loudness of the original part, so only the change of the sound is compared
+  const [matchLoudness, setMatchLoudness] = useState(true);
+  const [processedRaw, setProcessedRaw] = useState<AudioBuffer | null>(null);
+  const [matchGainDb, setMatchGainDb] = useState<number | null>(null);
   const t = useAudioTransport();
   useEffect(() => () => t.closeContext(), []); // eslint-disable-line react-hooks/exhaustive-deps
   const sourceBuffer = t.bufferForKey('source');
   const outputBuffer = t.bufferForKey('output');
-  function clearTest() { setTest(null); t.setBuffer('source', null); t.setBuffer('output', null); }
+  function clearTest() { setTest(null); setProcessedRaw(null); setMatchGainDb(null); t.setBuffer('source', null); t.setBuffer('output', null); }
+  // puts the processed part into the player, at the loudness of the original part when the check box is on (never louder than the peak limit)
+  function showProcessed(original: AudioBuffer, processed: AudioBuffer, match: boolean) {
+    if (!match) { setMatchGainDb(null); t.setBuffer('output', processed); return; }
+    const before = bufferLevel(original);
+    const after = bufferLevel(processed);
+    if (!after.rms || !before.rms) { setMatchGainDb(null); t.setBuffer('output', processed); return; }
+    const gain = Math.min(before.rms / after.rms, 0.98 / Math.max(after.peak, 1e-9));
+    const scaled = t.ensureAudioContext().createBuffer(processed.numberOfChannels, processed.length, processed.sampleRate);
+    for (let channel = 0; channel < processed.numberOfChannels; channel += 1) {
+      const from = processed.getChannelData(channel);
+      const to = scaled.getChannelData(channel);
+      for (let index = 0; index < from.length; index += 1) to[index] = from[index] * gain;
+    }
+    setMatchGainDb(20 * Math.log10(gain));
+    t.setBuffer('output', scaled);
+  }
   async function run() {
     setRunning(true); clearTest();
     try {
       const result = await api<{ testId: string; startSeconds: number; seconds: number }>('/vst/test', 'POST', { projectId: songId, path: plugin.path, startSeconds: Number(start) || 0, seconds: Number(seconds) || 20 });
       const context = t.ensureAudioContext();
-      for (const [key, kind] of [['source', 'original'], ['output', 'processed']] as const) {
+      const decoded: Record<string, AudioBuffer> = {};
+      for (const kind of ['original', 'processed']) {
         const response = await fetch(`/api/vst/test/${result.testId}/${kind}`);
         if (!response.ok) throw new Error('시험 결과를 불러오지 못했습니다.');
-        t.setBuffer(key, await context.decodeAudioData(await response.arrayBuffer()));
+        decoded[kind] = await context.decodeAudioData(await response.arrayBuffer());
       }
+      t.setBuffer('source', decoded.original);
+      setProcessedRaw(decoded.processed);
+      showProcessed(decoded.original, decoded.processed, matchLoudness);
       setTest(result);
     }
     catch (error) { notify((error as Error).message, true); }
@@ -4534,6 +4568,8 @@ function VstTestDialog({ plugin, songs, onClose, notify }: { plugin: VstPlugin; 
         </div>
         <Button onClick={() => void run()} disabled={running || !songId}>{running ? <LoaderCircle className="spin" size={15}/> : <Play size={15}/>}{test ? '다시 만들기' : '시험 만들기'}</Button>
         {test && <>
+          <label className="at-function vst-match-loudness"><input type="checkbox" checked={matchLoudness} onChange={event => { setMatchLoudness(event.target.checked); if (sourceBuffer && processedRaw) showProcessed(sourceBuffer, processedRaw, event.target.checked); }}/>음량 맞추기</label>
+          {matchLoudness && matchGainDb !== null && <p className="field-hint">처리한 소리의 음량을 원본에 맞췄습니다({matchGainDb >= 0 ? '+' : ''}{matchGainDb.toFixed(1)} dB).</p>}
           <div className="stem-list">
             {row('source', '원본 구간', sourceBuffer, false, `${test.startSeconds}초부터 ${test.seconds}초`)}
             {row('output', `${plugin.name} 적용`, outputBuffer, true, '저장된 설정으로 처리')}

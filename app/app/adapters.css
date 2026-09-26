@@ -275,4 +275,5 @@ button.adapter-card, label.adapter-card { cursor: pointer; }
 .vst-preset-bar input { flex: 1; min-width: 0; height: 32px; }
 .audio-compare-dialog.vst-test-dialog { width: 760px !important; }
 .vst-test-range { display: flex; gap: 12px; }
+.vst-match-loudness { align-self: flex-start; }
 .vst-test-range .train-field { flex: 1; }
