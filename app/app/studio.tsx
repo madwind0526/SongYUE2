@@ -3858,6 +3858,7 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
   const [picked, setPicked] = useState<string[]>(picker?.selected || []);
   const [mine, setMine] = useState<AdapterList | null>(null);
   const [catalog, setCatalog] = useState<CatalogEntry[] | null>(null);
+  const [trainLibraryCount, setTrainLibraryCount] = useState<number | null>(null);
   const [deleting, setDeleting] = useState('');
   useEffect(() => { if (!deleting) return; const timer = window.setTimeout(() => setDeleting(''), 3000); return () => window.clearTimeout(timer); }, [deleting]);
   const [kind, setKind] = useState('');
@@ -3881,7 +3882,9 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
 
   const reload = () => api<AdapterList>('/adapters').then(setMine).catch(error => notify((error as Error).message, true));
   const reloadCatalog = () => api<{ entries: CatalogEntry[] }>('/adapters/catalog').then(result => setCatalog(result.entries)).catch(error => notify((error as Error).message, true));
-  useEffect(() => { void reload(); void reloadCatalog(); void loadHub(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const reloadTrainLibrary = () => api<{ items: unknown[] }>('/lora-train/library').then(result => setTrainLibraryCount(result.items.length)).catch(() => {});
+  useEffect(() => { void reload(); void reloadCatalog(); void reloadTrainLibrary(); void loadHub(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (tab === 'train') void reloadTrainLibrary(); }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (tab === 'catalog') void reloadCatalog(); }, [tab]); // eslint-disable-line react-hooks/exhaustive-deps
   // refresh = true: ask Hugging Face again (skipping the server's 10-minute memory) and report what is new since the list on screen
   const [newRepoIds, setNewRepoIds] = useState<string[]>([]);
@@ -4023,7 +4026,7 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
       <button role="tab" aria-selected={tab === 'mine'} className={tab === 'mine' ? 'active' : ''} onClick={() => setTab('mine')}>Installed{mine ? ` (${mine.adapters.length})` : ''}</button>
       <button role="tab" aria-selected={tab === 'catalog'} className={tab === 'catalog' ? 'active' : ''} onClick={() => setTab('catalog')}>Preset{catalog ? ` (${catalog.filter(entry => !entry.installed).length}/${catalog.length})` : ''}</button>
       <button role="tab" aria-selected={tab === 'hub'} className={tab === 'hub' ? 'active' : ''} onClick={() => setTab('hub')}>허깅페이스{hub ? ` (${hub.filter(item => !repoInstalled(item)).length}/${hub.length})` : ''}</button>
-      {!picker && <button role="tab" aria-selected={tab === 'train'} className={tab === 'train' ? 'active' : ''} onClick={() => setTab('train')}>학습</button>}
+      {!picker && <button role="tab" aria-selected={tab === 'train'} className={tab === 'train' ? 'active' : ''} onClick={() => setTab('train')}>학습{trainLibraryCount !== null ? ` (${trainLibraryCount})` : ''}</button>}
     </div>
     {mine && !mine.engineReady && <p className="field-hint warning">LoRA로 곡을 만들려면 엔진 파일이 더 필요합니다 (없는 것: {mine.missing.join(', ')}). docs/models.md의 "LoRA 엔진"을 확인해 주세요.</p>}
     <InstallBar job={job} label="받는 중"/>
@@ -4076,7 +4079,7 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
       </article>)}</div>
     </>}
 
-    {tab === 'train' && !picker && <LoraTrainTab notify={notify} onInstalled={() => void reload()}/>}
+    {tab === 'train' && !picker && <LoraTrainTab notify={notify} onInstalled={() => { void reload(); void reloadTrainLibrary(); }}/>}
 
     {tab === 'hub' && <>
       <p className="field-hint">허깅페이스에서 YuE2용 LoRA를 찾습니다. 카드의 다운로드 아이콘으로 바로 받고, 카드를 누르면 샘플을 듣고 받을 파일을 고를 수 있습니다. 주소를 붙여 넣어도 됩니다.</p>
