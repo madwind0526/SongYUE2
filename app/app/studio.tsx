@@ -581,6 +581,60 @@ function fft(real: Float32Array, imag: Float32Array) {
   }
 }
 
+// Client-side port of backend/postfx/measure.mjs: how much `after` differs from `before` (band levels, noise floor, loudness, peak).
+const MEASURE_BANDS: [number, number, string][] = [[0, 200, '저음 ~200 Hz'], [200, 1000, '중저음 200~1k'], [1000, 4000, '중음 1~4k'], [4000, 8000, '중고음 4~8k'], [8000, 12000, '고음 8~12k'], [12000, 22050, '초고음 12k~']];
+function measureBufferChange(before: AudioBuffer, after: AudioBuffer): PolishReport {
+  const length = Math.min(before.length, after.length);
+  const chans = (buffer: AudioBuffer) => { const left = buffer.getChannelData(0).subarray(0, length); return { left, right: (buffer.numberOfChannels > 1 ? buffer.getChannelData(1) : buffer.getChannelData(0)).subarray(0, length), rate: buffer.sampleRate }; };
+  const a = chans(before);
+  const b = chans(after);
+  const db = (value: number) => 20 * Math.log10(Math.max(value, 1e-9));
+  const round = (value: number) => Math.round(value * 10) / 10;
+  const sumSq = (values: Float32Array) => { let sum = 0; for (let i = 0; i < values.length; i += 1) sum += values[i] * values[i]; return sum; };
+  const level = (x: typeof a) => Math.sqrt((sumSq(x.left) + sumSq(x.right)) / 2 / Math.max(1, length));
+  const peak = (x: typeof a) => { let value = 0; for (let i = 0; i < length; i += 1) value = Math.max(value, Math.abs(x.left[i]), Math.abs(x.right[i])); return value; };
+  const FRAME = 4096;
+  const hann = new Float32Array(FRAME);
+  for (let i = 0; i < FRAME; i += 1) hann[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / FRAME);
+  const bandLevels = (x: typeof a) => {
+    const power = new Float64Array(FRAME / 2);
+    const re = new Float32Array(FRAME);
+    const im = new Float32Array(FRAME);
+    let frames = 0;
+    for (let start = 0; start + FRAME <= length; start += FRAME / 2) {
+      for (let i = 0; i < FRAME; i += 1) { re[i] = ((x.left[start + i] + x.right[start + i]) / 2) * hann[i]; im[i] = 0; }
+      fft(re, im);
+      for (let bin = 0; bin < FRAME / 2; bin += 1) power[bin] += re[bin] * re[bin] + im[bin] * im[bin];
+      frames += 1;
+    }
+    const binHz = x.rate / FRAME;
+    return MEASURE_BANDS.map(([low, high]) => {
+      let sum = 0; let count = 0;
+      for (let bin = Math.max(1, Math.floor(low / binHz)); bin < Math.min(FRAME / 2, Math.ceil(high / binHz)); bin += 1) { sum += power[bin]; count += 1; }
+      return count && frames ? 10 * Math.log10(Math.max(sum / count / frames, 1e-18)) : -180;
+    });
+  };
+  const quiet = (x: typeof a) => {
+    const block = Math.max(1, Math.round(x.rate * 0.05));
+    const levels: number[] = [];
+    for (let start = 0; start + block <= length; start += block) { let sum = 0; for (let i = start; i < start + block; i += 1) sum += (x.left[i] ** 2 + x.right[i] ** 2) / 2; levels.push(sum / block); }
+    levels.sort((p, q) => p - q);
+    return db(Math.sqrt(levels[Math.floor(levels.length * 0.1)] || 0));
+  };
+  let diffSq = 0;
+  for (let i = 0; i < length; i += 1) diffSq += (b.left[i] - a.left[i]) ** 2 + (b.right[i] - a.right[i]) ** 2;
+  const change = db(Math.sqrt(diffSq / 2 / Math.max(1, length)) / Math.max(level(a), 1e-9));
+  const verdict = change < -40 ? '거의 변화 없음 (귀로 구분하기 어려운 수준)' : change < -30 ? '아주 미세한 변화' : change < -20 ? '미세하지만 비교하면 느껴지는 변화' : change < -12 ? '뚜렷한 변화' : '큰 변화';
+  const bandsA = bandLevels(a);
+  const bandsB = bandLevels(b);
+  return {
+    changeDb: round(change), verdict,
+    loudnessDb: { before: round(db(level(a))), after: round(db(level(b))) },
+    peakDb: { before: round(db(peak(a))), after: round(db(peak(b))) },
+    quietDb: { before: round(quiet(a)), after: round(quiet(b)) },
+    bands: MEASURE_BANDS.map(([, , label], index) => ({ label, deltaDb: round(bandsB[index] - bandsA[index]) })),
+  };
+}
 
 function CompareWaveform({ peaks, fraction, processed }: { peaks: number[]; fraction: number; processed: boolean }) {
   const progress = Math.max(0, Math.min(1, fraction));
@@ -4205,12 +4259,12 @@ function AdapterPicker({ selected, onChange, style, onInsertTrigger, notify }: {
 type PolishReport = { changeDb: number; verdict: string; loudnessDb: { before: number; after: number }; peakDb: { before: number; after: number }; quietDb: { before: number; after: number }; bands: { label: string; deltaDb: number }[] };
 const NATURALIZE_DEFAULT: Omit<NaturalizeSettings, 'enabled'> = { amount: 0.5, vibratoRate: 4.5, vibratoDepth: 1, formantStrength: 1, metallicReduction: 1, quantizationMask: 0, transitionSmooth: 1, seed: 1 };
 const POLISH_STRONG: PolishSettings = { denoise: { enabled: true, strength: 0.9 }, lifter: { enabled: true, gate: 0.7, shimmerDb: 12, hfMix: 0.3, punch: 0.5 }, naturalize: { enabled: true, ...NATURALIZE_DEFAULT, amount: 1 }, master: { enabled: false } };
-function PolishReportPanel({ report }: { report: PolishReport }) {
+function PolishReportPanel({ report, compare }: { report: PolishReport; compare?: boolean }) {
   const weak = report.changeDb < -30;
   const scale = (value: number) => `${Math.min(50, Math.abs(value) / 10 * 50)}%`;
-  return <div className="polish-report" role="region" aria-label="처리 결과 측정">
-    <div className="polish-report-head"><strong>실제로 바뀐 정도</strong><span className={`polish-verdict${weak ? ' weak' : ''}`}>{report.verdict}</span></div>
-    <p className="field-hint">원본과 다듬은 곡을 소리 데이터로 비교한 값입니다. 변화량 {report.changeDb} dB (0에 가까울수록 많이 바뀜, -40 dB보다 작으면 귀로 구분하기 어렵습니다).{weak ? ' 이 곡은 손볼 곳이 적거나 세기가 약해서 차이가 작습니다. 단계를 더 켜거나 "강하게"로 확인해 보세요.' : ''}</p>
+  return <div className="polish-report" role="region" aria-label={compare ? '음원 차이 측정' : '처리 결과 측정'}>
+    <div className="polish-report-head"><strong>{compare ? '두 음원의 차이' : '실제로 바뀐 정도'}</strong><span className={`polish-verdict${weak ? ' weak' : ''}`}>{report.verdict}</span></div>
+    <p className="field-hint">{compare ? '음원-1과 음원-2를 소리 데이터로 비교한 값입니다(음원-1 기준, 짧은 쪽 길이까지).' : '원본과 다듬은 곡을 소리 데이터로 비교한 값입니다.'} 변화량 {report.changeDb} dB (0에 가까울수록 많이 바뀜, -40 dB보다 작으면 귀로 구분하기 어렵습니다).{weak && !compare ? ' 이 곡은 손볼 곳이 적거나 세기가 약해서 차이가 작습니다. 단계를 더 켜거나 "강하게"로 확인해 보세요.' : ''}</p>
     <div className="polish-bands">{report.bands.map(band => <div key={band.label} className="polish-band"><span>{band.label}</span><div className="polish-band-bar"><i style={band.deltaDb >= 0 ? { left: '50%', width: scale(band.deltaDb) } : { right: '50%', width: scale(band.deltaDb) }} className={band.deltaDb >= 0 ? 'up' : 'down'}/></div><b>{band.deltaDb > 0 ? '+' : ''}{band.deltaDb} dB</b></div>)}</div>
     <p className="field-hint">조용한 구간의 소리 {report.quietDb.before} → {report.quietDb.after} dB · 전체 음량 {report.loudnessDb.before} → {report.loudnessDb.after} dB · 최고점 {report.peakDb.before} → {report.peakDb.after} dB</p>
   </div>;
@@ -5840,6 +5894,15 @@ function AudioCompareDialog({ onClose, notify, onCreated }: { onClose: () => voi
   const playedFraction = activeBuffer ? Math.min(1, positionSeconds / activeBuffer.duration) : 0;
   const rowClass = (key: string, kind: 'dry' | 'wet', base: string) => `${base}${activeKey === key && isPlaying ? (kind === 'wet' ? ' pp-row-playing-processed' : ' pp-row-playing-original') : ''}`;
   const anyLoaded = !!row1BufferRef.current || !!row2BufferRef.current;
+  // numeric difference between the two rows; recomputed whenever either row is loaded or processed (peaks state changes then)
+  const [compareReport, setCompareReport] = useState<PolishReport | null>(null);
+  useEffect(() => {
+    const a = row1BufferRef.current;
+    const b = row2BufferRef.current;
+    if (!a || !b) { setCompareReport(null); return; }
+    const timer = window.setTimeout(() => { try { setCompareReport(measureBufferChange(a, b)); } catch { setCompareReport(null); } }, 50);
+    return () => window.clearTimeout(timer);
+  }, [row1Peaks, row2Peaks]);
 
   return <>
     {!editingRow && <Dialog open onOpenChange={open => { if (!open) { stopPlayback(); onClose(); } }}>
@@ -5875,6 +5938,7 @@ function AudioCompareDialog({ onClose, notify, onCreated }: { onClose: () => voi
             </div>
           </div>
         </div>
+        {compareReport && <PolishReportPanel report={compareReport} compare/>}
         <div className="pp-seek-row">
           <span className="pp-seek-time">{formatSeekTime(positionSeconds)}</span>
           <input className="pp-seek-bar" type="range" aria-label="재생 위치" min={0} max={activeBuffer?.duration || 0} step={0.01} value={Math.min(positionSeconds, activeBuffer?.duration || 0)} onChange={event => seekTo(Number(event.target.value))} disabled={!activeBuffer}/>
