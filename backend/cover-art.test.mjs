@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { pickCoverModels, buildCoverPrompt, buildCoverWorkflow, generateCoverPicture, squareCropFilter, wrapCoverTitle, fallbackCoverColors, pixabayQueries, pickPixabayHit, fetchPixabayCover, COVER_GENERATE_SIZE, COVER_MIN_SIZE } from './cover-art.mjs';
+import { pickCoverModels, buildCoverPrompt, buildCoverWorkflow, generateCoverPicture, squareCropFilter, wrapCoverTitle, fallbackCoverColors, pixabayQueries, lyricKeywords, pickPixabayHit, fetchPixabayCover, COVER_GENERATE_SIZE, COVER_MIN_SIZE } from './cover-art.mjs';
 
 const info = (unets, clips, vaes) => ({
   UNETLoader: { input: { required: { unet_name: [unets] } } },
@@ -34,6 +34,7 @@ test('the workflow is a square picture at the native size (never below the minim
   assert.equal(workflow['7'].inputs.height, COVER_GENERATE_SIZE);
   assert.equal(workflow['8'].inputs.steps, 8);
   assert.match(squareCropFilter(), /crop='min\(iw,ih\)':'min\(iw,ih\)'.*2475/);
+  assert.match(squareCropFilter(1400), /scale='max\(1400,min\(2475,iw\)\)'/);
 });
 
 test('a picture is fetched from ComfyUI after the run completes; without models nothing is queued', async () => {
@@ -69,20 +70,31 @@ test('the fallback cover: titles wrap at spaces into at most 4 lines, and every 
   assert.notDeepEqual(a, fallbackCoverColors({ title: '노래 1', style: 'korean ballad' }));
 });
 
-test('Pixabay: English style words become the queries (broader ones follow), and nothing is asked without a key', async () => {
-  assert.deepEqual(pixabayQueries('한국 발라드, korean ballad, soft female vocal, acoustic guitar, piano'), ['korean ballad soft female vocal acoustic guitar', 'korean ballad', 'music']);
-  assert.deepEqual(pixabayQueries('한국 발라드'), ['music']);
+test('Pixabay: lyric words become English picture words, then title / style words, then a general picture; nothing is asked without a key', async () => {
+  const lyrics = ['[verse]', '조용한 밤에 혼자 걸어요', '작은 불빛이 나를 따라와요', '[chorus]', '밤 하늘 별을 세어요'].join('\n');
+  const keywords = lyricKeywords({ title: '밤 산책', lyrics });
+  for (const word of ['night', 'alone', 'walking', 'lights', 'sky', 'stars']) assert.ok(keywords.includes(word), word);
+  assert.equal(lyricKeywords({ title: '', lyrics })[0], 'night', 'the most frequent word first');
+  assert.deepEqual(lyricKeywords({ title: 'x', lyrics: 'lalala' }), []);
+  const queries = pixabayQueries({ style: '한국 발라드, korean ballad, soft female vocal, acoustic guitar', title: 'Neon Dreams 밤', lyrics, seed: 1 });
+  assert.equal(queries[0].split(' ').length, 2);
+  assert.ok(queries[0].startsWith('night'));
+  assert.ok(queries.includes('Neon Dreams'));
+  assert.ok(queries.includes('korean ballad soft female vocal acoustic guitar'));
+  assert.equal(queries[queries.length - 1], 'sunset sky', 'a general picture last, chosen by the seed');
+  assert.deepEqual(pixabayQueries({ style: '한국 발라드', seed: 0 }), ['landscape']);
   let asked = 0;
   assert.equal(await fetchPixabayCover({ fetchImpl: async () => { asked += 1; }, apiKey: '', style: 'rock' }), null);
   assert.equal(asked, 0);
 });
 
-test('Pixabay: near-square photos of at least 1280 px are preferred and the song seed picks among the best', () => {
+test('Pixabay: near-square photos are preferred, photos whose square crop would be too small are left out, the song seed picks among the best', () => {
   const hit = (id, width, height) => ({ id, imageWidth: width, imageHeight: height, largeImageURL: `https://x/${id}.jpg` });
   const hits = [hit(1, 4000, 1300), hit(2, 3000, 3000), hit(3, 1000, 1000), hit(4, 3000, 2800), hit(5, 5000, 1281)];
   assert.equal(pickPixabayHit(hits, 0).id, 2, 'the squarest usable photo first');
   assert.equal(pickPixabayHit(hits, 1).id, 4);
-  for (let seed = 0; seed < 12; seed += 1) assert.notEqual(pickPixabayHit(hits, seed).id, 3, 'photos under 1280 px are never chosen');
+  assert.equal(pickPixabayHit(hits, 2).id, 2, 'only 2 and 4 are usable: 1 and 5 are too elongated, 3 is too small');
+  for (let seed = 0; seed < 12; seed += 1) assert.ok([2, 4].includes(pickPixabayHit(hits, seed).id));
   assert.equal(pickPixabayHit([hit(3, 1000, 1000)], 0), null);
   assert.equal(pickPixabayHit([], 0), null);
 });
@@ -93,7 +105,7 @@ test('Pixabay: the search asks for photos of at least 1280 px, retries with a br
     urls.push(String(url));
     if (String(url).startsWith('https://pixabay.com/api/')) {
       const query = new URL(url).searchParams;
-      const hits = query.get('q') === 'music' ? [{ id: 9, imageWidth: 2000, imageHeight: 2000, largeImageURL: 'https://pixabay.com/get/nine.jpg' }] : [];
+      const hits = query.get('q') === 'nature' ? [{ id: 9, imageWidth: 2000, imageHeight: 2000, largeImageURL: 'https://pixabay.com/get/nine.jpg' }] : [];
       return { ok: true, json: async () => ({ hits }) };
     }
     return { ok: true, arrayBuffer: async () => Uint8Array.from([7, 8]).buffer };
@@ -105,6 +117,6 @@ test('Pixabay: the search asks for photos of at least 1280 px, retries with a br
   assert.equal(search.get('min_width'), '1280');
   assert.equal(search.get('image_type'), 'photo');
   assert.equal(search.get('safesearch'), 'true');
-  assert.deepEqual(urls.filter((url) => url.includes('/api/')).map((url) => new URL(url).searchParams.get('q')), ['jazz', 'music']);
+  assert.deepEqual(urls.filter((url) => url.includes('/api/')).map((url) => new URL(url).searchParams.get('q')), ['jazz', 'nature']);
   await assert.rejects(fetchPixabayCover({ fetchImpl: async () => ({ ok: false, status: 429 }), apiKey: 'KEY', style: 'x' }), /429/);
 });

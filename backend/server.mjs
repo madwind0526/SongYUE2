@@ -386,8 +386,8 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     if (!cover) {
       try {
         if (generationStatus) generationStatus.detail = '표지를 찾는 중';
-        const photo = await fetchPixabayCover({ fetchImpl, apiKey: (process.env.PIXABAY_API_KEY || '').trim(), style: project.style, seed: project.seed });
-        if (photo) cover = await normalizeCover({ buffer: photo, extension: 'jpg', outputExtension: 'jpg', spawnImpl });
+        const photo = await fetchPixabayCover({ fetchImpl, apiKey: (process.env.PIXABAY_API_KEY || '').trim(), style: project.style, title: project.title, lyrics: project.lyrics, seed: project.seed });
+        if (photo) cover = await normalizeCover({ buffer: photo, extension: 'jpg', outputExtension: 'jpg', enlargeTo: COVER_MIN_SIZE, spawnImpl });
       } catch (error) {
         console.warn(`Pixabay cover skipped: ${error.message}`);
       }

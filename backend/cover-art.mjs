@@ -86,17 +86,18 @@ export async function generateCoverPicture({ fetchImpl, endpoint, project, timeo
 }
 
 // ffmpeg filter: centre square crop, then at most COVER_MAX_SIZE (never enlarged)
-export const squareCropFilter = () => `crop='min(iw,ih)':'min(iw,ih)',scale='min(${COVER_MAX_SIZE},iw)':-1:flags=lanczos`;
+// (enlargeTo: pictures smaller than that are enlarged to it, 0 = never enlarge)
+export const squareCropFilter = (enlargeTo = 0) => `crop='min(iw,ih)':'min(iw,ih)',scale='max(${enlargeTo},min(${COVER_MAX_SIZE},iw))':-1:flags=lanczos`;
 
 // Any uploaded or generated picture -> a square image (JPEG for pictures, PNG kept as PNG) plus its size, so the caller can warn about low resolution.
-export async function normalizeCover({ buffer, extension, outputExtension, spawnImpl, runProbe }) {
+export async function normalizeCover({ buffer, extension, outputExtension, enlargeTo = 0, spawnImpl, runProbe }) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'songyue2-cover-'));
   try {
     const ext = (outputExtension || extension) === 'png' ? 'png' : 'jpg';
     const input = path.join(dir, `in.${extension}`);
     const output = path.join(dir, `out.${ext}`);
     await writeFile(input, buffer);
-    const args = ['-v', 'error', '-y', '-i', input, '-vf', squareCropFilter(), '-frames:v', '1', ...(ext === 'jpg' ? ['-q:v', '2'] : []), output];
+    const args = ['-v', 'error', '-y', '-i', input, '-vf', squareCropFilter(enlargeTo), '-frames:v', '1', ...(ext === 'jpg' ? ['-q:v', '2'] : []), output];
     await new Promise((resolve, reject) => {
       const child = spawnImpl('ffmpeg', args, { windowsHide: true });
       child.once('error', reject);
@@ -194,27 +195,50 @@ export async function makeFallbackCover({ title, style, spawnImpl, fileExists })
 }
 
 // ---- Free web photo (Pixabay) when ComfyUI cannot make the picture; the key comes from .env (PIXABAY_API_KEY) ----
-export const PIXABAY_MIN_SIZE = 1280; // original size asked for; Pixabay serves at most 1280 px on the long side without full API access, so the squarer the photo the larger the square crop
+export const PIXABAY_MIN_SIZE = 1280; // original size asked for
+// Pixabay serves at most 1280 px on the long side without full API access, so the square crop is 1280 x (short / long side); crops under
+// PIXABAY_MIN_CROP are left out, the others are enlarged to the cover minimum by the caller
+export const PIXABAY_LONG_SIDE = 1280;
+export const PIXABAY_MIN_CROP = 900;
+const cropSide = (hit) => PIXABAY_LONG_SIDE * Math.min(hit.imageWidth, hit.imageHeight) / Math.max(hit.imageWidth, hit.imageHeight);
 
-// Search words from the music style (ASCII only); progressively broader fallbacks so a rare style still finds something
-export function pixabayQueries(style) {
-  const tags = String(style || '').replace(/[^\x20-\x7E]/g, ' ').split(',').map((tag) => oneLine(tag, 40)).filter(Boolean);
-  const queries = [tags.slice(0, 3).join(' '), tags[0] || '', 'music'].map((query) => query.slice(0, 100)).filter(Boolean);
+// Pixabay does not search Korean, so common lyric words are mapped to English picture words (substring match, so 밤에 / 밤이 count as 밤)
+const LYRIC_WORDS = [['밤', 'night'], ['별', 'stars'], ['달빛', 'moonlight'], ['달', 'moon'], ['하늘', 'sky'], ['구름', 'clouds'], ['바다', 'sea'], ['파도', 'waves'], ['해변', 'beach'], ['비', 'rain'], ['눈물', 'tears'], ['꽃', 'flowers'], ['벚꽃', 'cherry blossom'], ['봄', 'spring'], ['여름', 'summer'], ['가을', 'autumn'], ['겨울', 'winter'], ['바람', 'wind'], ['햇살', 'sunlight'], ['노을', 'sunset'], ['새벽', 'dawn'], ['아침', 'morning'], ['도시', 'city'], ['거리', 'street'], ['길', 'road'], ['걸어', 'walking'], ['산', 'mountain'], ['강', 'river'], ['숲', 'forest'], ['나무', 'trees'], ['들판', 'field'], ['사랑', 'love'], ['이별', 'farewell'], ['그리움', 'longing'], ['외로', 'lonely'], ['혼자', 'alone'], ['추억', 'memories'], ['기억', 'memories'], ['꿈', 'dream'], ['자유', 'freedom'], ['춤', 'dance'], ['커피', 'coffee'], ['창문', 'window'], ['불빛', 'lights'], ['네온', 'neon'], ['기차', 'train'], ['비행기', 'airplane'], ['여행', 'travel'], ['집', 'home'], ['고양이', 'cat'], ['강아지', 'dog'], ['아이', 'child'], ['엄마', 'mother'], ['웃음', 'smile'], ['태양', 'sun'], ['불꽃', 'fire'], ['안개', 'fog'], ['호수', 'lake'], ['섬', 'island'], ['사막', 'desert'], ['우주', 'space'], ['크리스마스', 'christmas'], ['축제', 'festival'], ['파티', 'party'], ['드라이브', 'driving'], ['자동차', 'car'], ['학교', 'school'], ['시간', 'clock'], ['편지', 'letter'], ['손', 'hands'], ['미소', 'smile']];
+const GENERIC_QUERIES = ['landscape', 'sunset sky', 'city night', 'nature', 'sea', 'mountain', 'flowers', 'autumn'];
+
+// English picture words from the title and lyrics: the ones that occur most come first (title counts double)
+export function lyricKeywords({ title, lyrics }) {
+  const text = `${title || ''} ${title || ''} ${lyrics || ''}`.replace(/\[.*?\]/g, ' ');
+  const found = new Map();
+  for (const [korean, english] of LYRIC_WORDS) {
+    const hits = text.split(korean).length - 1;
+    if (hits) found.set(english, (found.get(english) || 0) + hits);
+  }
+  return [...found.entries()].sort((a, b) => b[1] - a[1]).map(([english]) => english);
+}
+
+// Queries in order: lyric words, English words of the title, English style words, then a general picture chosen by the song's seed (not necessarily music)
+export function pixabayQueries({ style, title, lyrics, seed } = {}) {
+  const tags = String(style || '').replace(/[^ -~]/g, ' ').split(',').map((tag) => oneLine(tag, 40)).filter(Boolean);
+  const words = lyricKeywords({ title, lyrics });
+  const titleWords = oneLine(String(title || '').replace(/[^ -~]/g, ' '), 60);
+  const general = GENERIC_QUERIES[Math.abs(Number(seed) || 0) % GENERIC_QUERIES.length];
+  const queries = [words.slice(0, 2).join(' '), words[0] || '', titleWords.length >= 4 ? titleWords : '', tags.slice(0, 3).join(' '), tags[0] || '', general].map((query) => query.slice(0, 100)).filter(Boolean);
   return [...new Set(queries)];
 }
 
 // Prefers photos that are close to square (little is lost when cropping) and picks one of the best by the song's seed, so a style does not always give the same picture
 export function pickPixabayHit(hits, seed) {
-  const usable = (hits || []).filter((hit) => hit.largeImageURL && hit.imageWidth >= PIXABAY_MIN_SIZE && hit.imageHeight >= PIXABAY_MIN_SIZE);
+  const usable = (hits || []).filter((hit) => hit.largeImageURL && hit.imageWidth >= PIXABAY_MIN_SIZE && hit.imageHeight >= PIXABAY_MIN_SIZE && cropSide(hit) >= PIXABAY_MIN_CROP);
   usable.sort((a, b) => Math.abs(Math.log(a.imageWidth / a.imageHeight)) - Math.abs(Math.log(b.imageWidth / b.imageHeight)));
   const best = usable.slice(0, 10);
   return best.length ? best[Math.abs(Number(seed) || 0) % best.length] : null;
 }
 
 // Returns the JPEG bytes of one matching free photo, or null (no key, nothing found, or a request failed)
-export async function fetchPixabayCover({ fetchImpl, apiKey, style, seed }) {
+export async function fetchPixabayCover({ fetchImpl, apiKey, style, title, lyrics, seed }) {
   if (!apiKey) return null;
-  for (const query of pixabayQueries(style)) {
+  for (const query of pixabayQueries({ style, title, lyrics, seed })) {
     const params = new URLSearchParams({ key: apiKey, q: query, image_type: 'photo', min_width: String(PIXABAY_MIN_SIZE), min_height: String(PIXABAY_MIN_SIZE), safesearch: 'true', order: 'popular', per_page: '200' });
     const response = await fetchImpl(`https://pixabay.com/api/?${params}`);
     if (!response.ok) throw new Error(`Pixabay ${response.status}`);
