@@ -283,6 +283,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   // App-level config, not song data - lives under Setting/ (sibling to library/), not inside
   // library/setting: that folder is scanned as song drafts, and library/ is for song-related content only.
   const eqPresetsDir = () => path.join(root, 'Setting', 'EQ-preset');
+  const vstChainsDir = () => path.join(root, 'Setting', 'VST-chain');
   const compressorPresetsDir = () => path.join(root, 'Setting', 'Compressor-preset');
   const effectPresetsDir = () => path.join(root, 'Setting', 'Effect-preset');
   const postprocessSettingsDir = () => path.join(root, 'Setting', 'PostProcess');
@@ -1381,6 +1382,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   // The DSP runs in a worker thread on raw float32 stereo files; ffmpeg decodes the song (and the reference, at the
   // song's sample rate) and encodes the preview as 24-bit FLAC. Previews are temporary until the user saves one.
   const polishPreviews = new Map();
+  const vstTests = new Map(); // the latest listening test of "VST3 관리": { dir, original, processed }
   // VST3 plugins (search, settings window, state files) run through engine/vst-host/vst-host.exe as a separate process
   const vst = createVstManager({ root, statesDir: path.join(root, 'Setting', 'VST-states'), spawnImpl, host: vstHost });
   // The host settings for the polish worker when the VST3 stage is on: the plugins must come from the scan, their saved states go along
@@ -1448,7 +1450,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   }
   // Previews of an earlier run of the server are ephemeral: remove them.
   for (const name of await readdir(outputDirectory).catch(() => [])) {
-    if (/^(polish|adapter-upload)-[\da-f-]{36}$/i.test(name)) await rm(path.join(outputDirectory, name), { recursive: true, force: true }).catch(() => {});
+    if (/^(polish|adapter-upload|vsttest)-[\da-f-]{36}$/i.test(name)) await rm(path.join(outputDirectory, name), { recursive: true, force: true }).catch(() => {});
   }
   async function saveArbitraryAudio(dataUrl, title) {
     const match = typeof dataUrl === 'string' && dataUrl.match(/^data:audio\/wav;base64,(.+)$/);
@@ -3117,6 +3119,89 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           catch (error) { throw vstFail(error); }
         }
         if (req.method === 'GET' && pathname === '/api/vst/editor') return send(200, vst.editorStatus());
+        // opens the folder for the plugins of the app in the file explorer (the app runs on this PC)
+        if (req.method === 'POST' && pathname === '/api/vst/open-folder') {
+          await body(req);
+          await mkdir(vst.localDir, { recursive: true });
+          const child = spawnImpl('explorer.exe', [vst.localDir], { detached: true, stdio: 'ignore' });
+          child.on?.('error', () => {});
+          child.unref?.();
+          return send(200, { path: path.relative(root, vst.localDir).replaceAll('\\', '/') });
+        }
+        if (req.method === 'DELETE' && pathname === '/api/vst/plugin') {
+          const input = await body(req, 8 * 1024);
+          try { await vst.removeLocalPlugin(text(input.path, 1024).trim()); return send(200, { ok: true }); } catch (error) { throw vstFail(error); }
+        }
+        // chain presets: a named list of plugins (Setting/VST-chain), loaded in "AI 곡 다듬기"
+        if (req.method === 'GET' && pathname === '/api/vst/chains') {
+          const files = await readdir(vstChainsDir()).catch(() => []);
+          const chains = await Promise.all(files.filter((name) => name.endsWith('.json')).map((name) => readJson(path.join(vstChainsDir(), name), null)));
+          return send(200, chains.filter(Boolean).sort((a, b) => a.name.localeCompare(b.name)));
+        }
+        if (req.method === 'POST' && pathname === '/api/vst/chains') {
+          const input = await body(req, 16 * 1024);
+          const name = text(input.name, 120).trim();
+          if (!name) throw fail(400, '프리셋 이름이 필요합니다.');
+          const plugins = normalizePolishSettings({ vst: { enabled: true, plugins: input.plugins } }).vst.plugins;
+          if (!plugins.length) throw fail(400, '체인에 플러그인을 하나 이상 넣어 주세요.');
+          const preset = { name, plugins };
+          await saveJson(path.join(vstChainsDir(), `${safeFilename(name)}.json`), preset);
+          return send(200, preset);
+        }
+        if (req.method === 'DELETE' && pathname === '/api/vst/chains') {
+          const name = text(requestUrl.searchParams.get('name'), 120).trim();
+          if (!name) throw fail(400, '프리셋 이름이 필요합니다.');
+          const target = path.join(vstChainsDir(), `${safeFilename(name)}.json`);
+          if (!(await exists(target))) throw fail(404, '프리셋을 찾을 수 없습니다.');
+          await unlink(target);
+          return send(200, { ok: true });
+        }
+        // listening test: a part of a library song through one plugin (with its saved settings), to compare with the original part
+        if (req.method === 'POST' && pathname === '/api/vst/test') {
+          const input = await body(req, 8 * 1024);
+          const entry = typeof input.projectId === 'string' ? await findEntry(input.projectId) : null;
+          if (!entry || entry.project.status !== 'completed' || !entry.project.audioPath) throw fail(404, '시험할 완성된 곡을 찾을 수 없습니다.');
+          const inputFile = path.join(path.dirname(entry.file), entry.project.audioPath);
+          if (!(await exists(inputFile))) throw fail(404, '음원 파일을 찾을 수 없습니다.');
+          const pluginPath = text(input.path, 1024).trim();
+          const testSettings = normalizePolishSettings({ vst: { enabled: true, plugins: [{ path: pluginPath, enabled: true }] } });
+          if (!testSettings.vst.enabled) throw fail(400, '플러그인을 골라 주세요.');
+          const vstHostSettings = await prepareVst(testSettings);
+          const startSeconds = Math.max(0, Math.min(3600, Number(input.startSeconds) || 0));
+          const seconds = Math.max(5, Math.min(60, Number(input.seconds) || 20));
+          if (generating) throw fail(409, '이미 다른 작업을 실행 중입니다. 완료 후 다시 시도해 주세요.');
+          generating = true;
+          generationStatus = { projectId: null, startedAt: Date.now(), expectedMs: 8000, progress: 0, detail: '플러그인 시험 중' };
+          const testId = randomUUID();
+          const dir = path.join(outputDirectory, `vsttest-${testId}`);
+          try {
+            await mkdir(dir, { recursive: true });
+            const segmentFile = path.join(dir, 'original.wav');
+            await runFfmpegCli(['-y', '-ss', String(startSeconds), '-t', String(seconds), '-i', inputFile, '-c:a', 'pcm_s16le', segmentFile], '시험 구간 자르기');
+            if (!(await exists(segmentFile)) || !(await stat(segmentFile)).size) throw fail(400, '곡의 그 위치에는 소리가 없습니다. 시작 위치를 줄여 주세요.');
+            const outputFile = path.join(dir, 'processed.flac');
+            const onProgress = (percent, label) => { if (generationStatus) { generationStatus.progress = percent; generationStatus.detail = label; } };
+            try { await (polishRunner || defaultPolishRunner)({ inputFile: segmentFile, referenceFile: null, outputFile, settings: testSettings, workDir: dir, onProgress, vstHost: vstHostSettings }); }
+            catch (error) { throw error?.status ? error : fail(502, `플러그인 시험에 실패했습니다. ${error?.message || ''}`.trim()); }
+            if (!(await exists(outputFile))) throw fail(502, '시험 결과가 만들어지지 않았습니다.');
+            // only the latest test is kept
+            for (const [oldId, old] of vstTests) { vstTests.delete(oldId); await rm(old.dir, { recursive: true, force: true }).catch(() => {}); }
+            vstTests.set(testId, { dir, original: segmentFile, processed: outputFile });
+            return send(200, { testId, startSeconds, seconds });
+          } catch (error) {
+            await rm(dir, { recursive: true, force: true }).catch(() => {});
+            throw error;
+          } finally { generating = false; generationStatus = null; }
+        }
+        const vstTestMatch = pathname.match(/^\/api\/vst\/test\/([^/]+)\/(original|processed)$/);
+        if (req.method === 'GET' && vstTestMatch) {
+          const test = uuidPattern.test(vstTestMatch[1]) ? vstTests.get(vstTestMatch[1]) : null;
+          if (!test) throw fail(404, '시험 결과를 찾을 수 없습니다. 다시 만들어 주세요.');
+          const file = vstTestMatch[2] === 'original' ? test.original : test.processed;
+          const data = await readFile(file);
+          res.writeHead(200, { 'Content-Type': vstTestMatch[2] === 'original' ? 'audio/wav' : 'audio/flac', 'Content-Length': String(data.length), 'Cache-Control': 'no-store' });
+          return res.end(data);
+        }
         if (req.method === 'POST' && pathname === '/api/vst/editor') {
           const input = await body(req, 8 * 1024);
           const pluginPath = text(input.path, 1024).trim();

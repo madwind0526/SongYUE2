@@ -175,3 +175,66 @@ test('VST3 routes: plugin list with saved states, settings window, and the polis
   assert.equal((await call('/api/vst/plugins')).data.plugins[0].hasState, false);
   assert.equal(await readFile(path.join(dir, 'Fake.vst3'), 'utf8'), 'x');
 });
+
+test('VST3 관리 routes: folder, deleting only plugins of the app folder, chain presets and the listening test', async (t) => {
+  const { dir, host, pluginFile } = await setUp(t);
+  const root = path.join(dir, 'root');
+  const localDir = path.join(root, 'engine', 'vst-host', 'plugins');
+  await mkdir(localDir, { recursive: true });
+  await writeFile(path.join(localDir, 'Local Comp.vst3'), 'x');
+  const runs = [];
+  const polishRunner = async ({ inputFile, outputFile, settings, vstHost }) => { runs.push({ inputFile, settings, vstHost }); await writeFile(outputFile, 'fake-flac'); };
+  const spawned = [];
+  // ffmpeg writes its last argument (the output file); explorer / ffprobe do nothing; the fake host is the real node process
+  const fakeSpawn = (command, args, options) => {
+    if (command === process.execPath) return spawn(command, args, options);
+    spawned.push(command);
+    if (command === 'ffmpeg') return spawn(process.execPath, ['-e', 'require("fs").writeFileSync(process.argv.at(-1), "RIFFfake")', '--', ...args], options);
+    return spawn(process.execPath, ['-e', 'process.stdout.write("1.0")'], options);
+  };
+  const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}), spawnImpl: fakeSpawn, polishRunner, vstHost: host });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const call = async (route, method = 'GET', payload) => { const response = await fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) }); return { status: response.status, data: await response.json().catch(() => null), response }; };
+
+  const opened = await call('/api/vst/open-folder', 'POST', {});
+  assert.equal(opened.data.path, 'engine/vst-host/plugins');
+  assert.ok(spawned.includes('explorer.exe'));
+
+  const list = await call('/api/vst/plugins');
+  const local = list.data.plugins.find((plugin) => plugin.name === 'Local Comp');
+  assert.equal(local.local, true, 'a plugin of the app folder is marked');
+  assert.equal(list.data.plugins.find((plugin) => plugin.name === 'Fake Reverb').local, undefined);
+  assert.equal((await call('/api/vst/plugin', 'DELETE', { path: pluginFile })).status, 400, 'a plugin outside the app folder is never deleted');
+  assert.equal((await call('/api/vst/plugin', 'DELETE', { path: path.join(dir, '..', 'x.vst3') })).status, 400);
+  assert.equal((await call('/api/vst/plugin', 'DELETE', { path: local.path })).status, 200);
+  await assert.rejects(stat(local.path));
+  assert.deepEqual((await call('/api/vst/plugins?refresh=1')).data.plugins.map((plugin) => plugin.name), ['Fake Reverb']);
+
+  assert.equal((await call('/api/vst/chains', 'POST', { name: '빈 체인', plugins: [] })).status, 400);
+  assert.equal((await call('/api/vst/chains', 'POST', { name: '', plugins: [{ path: pluginFile }] })).status, 400);
+  const saved = await call('/api/vst/chains', 'POST', { name: '마스터링 체인', plugins: [{ path: pluginFile, enabled: true }, { path: 5 }] });
+  assert.deepEqual(saved.data, { name: '마스터링 체인', plugins: [{ path: pluginFile, enabled: true }] });
+  await call('/api/vst/chains', 'POST', { name: 'A 체인', plugins: [{ path: pluginFile, enabled: false }] });
+  assert.deepEqual((await call('/api/vst/chains')).data.map((chain) => chain.name).sort(), ['A 체인', '마스터링 체인'].sort());
+  assert.equal((await call('/api/vst/chains?name=' + encodeURIComponent('A 체인'), 'DELETE')).status, 200);
+  assert.equal((await call('/api/vst/chains?name=' + encodeURIComponent('A 체인'), 'DELETE')).status, 404);
+  assert.deepEqual((await call('/api/vst/chains')).data.map((chain) => chain.name), ['마스터링 체인']);
+
+  const song = await call('/api/audio-save', 'POST', { dataUrl: `data:audio/wav;base64,${Buffer.from('fake-song').toString('base64')}`, title: '시험 곡' });
+  assert.equal((await call('/api/vst/test', 'POST', { projectId: song.data.id, path: path.join(dir, 'evil.vst3') })).status, 400, 'only scanned plugins');
+  assert.equal((await call('/api/vst/test', 'POST', { projectId: 'nope', path: pluginFile })).status, 404);
+  const test = await call('/api/vst/test', 'POST', { projectId: song.data.id, path: pluginFile, startSeconds: 12, seconds: 500 });
+  assert.equal(test.status, 200, JSON.stringify(test.data));
+  assert.equal(test.data.seconds, 60, 'the test part is at most 60 s');
+  assert.equal(runs.length, 1);
+  assert.deepEqual(runs[0].settings.vst.plugins, [{ path: pluginFile, enabled: true }]);
+  assert.equal(runs[0].vstHost.exe, process.execPath);
+  assert.match(runs[0].inputFile, /original\.wav$/);
+  assert.equal(await (await fetch(`${base}/api/vst/test/${test.data.testId}/original`)).text(), 'RIFFfake');
+  assert.equal(await (await fetch(`${base}/api/vst/test/${test.data.testId}/processed`)).text(), 'fake-flac');
+  const second = await call('/api/vst/test', 'POST', { projectId: song.data.id, path: pluginFile });
+  assert.equal((await fetch(`${base}/api/vst/test/${test.data.testId}/original`)).status, 404, 'only the latest test is kept');
+  assert.equal((await fetch(`${base}/api/vst/test/${second.data.testId}/processed`)).status, 200);
+});

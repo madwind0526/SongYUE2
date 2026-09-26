@@ -1,7 +1,7 @@
 // VST3 plugins for "AI 곡 다듬기": search (vst-host --scan), the plugin's own settings window (vst-host --gui, state saved to a file
 // when the window is closed) and the state files. vst-host.exe (HOT-Step, MIT) lives in engine/vst-host/ and always runs as a separate process.
 import { createHash } from 'node:crypto';
-import { access, mkdir, readdir, stat } from 'node:fs/promises';
+import { access, mkdir, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 export const vstHostExe = (root) => path.join(root, 'engine', 'vst-host', 'vst-host.exe');
@@ -136,5 +136,17 @@ export function createVstManager({ root, statesDir, spawnImpl, host = null, loca
     return info ? { saved: true, savedAt: info.mtime.toISOString() } : { saved: false };
   }
 
-  return { command, hostReady, scan, requireKnown, withStates, stateMap, editorStatus, openEditor, closeEditor, stateInfo };
+  // Deletes a plugin that was put into the app's own plugin folder (plugins of the system folders are never touched) and its saved state
+  async function removeLocalPlugin(pluginPath) {
+    const target = path.resolve(pluginPath);
+    const relative = path.relative(path.resolve(localDir), target);
+    if (!relative || relative.startsWith('..') || path.isAbsolute(relative) || !/\.vst3$/i.test(target)) throw Object.assign(new Error('앱 폴더(engine/vst-host/plugins)에 넣은 플러그인만 삭제할 수 있습니다.'), { status: 400 });
+    if (!(await exists(target))) throw Object.assign(new Error('플러그인을 찾을 수 없습니다.'), { status: 404 });
+    if (editor && samePath(editor.path, target)) throw Object.assign(new Error('설정 창이 열려 있습니다. 먼저 닫아 주세요.'), { status: 409 });
+    await rm(target, { recursive: true, force: true });
+    await unlink(stateFileFor(statesDir, target)).catch(() => {});
+    scanned = null;
+  }
+
+  return { command, hostReady, scan, requireKnown, withStates, stateMap, editorStatus, openEditor, closeEditor, stateInfo, removeLocalPlugin, localDir };
 }
