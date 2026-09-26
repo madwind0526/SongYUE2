@@ -4608,10 +4608,12 @@ function VstTestDialog({ plugin, songs, onClose, notify }: { plugin: VstPlugin; 
           </div>
           <p className="field-hint">두 줄의 재생 버튼을 번갈아 누르면 같은 위치에서 이어서 들립니다. 소리가 마음에 들지 않으면 카드의 "설정"에서 값을 바꾼 뒤 다시 만듭니다.</p>
           <SeekRow t={t}/>
-          <TransportControls t={t} disabled={!sourceBuffer}/>
         </>}
       </>}
-      <div className="dialog-actions"><Button variant="outline" onClick={onClose} disabled={running}>닫기</Button></div>
+      <div className="dialog-actions vst-test-bottom">
+        {test && <TransportControls t={t} disabled={!sourceBuffer}/>}
+        <Button variant="outline" onClick={onClose} disabled={running}>닫기</Button>
+      </div>
     </DialogContent>
   </Dialog>;
 }

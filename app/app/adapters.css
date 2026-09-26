@@ -279,6 +279,13 @@ button.adapter-card, label.adapter-card { cursor: pointer; }
 .vst-test-num { flex: 0 0 96px; }
 .vst-test-action { flex: none; }
 .vst-test-action > button { height: 40px; min-height: 40px; }
+.vst-test-bottom { justify-content: space-between; align-items: center; }
+.vst-test-bottom .pp-transport { min-width: 0; flex-wrap: wrap; }
+.vst-test-bottom > button { flex: 0 0 auto; margin-left: auto; }
+@media (max-width: 600px) {
+  .audio-compare-dialog.vst-test-dialog .vst-test-bottom { justify-content: space-between !important; }
+  .audio-compare-dialog.vst-test-dialog .vst-test-bottom > button { flex: 0 0 auto; }
+}
 .vst-match-row { display: flex; align-items: center; gap: 12px; }
 .vst-match-row .field-hint { margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .vst-match-loudness { flex: none; }
