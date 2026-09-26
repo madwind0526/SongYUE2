@@ -4225,7 +4225,8 @@ function AudioPolishDialog({ audioDataUrl, onClose, onApply, kind = 'sound' }: {
   const [applying, setApplying] = useState(false);
   const [result, setResult] = useState<{ dataUrl: string; report: PolishReport | null } | null>(null);
   const [errorText, setErrorText] = useState('');
-  const patch = <K extends keyof PolishSettings>(key: K, value: Partial<PolishSettings[K]>) => { setResult(null); t.setBuffer('output', null); setSettings(previous => ({ ...previous, [key]: { ...previous[key], ...value } })); };
+  const matched = useMatchedOutput(t);
+  const patch = <K extends keyof PolishSettings>(key: K, value: Partial<PolishSettings[K]>) => { setResult(null); matched.clear(); setSettings(previous => ({ ...previous, [key]: { ...previous[key], ...value } })); };
   const anyStage = settings.denoise.enabled || settings.lifter.enabled || settings.naturalize.enabled || (song && settings.master.enabled);
   const canStart = anyStage && (!settings.master.enabled || !!referencePath);
   const decode = async (dataUrl: string) => t.ensureAudioContext().decodeAudioData(await (await fetch(dataUrl)).arrayBuffer());
@@ -4242,8 +4243,8 @@ function AudioPolishDialog({ audioDataUrl, onClose, onApply, kind = 'sound' }: {
     <div className="audio-compare-charts"><CompareWaveform peaks={t.peaksForKey(key)} fraction={t.positionSeconds / (buffer?.duration || 1)} processed={processed}/></div>
   </div>;
   async function start() {
-    setRunning(true); setErrorText(''); setResult(null); t.setBuffer('output', null);
-    try { const done = await api<{ dataUrl: string; report: PolishReport | null }>('/audio-tools/polish', 'POST', { audioDataUrl, settings: song ? settings : { ...settings, master: { enabled: false } }, referencePath: song && settings.master.enabled ? referencePath : undefined }); t.setBuffer('output', await decode(done.dataUrl)); setResult(done); }
+    setRunning(true); setErrorText(''); setResult(null); matched.clear();
+    try { const done = await api<{ dataUrl: string; report: PolishReport | null }>('/audio-tools/polish', 'POST', { audioDataUrl, settings: song ? settings : { ...settings, master: { enabled: false } }, referencePath: song && settings.master.enabled ? referencePath : undefined }); matched.show(sourceBuffer, await decode(done.dataUrl)); setResult(done); }
     catch (error) { setErrorText((error as Error).message); }
     finally { setRunning(false); }
   }
@@ -4291,6 +4292,7 @@ function AudioPolishDialog({ audioDataUrl, onClose, onApply, kind = 'sound' }: {
         {settings.master.enabled && <Button variant="outline" className="voice-convert-file-btn" onClick={() => setReferencePickerOpen(true)} disabled={running} title={referencePath || undefined}><Upload size={14}/><span className="voice-convert-file-name">{referencePath ? referencePath.split('/').pop() : '기준곡 선택 (라이브러리)'}</span></Button>}
       </div>}
       {errorText && <p className="field-hint warning">{errorText}</p>}
+      {outputBuffer && <MatchLoudnessRow matched={matched} source={sourceBuffer}/>}
       <div className="stem-list">
         {row('source', '처리 전', sourceBuffer, false, '')}
         {row('output', '처리 후', outputBuffer, true, '')}
@@ -4494,28 +4496,17 @@ function bufferLevel(buffer: AudioBuffer) {
   return { rms: Math.sqrt(sum / Math.max(1, count)), peak };
 }
 
-// "시험 듣기": a part of a library song through one plugin (with its saved settings), next to the same part without it
-function VstTestDialog({ plugin, songs, onClose, notify }: { plugin: VstPlugin; songs: Project[]; onClose: () => void; notify: (text: string, error?: boolean) => void }) {
-  const [songId, setSongId] = useState(songs[0]?.id || '');
-  const [start, setStart] = useState('0');
-  const [seconds, setSeconds] = useState('20');
-  const [running, setRunning] = useState(false);
-  const [test, setTest] = useState<{ testId: string; startSeconds: number; seconds: number } | null>(null);
-  // "음량 맞추기": the processed part is played at the loudness of the original part, so only the change of the sound is compared
-  const [matchLoudness, setMatchLoudness] = useState(true);
-  const [processedRaw, setProcessedRaw] = useState<AudioBuffer | null>(null);
-  const [matchGainDb, setMatchGainDb] = useState<number | null>(null);
-  const t = useAudioTransport();
-  useEffect(() => () => t.closeContext(), []); // eslint-disable-line react-hooks/exhaustive-deps
-  const sourceBuffer = t.bufferForKey('source');
-  const outputBuffer = t.bufferForKey('output');
-  function clearTest() { setTest(null); setProcessedRaw(null); setMatchGainDb(null); t.setBuffer('source', null); t.setBuffer('output', null); }
-  // puts the processed part into the player, at the loudness of the original part when the check box is on (never louder than the peak limit)
-  function showProcessed(original: AudioBuffer, processed: AudioBuffer, match: boolean) {
-    if (!match) { setMatchGainDb(null); t.setBuffer('output', processed); return; }
-    const before = bufferLevel(original);
+// "음량 맞추기" for a processed result: the processed sound is played at the loudness of the original (never above 0.98 peak); only the playback copy is scaled,
+// what is saved or applied stays as it was made. `show` puts a new result into the 'output' player, `toggle` follows the check box, `clear` empties it.
+function useMatchedOutput(t: ReturnType<typeof useAudioTransport>) {
+  const [match, setMatch] = useState(true);
+  const [raw, setRaw] = useState<AudioBuffer | null>(null);
+  const [gainDb, setGainDb] = useState<number | null>(null);
+  function place(original: AudioBuffer | null, processed: AudioBuffer | null, on: boolean) {
+    if (!processed) { setGainDb(null); t.setBuffer('output', null); return; }
+    const before = original ? bufferLevel(original) : null;
     const after = bufferLevel(processed);
-    if (!after.rms || !before.rms) { setMatchGainDb(null); t.setBuffer('output', processed); return; }
+    if (!on || !before || !before.rms || !after.rms) { setGainDb(null); t.setBuffer('output', processed); return; }
     const gain = Math.min(before.rms / after.rms, 0.98 / Math.max(after.peak, 1e-9));
     const scaled = t.ensureAudioContext().createBuffer(processed.numberOfChannels, processed.length, processed.sampleRate);
     for (let channel = 0; channel < processed.numberOfChannels; channel += 1) {
@@ -4523,9 +4514,36 @@ function VstTestDialog({ plugin, songs, onClose, notify }: { plugin: VstPlugin; 
       const to = scaled.getChannelData(channel);
       for (let index = 0; index < from.length; index += 1) to[index] = from[index] * gain;
     }
-    setMatchGainDb(20 * Math.log10(gain));
+    setGainDb(20 * Math.log10(gain));
     t.setBuffer('output', scaled);
   }
+  return {
+    match, gainDb,
+    show: (original: AudioBuffer | null, processed: AudioBuffer) => { setRaw(processed); place(original, processed, match); },
+    toggle: (original: AudioBuffer | null, on: boolean) => { setMatch(on); place(original, raw, on); },
+    clear: () => { setRaw(null); setGainDb(null); t.setBuffer('output', null); },
+  };
+}
+function MatchLoudnessRow({ matched, source }: { matched: ReturnType<typeof useMatchedOutput>; source: AudioBuffer | null }) {
+  return <div className="vst-match-row">
+    <label className="at-function vst-match-loudness"><input type="checkbox" checked={matched.match} onChange={event => matched.toggle(source, event.target.checked)}/>음량 맞추기</label>
+    {matched.match && matched.gainDb !== null && <span className="field-hint">처리한 소리의 음량을 원본에 맞췄습니다({matched.gainDb >= 0 ? '+' : ''}{matched.gainDb.toFixed(1)} dB).</span>}
+  </div>;
+}
+
+// "시험 듣기": a part of a library song through one plugin (with its saved settings), next to the same part without it
+function VstTestDialog({ plugin, songs, onClose, notify }: { plugin: VstPlugin; songs: Project[]; onClose: () => void; notify: (text: string, error?: boolean) => void }) {
+  const [songId, setSongId] = useState(songs[0]?.id || '');
+  const [start, setStart] = useState('0');
+  const [seconds, setSeconds] = useState('20');
+  const [running, setRunning] = useState(false);
+  const [test, setTest] = useState<{ testId: string; startSeconds: number; seconds: number } | null>(null);
+  const t = useAudioTransport();
+  const matched = useMatchedOutput(t);
+  useEffect(() => () => t.closeContext(), []); // eslint-disable-line react-hooks/exhaustive-deps
+  const sourceBuffer = t.bufferForKey('source');
+  const outputBuffer = t.bufferForKey('output');
+  function clearTest() { setTest(null); t.setBuffer('source', null); matched.clear(); }
   async function run() {
     setRunning(true); clearTest();
     try {
@@ -4538,8 +4556,7 @@ function VstTestDialog({ plugin, songs, onClose, notify }: { plugin: VstPlugin; 
         decoded[kind] = await context.decodeAudioData(await response.arrayBuffer());
       }
       t.setBuffer('source', decoded.original);
-      setProcessedRaw(decoded.processed);
-      showProcessed(decoded.original, decoded.processed, matchLoudness);
+      matched.show(decoded.original, decoded.processed);
       setTest(result);
     }
     catch (error) { notify((error as Error).message, true); }
@@ -4568,10 +4585,7 @@ function VstTestDialog({ plugin, songs, onClose, notify }: { plugin: VstPlugin; 
           <div className="train-field vst-test-action"><span>실행</span><Button onClick={() => void run()} disabled={running || !songId}>{running ? <LoaderCircle className="spin" size={15}/> : <Play size={15}/>}{test ? '다시 만들기' : '시험 만들기'}</Button></div>
         </div>
         {test && <>
-          <div className="vst-match-row">
-            <label className="at-function vst-match-loudness"><input type="checkbox" checked={matchLoudness} onChange={event => { setMatchLoudness(event.target.checked); if (sourceBuffer && processedRaw) showProcessed(sourceBuffer, processedRaw, event.target.checked); }}/>음량 맞추기</label>
-            {matchLoudness && matchGainDb !== null && <span className="field-hint">처리한 소리의 음량을 원본에 맞췄습니다({matchGainDb >= 0 ? '+' : ''}{matchGainDb.toFixed(1)} dB).</span>}
-          </div>
+          <MatchLoudnessRow matched={matched} source={sourceBuffer}/>
           <div className="stem-list">
             {row('source', '원본 구간', sourceBuffer, false, `${test.startSeconds}초부터 ${test.seconds}초`)}
             {row('output', `${plugin.name} 적용`, outputBuffer, true, '저장된 설정으로 처리')}
@@ -4714,6 +4728,7 @@ function AiPolishDialog({ project, onClose, notify, onCreated }: { project: Proj
   const previewRef = useRef<string | null>(null);
   const sourceBuffer = t.bufferForKey('source');
   const outputBuffer = t.bufferForKey('output');
+  const matched = useMatchedOutput(t);
   const vstOn = vstChain.enabled && vstChain.plugins.some(item => item.enabled);
   const anyStage = settings.denoise.enabled || settings.lifter.enabled || settings.naturalize.enabled || vstOn || settings.master.enabled;
   const canStart = anyStage && !running && !saving && (!settings.master.enabled || !!referencePath);
@@ -4744,7 +4759,7 @@ function AiPolishDialog({ project, onClose, notify, onCreated }: { project: Proj
     previewRef.current = null;
     setPreviewId(null);
     setReport(null);
-    t.setBuffer('output', null);
+    matched.clear();
     if (id) await fetch(`/api/polish/${id}`, { method: 'DELETE' }).catch(() => {});
   }
   async function start() {
@@ -4769,7 +4784,7 @@ function AiPolishDialog({ project, onClose, notify, onCreated }: { project: Proj
       setReport(result.report);
       const response = await fetch(`/api/polish/${result.previewId}/audio`);
       if (!response.ok) throw new Error('다듬은 곡을 불러오지 못했습니다.');
-      t.setBuffer('output', await t.ensureAudioContext().decodeAudioData(await response.arrayBuffer()));
+      matched.show(sourceBuffer, await t.ensureAudioContext().decodeAudioData(await response.arrayBuffer()));
       setProgress(100);
       setDetail('완료');
     } catch (error) { setErrorText((error as Error).message); }
@@ -4838,6 +4853,7 @@ function AiPolishDialog({ project, onClose, notify, onCreated }: { project: Proj
           <p className="field-hint">단계 값은 결과를 들어 보며 조절하세요. 처리는 곡 길이에 따라 수 초~수십 초 걸립니다. 원본 곡은 바뀌지 않고, "새 곡으로 저장"을 눌러야 라이브러리에 추가됩니다.</p>
         </div>
         <div className="timbre-main-panel polish-main">
+          {outputBuffer && <MatchLoudnessRow matched={matched} source={sourceBuffer}/>}
           <div className="stem-list">
             {row('source', '원본', sourceBuffer, false, project.title)}
             {row('output', '다듬은 곡', outputBuffer, true, outputBuffer ? appliedStages.map(stage => stageLabels[stage]).join(' → ') : '아직 만들지 않았습니다')}
