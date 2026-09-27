@@ -1,0 +1,359 @@
+{
+ "version": 1,
+ "generatedAt": "2026-09-27T04:46:31.360Z",
+ "language": "ja",
+ "lyricsHash": "0924f29b89da",
+ "coverage": 0.96,
+ "lines": [
+  {
+   "text": "お前は",
+   "start": 19.78,
+   "end": 20.5,
+   "confidence": 0,
+   "estimated": true,
+   "words": [
+    {
+     "text": "お前は",
+     "start": 19.78,
+     "end": 20.5
+    }
+   ]
+  },
+  {
+   "text": "誰だ?",
+   "start": 20.5,
+   "end": 21.06,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "誰だ?",
+     "start": 20.5,
+     "end": 21.06
+    }
+   ]
+  },
+  {
+   "text": "世界は",
+   "start": 28.23,
+   "end": 29.27,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "世界は",
+     "start": 28.23,
+     "end": 29.27
+    }
+   ]
+  },
+  {
+   "text": "秘密で満ちている",
+   "start": 29.27,
+   "end": 33.59,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "秘密で満ちている",
+     "start": 29.27,
+     "end": 33.59
+    }
+   ]
+  },
+  {
+   "text": "目のある者は見るだろう",
+   "start": 34.86,
+   "end": 38.78,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "目のある者は見るだろう",
+     "start": 34.86,
+     "end": 38.78
+    }
+   ]
+  },
+  {
+   "text": "耳のある者は聞くだろう",
+   "start": 42.41,
+   "end": 48.3,
+   "confidence": 0.91,
+   "estimated": false,
+   "words": [
+    {
+     "text": "耳のある者は聞くだろう",
+     "start": 42.41,
+     "end": 48.3
+    }
+   ]
+  },
+  {
+   "text": "他人が作った偽物ではなく",
+   "start": 54.89,
+   "end": 57.13,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "他人が作った偽物ではなく",
+     "start": 54.89,
+     "end": 57.13
+    }
+   ]
+  },
+  {
+   "text": "自分が作った目と耳なら",
+   "start": 57.85,
+   "end": 60.97,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "自分が作った目と耳なら",
+     "start": 57.85,
+     "end": 60.97
+    }
+   ]
+  },
+  {
+   "text": "見えている世界の裏に隠れた",
+   "start": 61.29,
+   "end": 64.25,
+   "confidence": 0.92,
+   "estimated": false,
+   "words": [
+    {
+     "text": "見えている世界の裏に隠れた",
+     "start": 61.29,
+     "end": 64.25
+    }
+   ]
+  },
+  {
+   "text": "本当の姿と声を",
+   "start": 65.13,
+   "end": 68.25,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "本当の姿と声を",
+     "start": 65.13,
+     "end": 68.25
+    }
+   ]
+  },
+  {
+   "text": "見て聞くだろう",
+   "start": 70.5,
+   "end": 78.81,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "見て聞くだろう",
+     "start": 70.5,
+     "end": 78.81
+    }
+   ]
+  },
+  {
+   "text": "狂わずしては",
+   "start": 78.85,
+   "end": 79.07,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "狂わずしては",
+     "start": 78.85,
+     "end": 79.07
+    }
+   ]
+  },
+  {
+   "text": "その秘密を",
+   "start": 79.07,
+   "end": 80.66,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "その秘密を",
+     "start": 79.07,
+     "end": 80.66
+    }
+   ]
+  },
+  {
+   "text": "見つけることはできない",
+   "start": 82.22,
+   "end": 85.02,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "見つけることはできない",
+     "start": 82.22,
+     "end": 85.02
+    }
+   ]
+  },
+  {
+   "text": "他人が書いたスクリプトを",
+   "start": 88.09,
+   "end": 92.85,
+   "confidence": 0.83,
+   "estimated": false,
+   "words": [
+    {
+     "text": "他人が書いたスクリプトを",
+     "start": 88.09,
+     "end": 92.85
+    }
+   ]
+  },
+  {
+   "text": "オウムのように繰り返しながら",
+   "start": 92.85,
+   "end": 94.65,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "オウムのように繰り返しながら",
+     "start": 92.85,
+     "end": 94.65
+    }
+   ]
+  },
+  {
+   "text": "自分のものであるかのように生きるだけ",
+   "start": 95.45,
+   "end": 100.87,
+   "confidence": 0.94,
+   "estimated": false,
+   "words": [
+    {
+     "text": "自分のものであるかのように生きるだけ",
+     "start": 95.45,
+     "end": 100.87
+    }
+   ]
+  },
+  {
+   "text": "世界は",
+   "start": 101.99,
+   "end": 103.75,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "世界は",
+     "start": 101.99,
+     "end": 103.75
+    }
+   ]
+  },
+  {
+   "text": "秘密で満ちている",
+   "start": 107.32,
+   "end": 109.72,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "秘密で満ちている",
+     "start": 107.32,
+     "end": 109.72
+    }
+   ]
+  },
+  {
+   "text": "見ることができるか",
+   "start": 115.54,
+   "end": 116.18,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "見ることができるか",
+     "start": 115.54,
+     "end": 116.18
+    }
+   ]
+  },
+  {
+   "text": "聞くことができるか",
+   "start": 117.06,
+   "end": 118.1,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "聞くことができるか",
+     "start": 117.06,
+     "end": 118.1
+    }
+   ]
+  },
+  {
+   "text": "本当のお前を",
+   "start": 122.34,
+   "end": 125.54,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "本当のお前を",
+     "start": 122.34,
+     "end": 125.54
+    }
+   ]
+  },
+  {
+   "text": "直視できるか",
+   "start": 125.54,
+   "end": 127.94,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "直視できるか",
+     "start": 125.54,
+     "end": 127.94
+    }
+   ]
+  },
+  {
+   "text": "世界は",
+   "start": 128.73,
+   "end": 130.81,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "世界は",
+     "start": 128.73,
+     "end": 130.81
+    }
+   ]
+  },
+  {
+   "text": "まだ秘密で満ちている",
+   "start": 134.82,
+   "end": 136.26,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "まだ秘密で満ちている",
+     "start": 134.82,
+     "end": 136.26
+    }
+   ]
+  }
+ ]
+}

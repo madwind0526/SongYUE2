@@ -1,0 +1,589 @@
+{
+ "version": 1,
+ "generatedAt": "2026-09-27T04:47:39.221Z",
+ "language": "ko",
+ "lyricsHash": "b387f4c86675",
+ "coverage": 0.98,
+ "lines": [
+  {
+   "text": "넌",
+   "start": 0,
+   "end": 0.08,
+   "confidence": 0,
+   "estimated": true,
+   "words": [
+    {
+     "text": "넌",
+     "start": 0,
+     "end": 0.08
+    }
+   ]
+  },
+  {
+   "text": "누구야?",
+   "start": 0.08,
+   "end": 4.01,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "누구야?",
+     "start": 0.08,
+     "end": 4.01
+    }
+   ]
+  },
+  {
+   "text": "세상은",
+   "start": 6.22,
+   "end": 7.02,
+   "confidence": 0.67,
+   "estimated": false,
+   "words": [
+    {
+     "text": "세상은",
+     "start": 6.22,
+     "end": 7.02
+    }
+   ]
+  },
+  {
+   "text": "비밀로 가득 차 있어",
+   "start": 7.9,
+   "end": 9.5,
+   "confidence": 0.88,
+   "estimated": false,
+   "words": [
+    {
+     "text": "비밀로",
+     "start": 7.9,
+     "end": 8.5
+    },
+    {
+     "text": "가득",
+     "start": 8.56,
+     "end": 8.9
+    },
+    {
+     "text": "차",
+     "start": 8.78,
+     "end": 9.1
+    },
+    {
+     "text": "있어",
+     "start": 9.02,
+     "end": 9.5
+    }
+   ]
+  },
+  {
+   "text": "눈이 있는 자는 볼 것이고",
+   "start": 12.68,
+   "end": 14.84,
+   "confidence": 0.9,
+   "estimated": false,
+   "words": [
+    {
+     "text": "눈이",
+     "start": 12.68,
+     "end": 13.11
+    },
+    {
+     "text": "있는",
+     "start": 13,
+     "end": 13.54
+    },
+    {
+     "text": "자는",
+     "start": 13.32,
+     "end": 13.98
+    },
+    {
+     "text": "볼",
+     "start": 14.04,
+     "end": 14.19
+    },
+    {
+     "text": "것이고",
+     "start": 14.12,
+     "end": 14.84
+    }
+   ]
+  },
+  {
+   "text": "귀가 있는 자는 듣겠지",
+   "start": 15.99,
+   "end": 24.01,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "귀가",
+     "start": 15.99,
+     "end": 17.77
+    },
+    {
+     "text": "있는",
+     "start": 16.43,
+     "end": 19.55
+    },
+    {
+     "text": "자는",
+     "start": 16.87,
+     "end": 21.34
+    },
+    {
+     "text": "듣겠지",
+     "start": 17.51,
+     "end": 24.01
+    }
+   ]
+  },
+  {
+   "text": "남이 만든 모조품이 아닌",
+   "start": 24.01,
+   "end": 26.17,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "남이",
+     "start": 24.01,
+     "end": 24.44
+    },
+    {
+     "text": "만든",
+     "start": 24.33,
+     "end": 24.87
+    },
+    {
+     "text": "모조품이",
+     "start": 24.73,
+     "end": 25.74
+    },
+    {
+     "text": "아닌",
+     "start": 25.45,
+     "end": 26.17
+    }
+   ]
+  },
+  {
+   "text": "내가 만든 눈과 귀라면",
+   "start": 26.73,
+   "end": 28.25,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "내가",
+     "start": 26.73,
+     "end": 27.07
+    },
+    {
+     "text": "만든",
+     "start": 27.13,
+     "end": 27.4
+    },
+    {
+     "text": "눈과",
+     "start": 27.5,
+     "end": 27.74
+    },
+    {
+     "text": "귀라면",
+     "start": 27.83,
+     "end": 28.25
+    }
+   ]
+  },
+  {
+   "text": "보이는 세상 뒤에 숨은",
+   "start": 29.61,
+   "end": 31.05,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "보이는",
+     "start": 29.61,
+     "end": 30.09
+    },
+    {
+     "text": "세상",
+     "start": 30.09,
+     "end": 30.41
+    },
+    {
+     "text": "뒤에",
+     "start": 30.49,
+     "end": 30.73
+    },
+    {
+     "text": "숨은",
+     "start": 30.73,
+     "end": 31.05
+    }
+   ]
+  },
+  {
+   "text": "모습과 소리를",
+   "start": 31.53,
+   "end": 32.33,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "모습과",
+     "start": 31.53,
+     "end": 31.93
+    },
+    {
+     "text": "소리를",
+     "start": 31.61,
+     "end": 32.33
+    }
+   ]
+  },
+  {
+   "text": "보고 듣겠지",
+   "start": 32.65,
+   "end": 34.65,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "보고",
+     "start": 32.65,
+     "end": 33.45
+    },
+    {
+     "text": "듣겠지",
+     "start": 33.13,
+     "end": 34.65
+    }
+   ]
+  },
+  {
+   "text": "미치지 않고서는",
+   "start": 35.29,
+   "end": 36.65,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "미치지",
+     "start": 35.29,
+     "end": 35.87
+    },
+    {
+     "text": "않고서는",
+     "start": 36.17,
+     "end": 36.65
+    }
+   ]
+  },
+  {
+   "text": "그 비밀을",
+   "start": 36.65,
+   "end": 37.45,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "그",
+     "start": 36.65,
+     "end": 36.85
+    },
+    {
+     "text": "비밀을",
+     "start": 37.37,
+     "end": 37.45
+    }
+   ]
+  },
+  {
+   "text": "찾을 수 없어",
+   "start": 38.26,
+   "end": 39.46,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "찾을",
+     "start": 38.26,
+     "end": 38.74
+    },
+    {
+     "text": "수",
+     "start": 38.5,
+     "end": 38.98
+    },
+    {
+     "text": "없어",
+     "start": 39.14,
+     "end": 39.46
+    }
+   ]
+  },
+  {
+   "text": "남이 적어준 스크립트를",
+   "start": 39.46,
+   "end": 42.5,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "남이",
+     "start": 39.46,
+     "end": 40.07
+    },
+    {
+     "text": "적어준",
+     "start": 40.02,
+     "end": 40.98
+    },
+    {
+     "text": "스크립트를",
+     "start": 41.94,
+     "end": 42.5
+    }
+   ]
+  },
+  {
+   "text": "앵무새처럼 되새기며",
+   "start": 42.5,
+   "end": 44.42,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "앵무새처럼",
+     "start": 42.5,
+     "end": 43.57
+    },
+    {
+     "text": "되새기며",
+     "start": 43.62,
+     "end": 44.42
+    }
+   ]
+  },
+  {
+   "text": "내 것인 척 살아갈 뿐이야",
+   "start": 44.42,
+   "end": 62.95,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "내",
+     "start": 44.42,
+     "end": 46.28
+    },
+    {
+     "text": "것인",
+     "start": 44.58,
+     "end": 49.98
+    },
+    {
+     "text": "척",
+     "start": 45.06,
+     "end": 51.84
+    },
+    {
+     "text": "살아갈",
+     "start": 61.81,
+     "end": 61.81
+    },
+    {
+     "text": "뿐이야",
+     "start": 62.63,
+     "end": 62.95
+    }
+   ]
+  },
+  {
+   "text": "세상은",
+   "start": 66.3,
+   "end": 67.58,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "세상은",
+     "start": 66.3,
+     "end": 67.58
+    }
+   ]
+  },
+  {
+   "text": "비밀로 가득 차 있어",
+   "start": 67.58,
+   "end": 85.42,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "비밀로",
+     "start": 67.58,
+     "end": 74.27
+    },
+    {
+     "text": "가득",
+     "start": 68.3,
+     "end": 78.73
+    },
+    {
+     "text": "차",
+     "start": 84.7,
+     "end": 84.7
+    },
+    {
+     "text": "있어",
+     "start": 84.94,
+     "end": 85.42
+    }
+   ]
+  },
+  {
+   "text": "볼 수 있는가",
+   "start": 91.82,
+   "end": 93.66,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "볼",
+     "start": 91.82,
+     "end": 92.18
+    },
+    {
+     "text": "수",
+     "start": 91.94,
+     "end": 92.55
+    },
+    {
+     "text": "있는가",
+     "start": 92.06,
+     "end": 93.66
+    }
+   ]
+  },
+  {
+   "text": "들을 수 있는가",
+   "start": 93.66,
+   "end": 95.82,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "들을",
+     "start": 93.66,
+     "end": 94.38
+    },
+    {
+     "text": "수",
+     "start": 93.74,
+     "end": 94.74
+    },
+    {
+     "text": "있는가",
+     "start": 93.82,
+     "end": 95.82
+    }
+   ]
+  },
+  {
+   "text": "진짜 너를",
+   "start": 95.82,
+   "end": 95.98,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "진짜",
+     "start": 95.82,
+     "end": 95.9
+    },
+    {
+     "text": "너를",
+     "start": 95.9,
+     "end": 95.98
+    }
+   ]
+  },
+  {
+   "text": "마주할 수 있는가",
+   "start": 103.19,
+   "end": 104.47,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "마주할",
+     "start": 103.19,
+     "end": 103.74
+    },
+    {
+     "text": "수",
+     "start": 103.35,
+     "end": 103.92
+    },
+    {
+     "text": "있는가",
+     "start": 103.43,
+     "end": 104.47
+    }
+   ]
+  },
+  {
+   "text": "세상은",
+   "start": 104.55,
+   "end": 104.95,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "세상은",
+     "start": 104.55,
+     "end": 104.95
+    }
+   ]
+  },
+  {
+   "text": "아직도 비밀로 가득 차 있어",
+   "start": 106.15,
+   "end": 108.07,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "아직도",
+     "start": 106.15,
+     "end": 106.68
+    },
+    {
+     "text": "비밀로",
+     "start": 106.47,
+     "end": 107.2
+    },
+    {
+     "text": "가득",
+     "start": 107.43,
+     "end": 107.55
+    },
+    {
+     "text": "차",
+     "start": 107.59,
+     "end": 107.72
+    },
+    {
+     "text": "있어",
+     "start": 107.83,
+     "end": 108.07
+    }
+   ]
+  }
+ ]
+}

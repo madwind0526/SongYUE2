@@ -1,0 +1,115 @@
+{
+ "version": 1,
+ "generatedAt": "2026-09-27T04:37:45.636Z",
+ "language": "ko",
+ "lyricsHash": "55b95872607f",
+ "coverage": 0.97,
+ "lines": [
+  {
+   "text": "조용한 밤에 혼자 걸어요",
+   "start": 0.57,
+   "end": 6.09,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "조용한",
+     "start": 0.57,
+     "end": 2.22
+    },
+    {
+     "text": "밤에",
+     "start": 2.09,
+     "end": 3.33
+    },
+    {
+     "text": "혼자",
+     "start": 4.09,
+     "end": 4.43
+    },
+    {
+     "text": "걸어요",
+     "start": 4.89,
+     "end": 6.09
+    }
+   ]
+  },
+  {
+   "text": "작은 불빛이 나를 따라와요",
+   "start": 7.7,
+   "end": 12.82,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "작은",
+     "start": 7.7,
+     "end": 8.63
+    },
+    {
+     "text": "불빛이",
+     "start": 8.74,
+     "end": 10.03
+    },
+    {
+     "text": "나를",
+     "start": 9.94,
+     "end": 10.96
+    },
+    {
+     "text": "따라와요",
+     "start": 10.66,
+     "end": 12.82
+    }
+   ]
+  },
+  {
+   "text": "이 노래가 닿기를",
+   "start": 14.15,
+   "end": 18.71,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "이",
+     "start": 14.15,
+     "end": 14.8
+    },
+    {
+     "text": "노래가",
+     "start": 14.31,
+     "end": 16.76
+    },
+    {
+     "text": "닿기를",
+     "start": 17.43,
+     "end": 18.71
+    }
+   ]
+  },
+  {
+   "text": "내 마음이 닿기를",
+   "start": 19.9,
+   "end": 25.35,
+   "confidence": 0.86,
+   "estimated": false,
+   "words": [
+    {
+     "text": "내",
+     "start": 19.9,
+     "end": 20.68
+    },
+    {
+     "text": "마음이",
+     "start": 20.3,
+     "end": 23.01
+    },
+    {
+     "text": "닿기를",
+     "start": 24.47,
+     "end": 25.35
+    }
+   ]
+  }
+ ]
+}

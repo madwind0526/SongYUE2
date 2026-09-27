@@ -1,0 +1,743 @@
+{
+ "version": 1,
+ "generatedAt": "2026-09-27T04:45:21.028Z",
+ "language": "en",
+ "lyricsHash": "01be379f8a7e",
+ "coverage": 0.92,
+ "lines": [
+  {
+   "text": "Who",
+   "start": 31.29,
+   "end": 31.53,
+   "confidence": 0,
+   "estimated": true,
+   "words": [
+    {
+     "text": "Who",
+     "start": 31.29,
+     "end": 31.53
+    }
+   ]
+  },
+  {
+   "text": "are you?",
+   "start": 31.53,
+   "end": 32.01,
+   "confidence": 0,
+   "estimated": true,
+   "words": [
+    {
+     "text": "are",
+     "start": 31.53,
+     "end": 31.77
+    },
+    {
+     "text": "you?",
+     "start": 31.77,
+     "end": 32.01
+    }
+   ]
+  },
+  {
+   "text": "The world",
+   "start": 32.01,
+   "end": 32.65,
+   "confidence": 0,
+   "estimated": true,
+   "words": [
+    {
+     "text": "The",
+     "start": 32.01,
+     "end": 32.25
+    },
+    {
+     "text": "world",
+     "start": 32.25,
+     "end": 32.65
+    }
+   ]
+  },
+  {
+   "text": "is full of secrets",
+   "start": 32.65,
+   "end": 34.25,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "is",
+     "start": 32.65,
+     "end": 32.86
+    },
+    {
+     "text": "full",
+     "start": 32.89,
+     "end": 33.29
+    },
+    {
+     "text": "of",
+     "start": 33.53,
+     "end": 33.53
+    },
+    {
+     "text": "secrets",
+     "start": 33.61,
+     "end": 34.25
+    }
+   ]
+  },
+  {
+   "text": "Those with eyes will see",
+   "start": 36.68,
+   "end": 39,
+   "confidence": 0.9,
+   "estimated": false,
+   "words": [
+    {
+     "text": "Those",
+     "start": 36.68,
+     "end": 37.26
+    },
+    {
+     "text": "with",
+     "start": 37,
+     "end": 37.72
+    },
+    {
+     "text": "eyes",
+     "start": 37.24,
+     "end": 38.19
+    },
+    {
+     "text": "will",
+     "start": 37.64,
+     "end": 38.65
+    },
+    {
+     "text": "see",
+     "start": 37.72,
+     "end": 39
+    }
+   ]
+  },
+  {
+   "text": "Those with ears will hear",
+   "start": 40.17,
+   "end": 42.25,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "Those",
+     "start": 40.17,
+     "end": 40.66
+    },
+    {
+     "text": "with",
+     "start": 40.49,
+     "end": 41.06
+    },
+    {
+     "text": "ears",
+     "start": 40.73,
+     "end": 41.46
+    },
+    {
+     "text": "will",
+     "start": 41.13,
+     "end": 41.85
+    },
+    {
+     "text": "hear",
+     "start": 41.29,
+     "end": 42.25
+    }
+   ]
+  },
+  {
+   "text": "Not the imitation made by others",
+   "start": 43.29,
+   "end": 46.81,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "Not",
+     "start": 43.29,
+     "end": 43.68
+    },
+    {
+     "text": "the",
+     "start": 43.61,
+     "end": 44.07
+    },
+    {
+     "text": "imitation",
+     "start": 43.93,
+     "end": 45.24
+    },
+    {
+     "text": "made",
+     "start": 45.13,
+     "end": 45.77
+    },
+    {
+     "text": "by",
+     "start": 45.61,
+     "end": 46.03
+    },
+    {
+     "text": "others",
+     "start": 45.77,
+     "end": 46.81
+    }
+   ]
+  },
+  {
+   "text": "But eyes and ears made by yourself",
+   "start": 47.13,
+   "end": 50.33,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "But",
+     "start": 47.13,
+     "end": 47.47
+    },
+    {
+     "text": "eyes",
+     "start": 47.37,
+     "end": 47.93
+    },
+    {
+     "text": "and",
+     "start": 47.61,
+     "end": 48.27
+    },
+    {
+     "text": "ears",
+     "start": 47.77,
+     "end": 48.73
+    },
+    {
+     "text": "made",
+     "start": 48.17,
+     "end": 49.19
+    },
+    {
+     "text": "by",
+     "start": 48.65,
+     "end": 49.41
+    },
+    {
+     "text": "yourself",
+     "start": 49.13,
+     "end": 50.33
+    }
+   ]
+  },
+  {
+   "text": "Then behind the world you see",
+   "start": 50.81,
+   "end": 53.77,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "Then",
+     "start": 50.81,
+     "end": 51.3
+    },
+    {
+     "text": "behind",
+     "start": 51.13,
+     "end": 52.04
+    },
+    {
+     "text": "the",
+     "start": 51.85,
+     "end": 52.41
+    },
+    {
+     "text": "world",
+     "start": 51.93,
+     "end": 53.03
+    },
+    {
+     "text": "you",
+     "start": 52.41,
+     "end": 53.4
+    },
+    {
+     "text": "see",
+     "start": 52.49,
+     "end": 53.77
+    }
+   ]
+  },
+  {
+   "text": "The true faces and sounds",
+   "start": 54.17,
+   "end": 57.53,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "The",
+     "start": 54.17,
+     "end": 54.65
+    },
+    {
+     "text": "true",
+     "start": 54.25,
+     "end": 55.29
+    },
+    {
+     "text": "faces",
+     "start": 54.65,
+     "end": 56.09
+    },
+    {
+     "text": "and",
+     "start": 56.17,
+     "end": 56.57
+    },
+    {
+     "text": "sounds",
+     "start": 56.33,
+     "end": 57.53
+    }
+   ]
+  },
+  {
+   "text": "You will see and hear",
+   "start": 57.85,
+   "end": 60.09,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "You",
+     "start": 57.85,
+     "end": 58.24
+    },
+    {
+     "text": "will",
+     "start": 58.09,
+     "end": 58.77
+    },
+    {
+     "text": "see",
+     "start": 58.25,
+     "end": 59.17
+    },
+    {
+     "text": "and",
+     "start": 59.61,
+     "end": 59.61
+    },
+    {
+     "text": "hear",
+     "start": 60.01,
+     "end": 60.09
+    }
+   ]
+  },
+  {
+   "text": "Without losing your mind",
+   "start": 62.81,
+   "end": 66.81,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "Without",
+     "start": 62.81,
+     "end": 64.14
+    },
+    {
+     "text": "losing",
+     "start": 64.81,
+     "end": 65.28
+    },
+    {
+     "text": "your",
+     "start": 65.05,
+     "end": 66.05
+    },
+    {
+     "text": "mind",
+     "start": 65.21,
+     "end": 66.81
+    }
+   ]
+  },
+  {
+   "text": "You cannot find",
+   "start": 67.24,
+   "end": 70.2,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "You",
+     "start": 67.24,
+     "end": 67.92
+    },
+    {
+     "text": "cannot",
+     "start": 68.52,
+     "end": 69.29
+    },
+    {
+     "text": "find",
+     "start": 69,
+     "end": 70.2
+    }
+   ]
+  },
+  {
+   "text": "That secret",
+   "start": 70.2,
+   "end": 71.16,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "That",
+     "start": 70.2,
+     "end": 70.58
+    },
+    {
+     "text": "secret",
+     "start": 70.36,
+     "end": 71.16
+    }
+   ]
+  },
+  {
+   "text": "Reciting a script",
+   "start": 72.2,
+   "end": 74.28,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "Reciting",
+     "start": 72.2,
+     "end": 73.31
+    },
+    {
+     "text": "a",
+     "start": 73.19,
+     "end": 73.45
+    },
+    {
+     "text": "script",
+     "start": 73.64,
+     "end": 74.28
+    }
+   ]
+  },
+  {
+   "text": "Written by someone else",
+   "start": 74.68,
+   "end": 78.6,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "Written",
+     "start": 74.68,
+     "end": 76.05
+    },
+    {
+     "text": "by",
+     "start": 75.08,
+     "end": 76.44
+    },
+    {
+     "text": "someone",
+     "start": 75.8,
+     "end": 77.82
+    },
+    {
+     "text": "else",
+     "start": 76.52,
+     "end": 78.6
+    }
+   ]
+  },
+  {
+   "text": "Like a parrot",
+   "start": 78.92,
+   "end": 79.48,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "Like",
+     "start": 78.92,
+     "end": 79.12
+    },
+    {
+     "text": "a",
+     "start": 79.32,
+     "end": 79.32
+    },
+    {
+     "text": "parrot",
+     "start": 79.4,
+     "end": 79.48
+    }
+   ]
+  },
+  {
+   "text": "Just living as if it were your own",
+   "start": 82.5,
+   "end": 91.74,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "Just",
+     "start": 82.5,
+     "end": 83.87
+    },
+    {
+     "text": "living",
+     "start": 82.9,
+     "end": 85.92
+    },
+    {
+     "text": "as",
+     "start": 83.86,
+     "end": 86.61
+    },
+    {
+     "text": "if",
+     "start": 83.94,
+     "end": 87.29
+    },
+    {
+     "text": "it",
+     "start": 84.21,
+     "end": 87.97
+    },
+    {
+     "text": "were",
+     "start": 84.26,
+     "end": 89.34
+    },
+    {
+     "text": "your",
+     "start": 86.62,
+     "end": 90.71
+    },
+    {
+     "text": "own",
+     "start": 91.03,
+     "end": 91.74
+    }
+   ]
+  },
+  {
+   "text": "The world",
+   "start": 93.43,
+   "end": 95.45,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "The",
+     "start": 93.43,
+     "end": 94.19
+    },
+    {
+     "text": "world",
+     "start": 95.43,
+     "end": 95.45
+    }
+   ]
+  },
+  {
+   "text": "is full of secrets",
+   "start": 96.31,
+   "end": 98.31,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "is",
+     "start": 96.31,
+     "end": 96.58
+    },
+    {
+     "text": "full",
+     "start": 96.63,
+     "end": 97.11
+    },
+    {
+     "text": "of",
+     "start": 96.87,
+     "end": 97.38
+    },
+    {
+     "text": "secrets",
+     "start": 97.03,
+     "end": 98.31
+    }
+   ]
+  },
+  {
+   "text": "Can you see",
+   "start": 99.5,
+   "end": 100.62,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "Can",
+     "start": 99.5,
+     "end": 99.87
+    },
+    {
+     "text": "you",
+     "start": 100.3,
+     "end": 100.3
+    },
+    {
+     "text": "see",
+     "start": 100.38,
+     "end": 100.62
+    }
+   ]
+  },
+  {
+   "text": "Can you hear",
+   "start": 101.5,
+   "end": 102.86,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "Can",
+     "start": 101.5,
+     "end": 101.9
+    },
+    {
+     "text": "you",
+     "start": 101.98,
+     "end": 102.31
+    },
+    {
+     "text": "hear",
+     "start": 102.22,
+     "end": 102.86
+    }
+   ]
+  },
+  {
+   "text": "Can you face",
+   "start": 103.26,
+   "end": 104.94,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "Can",
+     "start": 103.26,
+     "end": 103.76
+    },
+    {
+     "text": "you",
+     "start": 103.82,
+     "end": 104.26
+    },
+    {
+     "text": "face",
+     "start": 104.7,
+     "end": 104.94
+    }
+   ]
+  },
+  {
+   "text": "The real you",
+   "start": 104.94,
+   "end": 106.86,
+   "confidence": 0.6,
+   "estimated": false,
+   "words": [
+    {
+     "text": "The",
+     "start": 104.94,
+     "end": 105.51
+    },
+    {
+     "text": "real",
+     "start": 105.02,
+     "end": 106.29
+    },
+    {
+     "text": "you",
+     "start": 106.29,
+     "end": 106.86
+    }
+   ]
+  },
+  {
+   "text": "The world",
+   "start": 106.86,
+   "end": 107.48,
+   "confidence": 0.13,
+   "estimated": false,
+   "words": [
+    {
+     "text": "The",
+     "start": 106.86,
+     "end": 107.1
+    },
+    {
+     "text": "world",
+     "start": 106.86,
+     "end": 107.48
+    }
+   ]
+  },
+  {
+   "text": "is still full of secrets",
+   "start": 110.2,
+   "end": 112.04,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "is",
+     "start": 110.2,
+     "end": 110.38
+    },
+    {
+     "text": "still",
+     "start": 110.44,
+     "end": 110.84
+    },
+    {
+     "text": "full",
+     "start": 110.76,
+     "end": 111.21
+    },
+    {
+     "text": "of",
+     "start": 111.24,
+     "end": 111.4
+    },
+    {
+     "text": "secrets",
+     "start": 111.32,
+     "end": 112.04
+    }
+   ]
+  }
+ ]
+}

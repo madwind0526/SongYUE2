@@ -1,0 +1,209 @@
+{
+ "version": 1,
+ "generatedAt": "2026-09-27T04:42:14.693Z",
+ "language": "ko",
+ "lyricsHash": "b6d595d6fcb9",
+ "coverage": 0.5,
+ "lines": [
+  {
+   "text": "가을은",
+   "start": 18.95,
+   "end": 19.91,
+   "confidence": 0.67,
+   "estimated": false,
+   "words": [
+    {
+     "text": "가을은",
+     "start": 18.95,
+     "end": 19.91
+    }
+   ]
+  },
+  {
+   "text": "언제 오려나 했는데",
+   "start": 22.6,
+   "end": 24.66,
+   "confidence": 0.63,
+   "estimated": false,
+   "words": [
+    {
+     "text": "언제",
+     "start": 22.6,
+     "end": 23.12
+    },
+    {
+     "text": "오려나",
+     "start": 23.64,
+     "end": 23.89
+    },
+    {
+     "text": "했는데",
+     "start": 23.89,
+     "end": 24.66
+    }
+   ]
+  },
+  {
+   "text": "벌써 와 있다",
+   "start": 30.63,
+   "end": 31.19,
+   "confidence": 0.4,
+   "estimated": false,
+   "words": [
+    {
+     "text": "벌써",
+     "start": 30.63,
+     "end": 30.86
+    },
+    {
+     "text": "와",
+     "start": 30.86,
+     "end": 30.97
+    },
+    {
+     "text": "있다",
+     "start": 30.97,
+     "end": 31.19
+    }
+   ]
+  },
+  {
+   "text": "내 머리 위에도",
+   "start": 37.05,
+   "end": 38.97,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "내",
+     "start": 37.05,
+     "end": 37.37
+    },
+    {
+     "text": "머리",
+     "start": 37.45,
+     "end": 38.01
+    },
+    {
+     "text": "위에도",
+     "start": 37.93,
+     "end": 38.97
+    }
+   ]
+  },
+  {
+   "text": "내 발끝에도",
+   "start": 42.6,
+   "end": 43.96,
+   "confidence": 0.8,
+   "estimated": false,
+   "words": [
+    {
+     "text": "내",
+     "start": 42.6,
+     "end": 42.87
+    },
+    {
+     "text": "발끝에도",
+     "start": 42.6,
+     "end": 43.96
+    }
+   ]
+  },
+  {
+   "text": "와 있는 가을에",
+   "start": 46.63,
+   "end": 48.39,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "와",
+     "start": 46.63,
+     "end": 46.93
+    },
+    {
+     "text": "있는",
+     "start": 47.03,
+     "end": 47.51
+    },
+    {
+     "text": "가을에",
+     "start": 47.75,
+     "end": 48.39
+    }
+   ]
+  },
+  {
+   "text": "내 마음이 물든다",
+   "start": 58.16,
+   "end": 60.59,
+   "confidence": 0,
+   "estimated": true,
+   "words": [
+    {
+     "text": "내",
+     "start": 58.16,
+     "end": 58.51
+    },
+    {
+     "text": "마음이",
+     "start": 58.51,
+     "end": 59.55
+    },
+    {
+     "text": "물든다",
+     "start": 59.55,
+     "end": 60.59
+    }
+   ]
+  },
+  {
+   "text": "익숙해질 즈음",
+   "start": 71.61,
+   "end": 73.69,
+   "confidence": 0,
+   "estimated": true,
+   "words": [
+    {
+     "text": "익숙해질",
+     "start": 71.61,
+     "end": 73
+    },
+    {
+     "text": "즈음",
+     "start": 73,
+     "end": 73.69
+    }
+   ]
+  },
+  {
+   "text": "떨어진다.",
+   "start": 83.14,
+   "end": 84.53,
+   "confidence": 0,
+   "estimated": true,
+   "words": [
+    {
+     "text": "떨어진다.",
+     "start": 83.14,
+     "end": 84.53
+    }
+   ]
+  },
+  {
+   "text": "사랑처럼.",
+   "start": 90.82,
+   "end": 91.62,
+   "confidence": 0.5,
+   "estimated": false,
+   "words": [
+    {
+     "text": "사랑처럼.",
+     "start": 90.82,
+     "end": 91.62
+    }
+   ]
+  }
+ ]
+}

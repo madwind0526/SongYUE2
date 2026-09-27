@@ -1,0 +1,637 @@
+{
+ "version": 1,
+ "generatedAt": "2026-09-27T04:38:21.427Z",
+ "language": "ko",
+ "lyricsHash": "3cd548df8663",
+ "coverage": 0.91,
+ "lines": [
+  {
+   "text": "(Spoken - soft, whispered)",
+   "start": 8.46,
+   "end": 13.53,
+   "confidence": 0,
+   "estimated": true,
+   "words": [
+    {
+     "text": "(Spoken",
+     "start": 8.46,
+     "end": 9.98
+    },
+    {
+     "text": "-",
+     "start": 9.98,
+     "end": 10.23
+    },
+    {
+     "text": "soft,",
+     "start": 10.23,
+     "end": 11.25
+    },
+    {
+     "text": "whispered)",
+     "start": 11.25,
+     "end": 13.53
+    }
+   ]
+  },
+  {
+   "text": "오늘은 목요일",
+   "start": 13.53,
+   "end": 16.17,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "오늘은",
+     "start": 13.53,
+     "end": 14.85
+    },
+    {
+     "text": "목요일",
+     "start": 15.21,
+     "end": 16.17
+    }
+   ]
+  },
+  {
+   "text": "순대 아저씨가 안 왔어",
+   "start": 16.81,
+   "end": 19.21,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "순대",
+     "start": 16.81,
+     "end": 17.34
+    },
+    {
+     "text": "아저씨가",
+     "start": 17.93,
+     "end": 18.41
+    },
+    {
+     "text": "안",
+     "start": 18.41,
+     "end": 18.67
+    },
+    {
+     "text": "왔어",
+     "start": 18.67,
+     "end": 19.21
+    }
+   ]
+  },
+  {
+   "text": "그래서 술레를 갔지",
+   "start": 20.17,
+   "end": 22.49,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "그래서",
+     "start": 20.17,
+     "end": 21.04
+    },
+    {
+     "text": "술레를",
+     "start": 21.21,
+     "end": 21.91
+    },
+    {
+     "text": "갔지",
+     "start": 21.93,
+     "end": 22.49
+    }
+   ]
+  },
+  {
+   "text": "혼술하는 사람이 많아서",
+   "start": 23.61,
+   "end": 25.93,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "혼술하는",
+     "start": 23.61,
+     "end": 24.54
+    },
+    {
+     "text": "사람이",
+     "start": 24.41,
+     "end": 25.23
+    },
+    {
+     "text": "많아서",
+     "start": 25.05,
+     "end": 25.93
+    }
+   ]
+  },
+  {
+   "text": "이상하진 않았어",
+   "start": 26.08,
+   "end": 28.4,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "이상하진",
+     "start": 26.08,
+     "end": 27.41
+    },
+    {
+     "text": "않았어",
+     "start": 27.44,
+     "end": 28.4
+    }
+   ]
+  },
+  {
+   "text": "오랜만에",
+   "start": 30.02,
+   "end": 31.62,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "오랜만에",
+     "start": 30.02,
+     "end": 31.62
+    }
+   ]
+  },
+  {
+   "text": "호수 한 바퀴를 걸었지",
+   "start": 32.02,
+   "end": 34.66,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "호수",
+     "start": 32.02,
+     "end": 32.61
+    },
+    {
+     "text": "한",
+     "start": 32.61,
+     "end": 32.9
+    },
+    {
+     "text": "바퀴를",
+     "start": 32.9,
+     "end": 33.78
+    },
+    {
+     "text": "걸었지",
+     "start": 33.62,
+     "end": 34.66
+    }
+   ]
+  },
+  {
+   "text": "누가 그랬어",
+   "start": 36.6,
+   "end": 37.88,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "누가",
+     "start": 36.6,
+     "end": 37.11
+    },
+    {
+     "text": "그랬어",
+     "start": 37.08,
+     "end": 37.88
+    }
+   ]
+  },
+  {
+   "text": "각각의 사람은 온 우주와 같아서",
+   "start": 38.52,
+   "end": 41.8,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "각각의",
+     "start": 38.52,
+     "end": 39.28
+    },
+    {
+     "text": "사람은",
+     "start": 39.08,
+     "end": 40.03
+    },
+    {
+     "text": "온",
+     "start": 39.88,
+     "end": 40.29
+    },
+    {
+     "text": "우주와",
+     "start": 40.2,
+     "end": 41.04
+    },
+    {
+     "text": "같아서",
+     "start": 40.68,
+     "end": 41.8
+    }
+   ]
+  },
+  {
+   "text": "두 사람이 만나는 건",
+   "start": 43.96,
+   "end": 45.96,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "두",
+     "start": 43.96,
+     "end": 44.21
+    },
+    {
+     "text": "사람이",
+     "start": 44.12,
+     "end": 44.96
+    },
+    {
+     "text": "만나는",
+     "start": 45.32,
+     "end": 45.71
+    },
+    {
+     "text": "건",
+     "start": 45.72,
+     "end": 45.96
+    }
+   ]
+  },
+  {
+   "text": "두 우주가 충돌하는",
+   "start": 47.16,
+   "end": 49.64,
+   "confidence": 0.88,
+   "estimated": false,
+   "words": [
+    {
+     "text": "두",
+     "start": 47.16,
+     "end": 47.47
+    },
+    {
+     "text": "우주가",
+     "start": 47.56,
+     "end": 48.4
+    },
+    {
+     "text": "충돌하는",
+     "start": 48.2,
+     "end": 49.64
+    }
+   ]
+  },
+  {
+   "text": "전우주적 이벤트라고",
+   "start": 50.84,
+   "end": 54.68,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "전우주적",
+     "start": 50.84,
+     "end": 52.55
+    },
+    {
+     "text": "이벤트라고",
+     "start": 53.96,
+     "end": 54.68
+    }
+   ]
+  },
+  {
+   "text": "근데",
+   "start": 57.21,
+   "end": 57.77,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "근데",
+     "start": 57.21,
+     "end": 57.77
+    }
+   ]
+  },
+  {
+   "text": "그 많은 우주가 옆을 지나가는데",
+   "start": 58.33,
+   "end": 62.89,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "그",
+     "start": 58.33,
+     "end": 58.68
+    },
+    {
+     "text": "많은",
+     "start": 58.41,
+     "end": 59.38
+    },
+    {
+     "text": "우주가",
+     "start": 59.69,
+     "end": 60.43
+    },
+    {
+     "text": "옆을",
+     "start": 60.81,
+     "end": 61.13
+    },
+    {
+     "text": "지나가는데",
+     "start": 61.05,
+     "end": 62.89
+    }
+   ]
+  },
+  {
+   "text": "나는",
+   "start": 63.61,
+   "end": 64.25,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "나는",
+     "start": 63.61,
+     "end": 64.25
+    }
+   ]
+  },
+  {
+   "text": "왜 휘청이지 않는 걸까",
+   "start": 65.05,
+   "end": 68.57,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "왜",
+     "start": 65.05,
+     "end": 65.44
+    },
+    {
+     "text": "휘청이지",
+     "start": 65.13,
+     "end": 67
+    },
+    {
+     "text": "않는",
+     "start": 66.89,
+     "end": 67.79
+    },
+    {
+     "text": "걸까",
+     "start": 67.61,
+     "end": 68.57
+    }
+   ]
+  },
+  {
+   "text": "왜 중력이 느껴지지 않는 걸까",
+   "start": 70.92,
+   "end": 77.08,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "왜",
+     "start": 70.92,
+     "end": 71.43
+    },
+    {
+     "text": "중력이",
+     "start": 71.08,
+     "end": 72.97
+    },
+    {
+     "text": "느껴지지",
+     "start": 71.88,
+     "end": 75.03
+    },
+    {
+     "text": "않는",
+     "start": 75.8,
+     "end": 76.05
+    },
+    {
+     "text": "걸까",
+     "start": 75.88,
+     "end": 77.08
+    }
+   ]
+  },
+  {
+   "text": "술 한 잔에도",
+   "start": 79.42,
+   "end": 81.18,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "술",
+     "start": 79.42,
+     "end": 79.77
+    },
+    {
+     "text": "한",
+     "start": 79.82,
+     "end": 80.12
+    },
+    {
+     "text": "잔에도",
+     "start": 80.14,
+     "end": 81.18
+    }
+   ]
+  },
+  {
+   "text": "팔랑거리는 종이인형처럼",
+   "start": 81.9,
+   "end": 85.02,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "팔랑거리는",
+     "start": 81.9,
+     "end": 83.31
+    },
+    {
+     "text": "종이인형처럼",
+     "start": 82.86,
+     "end": 85.02
+    }
+   ]
+  },
+  {
+   "text": "팔랑팔랑 흔들리며",
+   "start": 86.23,
+   "end": 88.95,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "팔랑팔랑",
+     "start": 86.23,
+     "end": 87.59
+    },
+    {
+     "text": "흔들리며",
+     "start": 88.63,
+     "end": 88.95
+    }
+   ]
+  },
+  {
+   "text": "호수 한 바퀴를 돌았지",
+   "start": 89.35,
+   "end": 91.51,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "호수",
+     "start": 89.35,
+     "end": 89.83
+    },
+    {
+     "text": "한",
+     "start": 89.67,
+     "end": 90.07
+    },
+    {
+     "text": "바퀴를",
+     "start": 90.07,
+     "end": 90.79
+    },
+    {
+     "text": "돌았지",
+     "start": 90.71,
+     "end": 91.51
+    }
+   ]
+  },
+  {
+   "text": "그리고",
+   "start": 95.86,
+   "end": 96.58,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "그리고",
+     "start": 95.86,
+     "end": 96.58
+    }
+   ]
+  },
+  {
+   "text": "나를 지나가는 사람들도",
+   "start": 97.7,
+   "end": 99.78,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "나를",
+     "start": 97.7,
+     "end": 98.12
+    },
+    {
+     "text": "지나가는",
+     "start": 98.02,
+     "end": 98.95
+    },
+    {
+     "text": "사람들도",
+     "start": 98.82,
+     "end": 99.78
+    }
+   ]
+  },
+  {
+   "text": "휘청거리지 않아",
+   "start": 102.79,
+   "end": 107.29,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "휘청거리지",
+     "start": 102.79,
+     "end": 106
+    },
+    {
+     "text": "않아",
+     "start": 107.27,
+     "end": 107.29
+    }
+   ]
+  },
+  {
+   "text": "나는 언제",
+   "start": 109.4,
+   "end": 110.44,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "나는",
+     "start": 109.4,
+     "end": 109.92
+    },
+    {
+     "text": "언제",
+     "start": 109.88,
+     "end": 110.44
+    }
+   ]
+  },
+  {
+   "text": "이렇게 가벼워진 걸까",
+   "start": 111.4,
+   "end": 113.72,
+   "confidence": 1,
+   "estimated": false,
+   "words": [
+    {
+     "text": "이렇게",
+     "start": 111.4,
+     "end": 112.17
+    },
+    {
+     "text": "가벼워진",
+     "start": 111.96,
+     "end": 113.2
+    },
+    {
+     "text": "걸까",
+     "start": 112.84,
+     "end": 113.72
+    }
+   ]
+  }
+ ]
+}
