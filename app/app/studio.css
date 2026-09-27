@@ -128,3 +128,6 @@
 
 /* editable slider value: looks like text until it is clicked */
 .pp-slider-edit{display:inline-flex;align-items:baseline;justify-content:flex-end;gap:3px;color:#dfe9dc}.pp-slider-edit input{width:44px;height:20px;padding:0 2px;border:1px solid transparent;border-radius:4px;background:transparent;color:inherit;font:inherit;text-align:right;font-variant-numeric:tabular-nums;cursor:text}.pp-slider-edit input:hover{border-color:#3b453b}.pp-slider-edit input:focus{outline:none;border-color:#7fb069;background:#141a13}.pp-slider-edit em{font-style:normal;color:#9db08d;min-width:14px}
+
+.themed-audio{display:flex;align-items:center;gap:10px;margin-top:4px;padding:8px 12px;border:1px solid #384038;border-radius:6px;background:#1e241d}.themed-audio .pp-seek-bar{min-width:0}
+.train-ab-players .themed-audio{min-width:320px}.adapter-samples .themed-audio{margin-top:0;padding:4px 10px}

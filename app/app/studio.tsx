@@ -2303,6 +2303,30 @@ function MidiEditorDialog({ project, onClose, notify }: { project: Project; onCl
   </>;
 }
 
+// Themed replacement for the browser's native <audio controls> (white pill): same play button, seek bar and volume slider as the other players.
+function ThemedAudioPlayer({ src, audioRef: externalRef, onTime, preload = 'metadata' }: { src: string; audioRef?: React.RefObject<HTMLAudioElement | null>; onTime?: (seconds: number) => void; preload?: 'none' | 'metadata' }) {
+  const ownRef = useRef<HTMLAudioElement>(null);
+  const audioRef = externalRef || ownRef;
+  const [playing, setPlaying] = useState(false);
+  const [time, setTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [volume, setVolume] = useState(1);
+  function toggle() {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (audio.paused) void audio.play().catch(() => {}); else audio.pause();
+  }
+  return <div className="themed-audio">
+    <audio ref={audioRef} src={src} preload={preload} onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} onTimeUpdate={event => { setTime(event.currentTarget.currentTime); onTime?.(event.currentTarget.currentTime); }} onLoadedMetadata={event => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)} onDurationChange={event => setDuration(Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0)}/>
+    <button type="button" className="pp-waveform-label" aria-label={playing ? '일시정지' : '재생'} onClick={toggle}>{playing ? <Pause size={15}/> : <Play size={15}/>}</button>
+    <span className="pp-seek-time">{formatSeekTime(time)}</span>
+    <input className="pp-seek-bar" type="range" aria-label="재생 위치" min={0} max={duration || 0} step={0.01} value={Math.min(time, duration || 0)} onChange={event => { const audio = audioRef.current; if (audio) { audio.currentTime = Number(event.target.value); setTime(audio.currentTime); } }} disabled={!duration}/>
+    <span className="pp-seek-time">{formatSeekTime(duration)}</span>
+    <Volume2 size={14} className="pp-volume-icon"/>
+    <input className="abc-player-volume" type="range" aria-label="볼륨" min={0} max={1} step={0.05} value={volume} onChange={event => { const next = Number(event.target.value); setVolume(next); if (audioRef.current) audioRef.current.volume = next; }}/>
+  </div>;
+}
+
 // Shared preview transport state for source, reference, and transformed audio rows.
 // The four timbre engines all play one keyed buffer at a time, so this keeps
 // playback, seeking, speed, and volume behavior consistent across tabs.
@@ -3580,10 +3604,10 @@ function LyricsSyncDialog({ project, onClose, notify }: { project: Project; onCl
   return <Dialog open onOpenChange={next => { if (!next && !running) onClose(); }}>
     <DialogContent className="studio-dialog lyric-sync-dialog">
       <DialogTitle>가사 싱크</DialogTitle>
-      <DialogDescription>{project.title} — 곡의 가사를 소리에 맞춰 줄 단위 시간으로 만들고, 재생하면서 확인합니다.</DialogDescription>
+      <DialogDescription>{project.title} —<br/>곡의 가사를 소리에 맞춰 줄 단위 시간으로 만들고, 재생하면서 확인합니다.</DialogDescription>
       {loading ? <p className="field-hint"><LoaderCircle className="spin" size={14}/> 불러오는 중…</p> : <>
         {!hasLyrics && <p className="field-hint warning">이 곡에는 가사가 없어 싱크를 만들 수 없습니다.</p>}
-        {(!sync || sync.stale) && hasLyrics && <p className="field-hint">{sync?.stale ? '곡이나 가사가 바뀌어 예전 싱크가 맞지 않을 수 있습니다. 다시 만들어 주세요.' : '아직 싱크가 없습니다.'} 보컬을 분리하고 음성 인식으로 단어 시간을 구해 가사 줄에 맞추며, 곡 길이에 따라 약 20~40초 걸립니다.</p>}
+        {(!sync || sync.stale) && hasLyrics && <p className="field-hint">{sync?.stale ? '곡이나 가사가 바뀌어 예전 싱크가 맞지 않을 수 있습니다. 다시 만들어 주세요.' : '아직 싱크가 없습니다.'} 보컬을 분리하고 음성 인식으로 단어 시간을 구해 가사 줄에 맞추며,<br/>곡 길이에 따라 약 20~40초 걸립니다.</p>}
         <div className="lyric-sync-actions">
           <Button onClick={() => void make()} disabled={running || !hasLyrics}>{running ? <LoaderCircle className="spin" size={14}/> : <WandSparkles size={14}/>}{sync ? '다시 만들기' : '가사 싱크 만들기'}</Button>
           {sync && <Button variant="outline" onClick={() => void saveLrc()} disabled={running}><Download size={14}/>LRC 저장</Button>}
@@ -3591,8 +3615,8 @@ function LyricsSyncDialog({ project, onClose, notify }: { project: Project; onCl
         </div>
         {errorText && <p className="field-hint warning">{errorText}</p>}
         {sync && <>
-          <span className="field-hint">언어 {languageName[sync.language] || sync.language} · 글자 일치율 {Math.round(sync.coverage * 100)}% (낮으면 인식이 어긋난 곳이 많습니다). 줄을 누르면 그 위치부터 재생합니다. <b>~</b> 표시는 인식되지 않아 시간을 추정한 줄입니다.</span>
-          <audio ref={audioRef} controls src={`/api/projects/${project.id}/audio`} onTimeUpdate={event => setTime(event.currentTarget.currentTime)} style={{ width: '100%' }}/>
+          <span className="field-hint">언어 {languageName[sync.language] || sync.language} · 글자 일치율 {Math.round(sync.coverage * 100)}% (낮으면 인식이 어긋난 곳이 많습니다).<br/>줄을 누르면 그 위치부터 재생합니다. <b>~</b> 표시는 인식되지 않아 시간을 추정한 줄입니다.</span>
+          <ThemedAudioPlayer audioRef={audioRef} src={`/api/projects/${project.id}/audio`} onTime={setTime}/>
           <div className="lyric-sync-list" role="list">
             {sync.lines.map((line, index) => <button key={index} ref={index === current ? activeRef : undefined} type="button" role="listitem" className={`lyric-sync-line${index === current ? ' current' : ''}${line.confidence < 0.5 ? ' weak' : ''}`} onClick={() => seek(line.start)}>
               <span className="lyric-sync-time">{formatSeekTime(line.start)}{line.estimated ? '~' : ''}</span><span>{line.text}</span>
@@ -3692,7 +3716,7 @@ function AdapterCard({ item, onChanged, notify, running, setRunning }: { item: A
     {item.description && <p className="adapter-desc">{item.description}</p>}
     {item.tip && <p className="adapter-tip">{item.tip}</p>}
     <p className="adapter-sub">{item.name} · {formatSize(item.bytes)}{item.stage === 'both' || item.stage === 'ar' ? ` · 추천 작곡 ${item.scales.ar}` : ''}{item.stage === 'both' || item.stage === 'nar' ? ` · 추천 사운드 ${item.scales.nar}` : ''}{item.license ? ` · ${licenseLabel(item.license)}` : ''}{item.source ? <> · <a href={item.source.url} target="_blank" rel="noreferrer">{item.source.repo}</a></> : ' · 직접 가져온 파일'}</p>
-    {item.samples.length > 0 && <div className="adapter-samples">{item.samples.slice(0, 2).map(sample => <audio key={sample.url} controls preload="none" src={sample.url}/>)}</div>}
+    {item.samples.length > 0 && <div className="adapter-samples">{item.samples.slice(0, 2).map(sample => <ThemedAudioPlayer key={sample.url} src={sample.url} preload="none"/>)}</div>}
     {editing ? <Textarea value={note} maxLength={2000} placeholder="메모 (예: 어떤 곡에 잘 맞았는지)" onChange={event => setNote(event.target.value)}/> : item.note && <p className="adapter-note">{item.note}</p>}
     <div className="adapter-actions">
       {editing ? <><Button size="sm" onClick={() => void save()}><Check size={14}/>저장</Button><Button size="sm" variant="outline" onClick={() => { setEditing(false); setTitle(item.displayName); setNote(item.note); }}>취소</Button></>
@@ -3869,7 +3893,7 @@ function LoraTrainTab({ notify, onInstalled }: { notify: (text: string, error?: 
         : <p className="train-verdict diff">두 결과의 차이가 {job.difference != null ? `${(job.difference * 100).toFixed(2)}%로 ` : ''}작지 않습니다. 같은 가사로 만든 곡 두 개를 들어 보고 고르세요. (EMA가 기본 추천입니다)</p>}
       {(job.verdict?.needsListening || job.ab) && <div className="train-ab">
         <Button variant="outline" disabled={!!busy || job.ab?.status === 'making'} onClick={() => void act('ab', '/lora-train/ab', {})}>{job.ab?.status === 'making' || busy === 'ab' ? <LoaderCircle className="spin" size={14}/> : <Headphones size={14}/>}{job.ab?.status === 'ready' ? '비교곡 다시 만들기' : '비교곡 만들기 (약 1분)'}</Button>
-        {job.ab?.status === 'ready' && <div className="train-ab-players"><label>EMA<audio controls preload="none" src={`/api/lora-train/ab/ema?v=${job.id}`}/></label><label>raw<audio controls preload="none" src={`/api/lora-train/ab/raw?v=${job.id}`}/></label></div>}
+        {job.ab?.status === 'ready' && <div className="train-ab-players"><label>EMA<ThemedAudioPlayer src={`/api/lora-train/ab/ema?v=${job.id}`} preload="none"/></label><label>raw<ThemedAudioPlayer src={`/api/lora-train/ab/raw?v=${job.id}`} preload="none"/></label></div>}
         {job.ab?.status === 'failed' && <p className="field-hint warning">{job.ab.error}</p>}
       </div>}
       <div className="train-actions">
@@ -4172,7 +4196,7 @@ function AdapterPage({ notify, picker }: { notify: (text: string, error?: boolea
           <DialogDescription><a href={detail.url} target="_blank" rel="noreferrer">{detail.id}</a> · {licenseLabel(detail.license)} · 다운로드 {detail.downloads}</DialogDescription>
           {detail.summary && <p className="adapter-desc">{detail.summary}</p>}
           {detail.tags.length > 0 && <div className="adapter-meta">{detail.tags.map(tag => <span key={tag} className="adapter-chip">{tag}</span>)}</div>}
-          {detail.samples.length > 0 && <div className="adapter-samples"><span className="adapter-sub">샘플 듣기</span>{detail.samples.slice(0, 4).map(sample => <label key={sample.url} className="adapter-sample"><span>{sample.name.split('/').pop()}</span><audio controls preload="none" src={sample.url}/></label>)}</div>}
+          {detail.samples.length > 0 && <div className="adapter-samples"><span className="adapter-sub">샘플 듣기</span>{detail.samples.slice(0, 4).map(sample => <label key={sample.url} className="adapter-sample"><span>{sample.name.split('/').pop()}</span><ThemedAudioPlayer src={sample.url} preload="none"/></label>)}</div>}
           <InstallBar job={job} label="받는 중"/>
           <div className="adapter-units"><span className="adapter-sub">받을 수 있는 LoRA — 작곡과 사운드가 함께 있는 것은 한 번에 같이 받습니다. 버전이 여럿이면 최종본만 먼저 보입니다.</span>
             {(() => {
@@ -6727,7 +6751,7 @@ export default function Studio() {
     {notice && <div className={`toast ${notice.error ? 'error' : ''}`} role={notice.error ? 'alert' : 'status'}>{notice.error ? <CircleHelp size={19}/> : <Check size={19}/>}<span>{notice.text}</span><button onClick={() => setNotice(null)} aria-label="알림 닫기"><X size={16}/></button></div>}
     <Dialog open={presetOpen} onOpenChange={setPresetOpen}><DialogContent className="studio-dialog example-browser"><DialogTitle>어떤 분위기로 시작할까요?</DialogTitle><DialogDescription>직접 작성한 예시입니다. 카드를 선택하면 바로 편집기의 가사와 스타일이 바뀝니다.</DialogDescription><div className="dialog-scroll"><div className="example-card-grid">{examples.map(example => <button className={`inspiration-card ${example.color || ''}`} key={example.id} onClick={() => useExample(example)}><div className="preset-top"><Music2 size={21}/><ArrowRight size={15}/></div><span className="genre-label">{example.genre || '예시'}</span><strong>{example.title}</strong><small>{example.caption}</small></button>)}</div></div></DialogContent></Dialog>
     <Dialog open={help} onOpenChange={setHelp}><DialogContent className="studio-dialog"><DialogTitle>나만의 음악 작업실 사용 안내</DialogTitle><DialogDescription>작은 아이디어를 노래로 만드는 과정</DialogDescription><div className="dialog-scroll help-content"><h3>01 · 상단에서 음악 모델 선택</h3><p>이 PC에서는 Q4와 F16 VAE 조합을 우선 검증할 예정입니다.</p><h3>02 · 가사와 분위기 작성</h3><p>직접 입력하거나 예시를 불러오세요. 작사 도우미는 설정에서 선택할 수 있습니다.</p><h3>03 · 초안 저장과 버전 비교</h3><p>라이브러리에서 설정을 다시 불러와 수정하세요. 저장할 때마다 새 버전이 남습니다.</p><div className="inline-note warning">설정에서 audio.cpp 실행 파일 경로를 지정하면 노래 만들기에서 실제 음악을 생성하고 바로 재생할 수 있습니다.</div></div></DialogContent></Dialog>
-    <Dialog open={!!selected} onOpenChange={open => { if (!open) setSelected(null); }}><DialogContent className="studio-dialog detail-dialog"><DialogTitle>{selected?.title}</DialogTitle><DialogDescription>{selected?.status === 'completed' ? '완성된 곡 · 재생하고 메모를 남기세요.' : '저장된 초안 · 원본 가사와 설정은 그대로 보관됩니다.'}</DialogDescription>{selected?.status === 'completed' && <><audio controls className="detail-audio" src={`/api/projects/${selected.id}/audio`}/>{selected.saveError && <p className="detail-saved-path warning"><CircleHelp size={13}/>{selected.saveError}</p>}</>}<div className="dialog-scroll"><label>음악 스타일</label><p className="detail-style">{selected?.style}</p><label>가사</label><pre className="detail-lyrics">{selected?.lyrics}</pre><label htmlFor="project-notes">작업 메모</label><Textarea id="project-notes" value={notes} onChange={event => setNotes(event.target.value)} placeholder="다음 버전에서 바꾸고 싶은 점"/></div><div className="dialog-actions"><Button variant="outline" onClick={() => setSelected(null)}>취소</Button><Button variant="outline" onClick={() => { if (selected) window.location.assign(`/api/projects/${selected.id}/export`); }}><ArrowDownToLine/>내보내기</Button><Button variant="outline" onClick={() => { if (selected) loadProject(selected); }}>설정 불러오기</Button><Button disabled={!!busy} onClick={async () => { if (!selected) return; setBusy('notes'); try { const item = await api<Project>(`/projects/${selected.id}`, 'PATCH', { notes }); setProjects(previous => previous.map(project => project.id === item.id ? item : project)); setSelected(null); notify('메모를 저장했습니다.'); } catch (error) { notify((error as Error).message, true); } finally { setBusy(''); } }}><Save/>메모 저장</Button></div></DialogContent></Dialog>
+    <Dialog open={!!selected} onOpenChange={open => { if (!open) setSelected(null); }}><DialogContent className="studio-dialog detail-dialog"><DialogTitle>{selected?.title}</DialogTitle><DialogDescription>{selected?.status === 'completed' ? '완성된 곡 · 재생하고 메모를 남기세요.' : '저장된 초안 · 원본 가사와 설정은 그대로 보관됩니다.'}</DialogDescription>{selected?.status === 'completed' && <><ThemedAudioPlayer src={`/api/projects/${selected.id}/audio`}/>{selected.saveError && <p className="detail-saved-path warning"><CircleHelp size={13}/>{selected.saveError}</p>}</>}<div className="dialog-scroll"><label>음악 스타일</label><p className="detail-style">{selected?.style}</p><label>가사</label><pre className="detail-lyrics">{selected?.lyrics}</pre><label htmlFor="project-notes">작업 메모</label><Textarea id="project-notes" value={notes} onChange={event => setNotes(event.target.value)} placeholder="다음 버전에서 바꾸고 싶은 점"/></div><div className="dialog-actions"><Button variant="outline" onClick={() => setSelected(null)}>취소</Button><Button variant="outline" onClick={() => { if (selected) window.location.assign(`/api/projects/${selected.id}/export`); }}><ArrowDownToLine/>내보내기</Button><Button variant="outline" onClick={() => { if (selected) loadProject(selected); }}>설정 불러오기</Button><Button disabled={!!busy} onClick={async () => { if (!selected) return; setBusy('notes'); try { const item = await api<Project>(`/projects/${selected.id}`, 'PATCH', { notes }); setProjects(previous => previous.map(project => project.id === item.id ? item : project)); setSelected(null); notify('메모를 저장했습니다.'); } catch (error) { notify((error as Error).message, true); } finally { setBusy(''); } }}><Save/>메모 저장</Button></div></DialogContent></Dialog>
     <AlertDialog open={!!coverPendingProject} onOpenChange={open => { if (!open) setCoverPendingProject(null); }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>이미 작성 중인 가사/스타일이 있어요</AlertDialogTitle><AlertDialogDescription>"{coverPendingProject?.title}"의 멜로디로 커버를 만들 때, 지금 작성 중인 가사·스타일·설정을 유지할까요, 아니면 이 곡에 저장된 설정으로 바꿀까요? 어느 쪽이든 ABC 악보는 이 곡의 멜로디로 채워집니다.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel disabled={!!busy}>취소</AlertDialogCancel><AlertDialogAction variant="outline" disabled={!!busy} onClick={() => { if (coverPendingProject) void runCover(coverPendingProject, false); }}>{busy === 'cover-transcribe' ? <LoaderCircle className="spin"/> : null}현재 설정 유지</AlertDialogAction><AlertDialogAction disabled={!!busy} onClick={() => { if (coverPendingProject) void runCover(coverPendingProject, true); }}>{busy === 'cover-transcribe' ? <LoaderCircle className="spin"/> : null}이 곡 설정 사용</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
     <AlertDialog open={!!deleteTarget} onOpenChange={open => { if (!open) setDeleteTarget(null); }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{deleteTarget?.title}을(를) 삭제할까요?</AlertDialogTitle><AlertDialogDescription>{deleteTarget?.status === 'completed' ? '가사, 스타일, 생성된 음원이 모두 삭제되며 되돌릴 수 없습니다. 이 곡을 만든 프로젝트(초안)는 영향을 받지 않습니다.' : '가사와 스타일 설정이 삭제되며 되돌릴 수 없습니다. 이 프로젝트로 이미 만든 노래는 삭제되지 않고 라이브러리에 그대로 남습니다.'}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel disabled={!!busy}>취소</AlertDialogCancel><AlertDialogAction variant="destructive" disabled={!!busy} onClick={() => { if (deleteTarget) void deleteProject(deleteTarget); }}>{busy === 'delete' ? <LoaderCircle className="spin"/> : <Trash2/>}삭제</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
     <Dialog open={!!downloadTarget} onOpenChange={open => { if (!open) setDownloadTarget(null); }}><DialogContent className="studio-dialog"><DialogTitle>{downloadTarget?.title} 다운로드</DialogTitle><DialogDescription>받을 파일 형식을 선택하세요. 여러 개를 함께 받을 수 있어요.</DialogDescription><div className="download-format-list">{saveFormats.map(format => <label key={format.id} className="download-format-item"><input type="checkbox" checked={downloadFormats.has(format.id)} onChange={() => toggleDownloadFormat(format.id)}/>{format.label}</label>)}</div><div className="dialog-actions"><Button variant="outline" onClick={() => setDownloadTarget(null)}>취소</Button><Button disabled={!downloadFormats.size} onClick={confirmDownload}><Download/>다운로드</Button></div></DialogContent></Dialog>
