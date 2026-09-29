@@ -4,9 +4,54 @@
 
 클라우드 없이 전부 로컬에서 동작하며, 데이터는 내 PC 밖으로 나가지 않습니다(작사 도우미로 클라우드 LLM을 켠 경우 그 요청만 예외).
 
+## 외부 앱에서 API로 사용하기
+
+평소처럼 `Start-SongYUE2.cmd` 또는 `npm run dev`로 SongYUE2를 실행한 뒤, 다른 로컬 앱에서 아래 주소로 JSON을 전송합니다.
+
+```text
+POST http://127.0.0.1:4311/api/external/generate
+Content-Type: application/json
+```
+
+PowerShell 예제:
+
+```powershell
+$request = @{
+  lyric = "[Verse]`n창가에 남은 불빛"
+  style = "Korean city pop, warm female vocal, 104 BPM"
+  mode = "melody"
+  aiPolish = $true
+  postprocess = $true
+  postprocessPreset = "Mastering-1"
+  outputFormat = "mp4"
+  outputFolder = "$HOME\Downloads\SongYUE2"
+  fileName = "result.mp4"
+  responseMode = "path"
+} | ConvertTo-Json
+
+Invoke-RestMethod `
+  -Uri 'http://127.0.0.1:4311/api/external/generate' `
+  -Method Post `
+  -ContentType 'application/json' `
+  -Body $request
+```
+
+필수 입력은 `lyric`과 `style`입니다. 주요 선택값은 다음과 같습니다.
+
+- `mode`: `melody` 또는 `instrumental`. `instrumental`이면 요청의 `lyric`은 무시(생략 가능)하고 프로젝트 루트의 [instrumental.lrc](instrumental.lrc)(구간 태그 + `[Instrumental]`)를 가사로 넣습니다. 멜로디가 섞여 나오는 것을 막기 위한 템플릿이며, 파일을 고치면 바로 반영됩니다.
+- `loraName`, `loraStrength`: 설치된 LoRA 이름과 0~2 강도. 이름이 맞지 않으면 경고 후 건너뜁니다.
+- `aiPolish`: 노이즈 제거, Spectral Lifter, 보컬 자연화 자동 적용 여부
+- `postprocess`, `postprocessPreset`: 저장된 전체 후처리 프리셋 적용 여부와 이름. 이름이 맞지 않으면 경고 후 건너뜁니다.
+- `outputFormat`: `wav`, `mp3`, `mp4`
+- `outputFolder`, `fileName`: 결과 저장 위치와 이름. 기존 파일은 덮어쓰지 않고 번호를 붙입니다.
+- `responseMode`: `path`는 저장 경로 JSON을, `file`은 완성 파일을 직접 반환합니다.
+
+외부 API 요청은 결과 파일만 남기며 SongYUE2의 프로젝트와 라이브러리에는 등록되지 않습니다. API를 호출하지 않을 때는 기존 독립형 UI가 그대로 동작합니다. 상세 요청·응답 명세는 [로컬 API 문서](docs/local-api.md#다른-앱에서-한-번에-곡-만들기)를 참고하세요.
+
 ## 주요 기능
 
 - 가사 + 스타일 프롬프트 → 실제 음악 생성 (audio.cpp GGUF 3종, 원본 Python 모델, 또는 ComfyUI로 실행하는 YuE2 INT8 ConvRot)
+- **외부 앱 호출 API**: `POST /api/external/generate`에 가사·스타일·멜로디/연주곡·LoRA·AI 다듬기·후처리 프리셋·출력 형식/폴더/파일명을 JSON으로 보내 한 번에 생성. 저장 경로 JSON 또는 완성 파일을 직접 반환하며, API를 쓰지 않을 때는 기존 독립형 앱 그대로 동작([사용법](docs/local-api.md#다른-앱에서-한-번에-곡-만들기))
 - **진짜 "악기만" 생성**: ABC 악보의 보컬 성부를 화음 기호는 남긴 채 구조적으로 쉼표 처리(`abc_tools.py mute-voice`)해 확실하게 무보컬로 생성 — 원본 Python 모델과 GGUF(audio.cpp `--request-option abc_file=`) 모두 지원
 - **심볼릭 작곡(ABC 악보)**: 멜로디/코드 계획 생성·검사·AI 지시 편집·오디오 재생(현재 음표 하이라이트), 오디오에서 멜로디 추출해 커버 만들기(SheetSage2, 실제 오디오로 종단 검증 완료), `.abc` 파일 기반 라이브러리(가져오기/저장/삭제) — ABC 악보 기반 생성(심볼릭 작곡/커버 포함)은 원본 Python 모델과 GGUF 모두에서 동작
 - **완성곡 "커버" 원클릭**: 완성곡 메뉴의 "리믹스" 아래 "커버"를 누르면 그 곡의 오디오에서 멜로디/코드를 추출해 작곡 화면에 바로 채워 넣음(가사·스타일이 이미 있으면 유지할지 그 곡 설정으로 바꿀지 확인). 단, 실제 보컬 음색/톤까지 가져오는 기능은 아님 — 멜로디·코드와 성별 힌트만 전달됨

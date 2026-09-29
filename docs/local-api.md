@@ -1,6 +1,81 @@
 # 로컬 API
 
-`node backend/server.mjs`로 실행합니다. Node.js 24 내장 모듈만 사용하며 `127.0.0.1:4311`에서만 연결을 받습니다. 프론트엔드는 `/api`를 이 주소로 프록시합니다. 허용된 브라우저 주소는 localhost/127.0.0.1의 5173과 서버 포트입니다.
+`node backend/server.mjs`로 실행합니다. Node.js 24 내장 모듈만 사용하며 `127.0.0.1:4311`에서만 연결을 받습니다. 프론트엔드는 `/api`를 이 주소로 프록시합니다. localhost/127.0.0.1에서 실행되는 다른 로컬 웹 앱도 포트와 관계없이 호출할 수 있지만, 외부 PC와 인터넷 Origin은 차단합니다.
+
+## 다른 앱에서 한 번에 곡 만들기
+
+`POST /api/external/generate`는 AI_MusicProbe의 경로 API와 비슷하게 JSON 한 번으로 곡 생성부터 선택적 AI 다듬기·후처리·파일 출력까지 실행합니다. 이 엔드포인트를 호출하지 않으면 SongYUE2는 기존과 완전히 같은 독립형 앱으로 동작합니다. 외부 요청은 지정한 결과 파일만 남기며 SongYUE2의 프로젝트·라이브러리에는 초안이나 완성곡으로 등록되지 않습니다.
+
+```http
+POST http://127.0.0.1:4311/api/external/generate
+Content-Type: application/json
+
+{
+  "lyric": "[Verse]\n창가에 남은 불빛",
+  "style": "Korean city pop, female vocal, 104 BPM",
+  "mode": "melody",
+  "loraName": "my-lora",
+  "loraStrength": 0.7,
+  "aiPolish": true,
+  "postprocess": true,
+  "postprocessPreset": "Mastering-1",
+  "outputFormat": "mp3",
+  "outputFolder": "C:\\Music\\Generated",
+  "fileName": "새 노래.mp3",
+  "responseMode": "path"
+}
+```
+
+필수값은 `lyric`(호환 별칭 `lyrics`)과 `style`입니다. 나머지는 선택 사항입니다.
+
+| 필드 | 값 / 기본값 |
+|---|---|
+| `mode` | `melody`(기본) 또는 `instrumental` |
+| `loraName`, `loraStrength` | 설치된 LoRA의 내부 이름 또는 표시 이름, 강도 0~2(기본 1). 이름이 없거나 악기 전용 조건과 맞지 않으면 경고 후 건너뜀 |
+| `aiPolish` | `true`이면 노이즈 제거 + Spectral Lifter + 보컬 자연화를 기본값으로 자동 적용 |
+| `postprocess`, `postprocessPreset` | `true`와 `Setting/PostProcess`의 프리셋 이름. 일치하지 않으면 경고 후 건너뜀. 브라우저 Web Audio 대신 서버의 ffmpeg 호환 체인으로 EQ·FX·컴프레서·리버브/에코·음량/속도/페이드 값을 적용 |
+| `outputFormat` | `wav`(기본), `mp3`, `mp4` |
+| `outputFolder`, `fileName` | 생략하면 `runs/external-output`과 곡 제목을 사용. 기존 파일은 덮어쓰지 않고 ` (1)` 번호를 붙임 |
+| `responseMode` | `path`(기본)는 아래 JSON, `file`은 완성 파일 바이트를 attachment로 직접 응답 |
+| 고급 선택값 | `title`, `modelId`, `seed`, `steps`, `cot`, `vocalGender`, `abc`. `modelId` 생략 시 Q8 GGUF가 설치되어 있으면 Q8, 아니면 Q4 사용 |
+
+`responseMode: "path"` 응답:
+
+```json
+{
+  "status": "completed",
+  "requestId": "요청 UUID",
+  "output": {
+    "format": "mp3",
+    "folder": "C:\\Music\\Generated",
+    "fileName": "새 노래.mp3",
+    "path": "C:\\Music\\Generated\\새 노래.mp3"
+  },
+  "applied": {
+    "lora": "my-lora",
+    "loraStrength": 0.7,
+    "aiPolish": ["denoise", "lifter", "naturalize"],
+    "postprocessPreset": "Mastering-1"
+  },
+  "warnings": []
+}
+```
+
+PowerShell 호출 예:
+
+```powershell
+$request = @{
+  lyric = "[Verse]`n창가에 남은 불빛"
+  style = "Korean city pop, female vocal, 104 BPM"
+  mode = "melody"
+  outputFormat = "wav"
+  outputFolder = "C:\Music\Generated"
+  fileName = "새 노래.wav"
+} | ConvertTo-Json
+Invoke-RestMethod -Uri 'http://127.0.0.1:4311/api/external/generate' -Method Post -ContentType 'application/json' -Body $request
+```
+
+SongYUE2는 GPU 작업을 한 번에 하나만 실행하므로 기존 UI 생성이나 다른 외부 요청이 진행 중이면 409를 반환합니다. 진행 상태는 기존 `GET /api/generate/status`로 확인할 수 있습니다.
 
 ## .env 설정
 

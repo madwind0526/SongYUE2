@@ -40,6 +40,7 @@ test('local API persistence, request boundaries, provider adapters, and setting/
   t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
   assert.equal((await call('/api/health')).data.engineReady, false);
   assert.equal((await call('/api/settings', 'PUT', { provider: 'chatgpt' }, { Origin: 'https://evil.example' })).status, 403);
+  assert.equal((await call('/api/health', 'GET', undefined, { Origin: 'http://127.0.0.1:8792', 'Sec-Fetch-Site': 'cross-site' })).status, 200, 'another loopback app may call the local API');
   const invalidHostStatus = await new Promise((resolve, reject) => {
     http.get(`${base}/api/health`, { headers: { Host: 'evil.example' } }, response => { response.resume(); resolve(response.statusCode); }).on('error', reject);
   });
@@ -481,6 +482,60 @@ test('audio.cpp generation copies the song into library/music, leaving the sourc
   assert.equal((await call(`/api/projects/${secondGenerate.data.id}/audio`)).status, 200);
 });
 
+test('external generation API accepts one-shot parameters without registering projects', async t => {
+  resetEnv();
+  const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-external-'));
+  const { enginePath } = await setUpEngine(root);
+  const fakeSpawn = makeFakeSpawn();
+  const polishRunner = async ({ outputFile, onProgress }) => {
+    onProgress(50, '시험용 다듬기');
+    await writeFile(outputFile, Buffer.from('fake-polished-audio'));
+    onProgress(100, '완료');
+    return { report: null };
+  };
+  const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}), spawnImpl: fakeSpawn.spawnImpl, polishRunner });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const call = async (route, method = 'GET', payload) => fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) });
+  const callJson = async (route, method, payload) => { const response = await call(route, method, payload); return { status: response.status, data: await response.json() }; };
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); await rm(root, { recursive: true, force: true }); });
+
+  await callJson('/api/settings', 'PUT', { enginePath, autoCover: false });
+  await callJson('/api/postprocess-settings', 'POST', { name: 'API 마스터', params: { eq: [0, 0, 0, 0, 0, 0, 10, 10, 0, 0], eqEnabled: true, masterVolume: 105 } });
+  const outputFolder = path.join(root, 'external-output');
+  const generated = await callJson('/api/external/generate', 'POST', {
+    lyric: '[Verse]\n외부 호출 가사', style: 'Korean pop', mode: 'melody', modelId: 'yue2-q4', cot: 'off',
+    loraName: '설치되지 않은 LoRA', loraStrength: 0.7, aiPolish: true,
+    postprocess: true, postprocessPreset: 'API 마스터', outputFormat: 'mp3', outputFolder, fileName: '외부 결과.mp3',
+  });
+  assert.equal(generated.status, 200);
+  assert.equal(generated.data.status, 'completed');
+  assert.match(generated.data.requestId, /^[\da-f-]{36}$/);
+  assert.equal(generated.data.output.format, 'mp3');
+  assert.equal(generated.data.output.folder, outputFolder);
+  assert.equal(generated.data.output.fileName, '외부 결과.mp3');
+  assert.equal(await readFile(generated.data.output.path, 'utf8'), 'fake-transcoded-bytes');
+  assert.deepEqual(generated.data.applied.aiPolish, ['denoise', 'lifter', 'naturalize']);
+  assert.equal(generated.data.applied.postprocessPreset, 'API 마스터');
+  assert.equal(generated.data.applied.lora, null);
+  assert.match(generated.data.warnings[0], /찾지 못해 건너뛰었습니다/);
+  assert.deepEqual(await jsonNames(path.join(root, 'library', 'setting')), [], 'external API requests must not register a draft');
+  assert.deepEqual(await jsonNames(path.join(root, 'library', 'music')), [], 'external API requests must not register a completed project');
+
+  const skippedPreset = await callJson('/api/external/generate', 'POST', { lyric: '가사', style: '스타일', mode: 'melody', modelId: 'yue2-q4', cot: 'off', postprocess: true, postprocessPreset: '없음', outputFormat: 'wav' });
+  assert.equal(skippedPreset.status, 200);
+  assert.equal(skippedPreset.data.applied.postprocessPreset, null);
+  assert.match(skippedPreset.data.warnings[0], /후처리 프리셋/);
+
+  const fileResponse = await call('/api/external/generate', 'POST', { lyric: '가사', style: '스타일', mode: 'melody', modelId: 'yue2-q4', cot: 'off', outputFormat: 'wav', responseMode: 'file' });
+  assert.equal(fileResponse.status, 200);
+  assert.equal(fileResponse.headers.get('content-type'), 'audio/wav');
+  assert.ok((await fileResponse.arrayBuffer()).byteLength > 0);
+  assert.equal((await callJson('/api/external/generate', 'POST', { style: '스타일' })).status, 400);
+  assert.equal((await callJson('/api/external/generate', 'POST', { lyric: '가사', style: '스타일', mode: 'voice' })).status, 400);
+  assert.equal((await callJson('/api/external/generate', 'POST', { lyric: '가사', style: '스타일', outputFormat: 'flac' })).status, 400);
+});
+
 test('audio.cpp (GGUF) generation accepts an external ABC score for cover/instrumental via --request-option abc_file', async t => {
   resetEnv();
   const root = await mkdtemp(path.join(os.tmpdir(), 'songyue-api-gguf-abc-'));
@@ -754,7 +809,7 @@ test('yue2-original routes to the Python runner, and downloads support on-demand
   const instrumentalRequestFile = instrumentalGenerateCall.args[instrumentalGenerateCall.args.indexOf('--request') + 1];
   const instrumentalRequest = JSON.parse(await readFile(instrumentalRequestFile, 'utf8'));
   assert.equal(instrumentalRequest.cot, 'melody');
-  assert.equal(instrumentalRequest.style, '스타일, instrumental, no vocals');
+  assert.equal(instrumentalRequest.style, '스타일, instrumental, no vocals, fade out ending');
   // the persisted draft keeps the user's original cot/abc; only the generation call was adjusted
   assert.equal((await callJson(`/api/projects/${instrumentalDraft.id}`)).data.cot, 'off');
 

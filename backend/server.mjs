@@ -71,6 +71,7 @@ const DEFAULT_EXAMPLES = [
 const GENERATE_TIMEOUT_MS = 10 * 60 * 1000;
 const FFMPEG_TIMEOUT_MS = 5 * 60 * 1000;
 const SAVE_FORMATS = new Set(['wav', 'flac', 'mp3', 'mp4']);
+const EXTERNAL_OUTPUT_FORMATS = new Set(['wav', 'mp3', 'mp4']);
 const AUDIO_MIME_TYPES = { '.wav': 'audio/wav', '.flac': 'audio/flac', '.mp3': 'audio/mpeg', '.mp4': 'video/mp4', '.m4a': 'audio/mp4', '.ogg': 'audio/ogg' };
 const LIBRARY_BROWSE_AUDIO_EXTENSIONS = new Set(['.mp3', '.wav', '.flac', '.m4a', '.ogg']);
 const COVER_MIME = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
@@ -93,6 +94,19 @@ const DEFAULT_COMFYUI_ENDPOINT = 'http://127.0.0.1:8190';
 // Own install under engine/ (gitignored, same as engine/audio.cpp).
 const DEFAULT_COMFYUI_ENGINE_PATH = path.join('engine', 'ComfyUI');
 const DEFAULT_DDSP_SVC_PATH = path.join('test', 'DDSP-SVC');
+// AI Music Probe lives in its own sibling repo (github.com/madwind0526/AI_MusicProbe), not inside SongYUE2.
+const DEFAULT_AI_MUSIC_PROBE_PATH = 'C:\\Claude\\ai-music-probe';
+const AI_MUSIC_PROBE_ENDPOINT = 'http://127.0.0.1:8792';
+const AI_MUSIC_PROBE_DETECTOR_LABELS = { sonics: 'SONICS (SpecTTTra)', lofcz: 'lofcz vocoder fakeprint', artifactnet: 'ArtifactNet v9.4' };
+// AI Music Probe reports its combination method as an internal versioned id (probe/file_analysis.py's
+// METHOD_LABELS); this is the Korean label SongYUE2 shows for it, so the id itself never reaches the UI.
+const AI_MUSIC_PROBE_METHOD_LABELS = {
+  'detector-geometric-mean-v1': '기하평균',
+  'detector-arithmetic-mean-v1': '산술평균',
+  'detector-median-v1': '중앙값',
+  'detector-weighted-geometric-mean-v1': '가중 기하평균',
+  'detector-robust-mean-v1': '이상치 제외 평균',
+};
 const COMFYUI_GENERATE_DEADLINE_MS = GENERATE_TIMEOUT_MS;
 const COMFYUI_MAX_DURATION_SECONDS = 240;
 const VOCAL_GENDERS = new Set(['', 'male', 'female', 'duet']);
@@ -115,7 +129,7 @@ const vocalHint = (gender) => VOCAL_HINTS[gender] || '';
 // YuE2 has no dedicated instrumental flag and both the audio.cpp and Python engines require
 // non-empty lyrics (audio.cpp throws "Yue2 requires non-empty lyrics" outright), so "instrumental"
 // mode can only ever be a soft style hint on top of the real lyrics, not a way to omit them.
-const styleHint = (project) => project.instrumental ? ', instrumental, no vocals' : vocalHint(project.vocalGender);
+const styleHint = (project) => project.instrumental ? ', instrumental, no vocals, fade out ending' : vocalHint(project.vocalGender);
 const exists = async (target) => { try { await access(target); return true; } catch { return false; } };
 const fail = (status, message) => Object.assign(new Error(message), { status });
 const text = (value, max = 20000) => typeof value === 'string' ? value.slice(0, max) : '';
@@ -129,6 +143,13 @@ async function uniqueJsonPath(dir, title, excludeFile) {
   const base = safeFilename(title);
   let candidate = path.join(dir, `${base}.json`);
   for (let n = 1; (await exists(candidate)) && candidate !== excludeFile; n += 1) candidate = path.join(dir, `${base} (${n}).json`);
+  return candidate;
+}
+async function uniqueFilePath(dir, fileName) {
+  const extension = path.extname(fileName);
+  const base = safeFilename(path.basename(fileName, extension));
+  let candidate = path.join(dir, `${base}${extension}`);
+  for (let n = 1; await exists(candidate); n += 1) candidate = path.join(dir, `${base} (${n})${extension}`);
   return candidate;
 }
 async function uniqueAbcPath(dir, title, excludeFile) {
@@ -207,6 +228,13 @@ function providerFromEnv(id) {
   return { endpoint: '', model: '', apiKey: '' };
 }
 
+async function readInstrumentalLyrics(root) {
+  const file = path.join(root, 'instrumental.lrc');
+  const content = await readFile(file, 'utf8').catch(() => null);
+  if (!content?.trim()) throw fail(500, `악기만 생성용 가사 템플릿을 찾지 못했습니다: ${file}`);
+  return content;
+}
+
 export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl = fetch, spawnImpl = spawn, polishRunner = null, yueServerPort = YUE_SERVER_PORT, vstHost = null } = {}) {
   try { process.loadEnvFile(path.join(root, '.env')); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -224,6 +252,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     comfyUiEndpoint: text(stored.comfyUiEndpoint, 2048) || text(process.env.COMFYUI_ENDPOINT, 2048),
     comfyUiEnginePath: text(stored.comfyUiEnginePath, 2048) || text(process.env.COMFYUI_ENGINE_PATH, 2048),
     ddspSvcPath: text(stored.ddspSvcPath, 2048) || text(process.env.DDSP_SVC_PATH, 2048),
+    aiMusicProbePath: text(stored.aiMusicProbePath, 2048) || text(process.env.AI_MUSIC_PROBE_PATH, 2048),
     settingPath: text(stored.settingPath, 2048) || text(process.env.SETTING_PATH, 2048),
     musicPath: text(stored.musicPath, 2048) || text(process.env.MUSIC_PATH, 2048),
     examplesPath: text(stored.examplesPath, 2048) || text(process.env.EXAMPLES_PATH, 2048),
@@ -274,12 +303,65 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     if (log.signal) throw fail(502, `${label}이 제한 시간을 넘어 중단되었습니다.`);
     if (log.code !== 0) throw fail(502, `${label}에 실패했습니다. ${log.text.trim().slice(-500) || 'ffmpeg가 설치되어 있는지 확인해 주세요.'}`);
   }
+  const finite = (value, fallback = 0) => Number.isFinite(Number(value)) ? Number(value) : fallback;
+  const clampNumber = (value, min, max, fallback = 0) => Math.min(max, Math.max(min, finite(value, fallback)));
+  function postprocessFilters(params) {
+    const filters = [];
+    const eqBands = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000];
+    if (params?.eqEnabled === true && Array.isArray(params.eq)) {
+      params.eq.slice(0, eqBands.length).forEach((value, index) => {
+        const gain = clampNumber(value, -100, 100) / 100 * 24;
+        if (Math.abs(gain) >= 0.01) filters.push(`equalizer=f=${eqBands[index]}:width_type=q:width=1.4:g=${gain.toFixed(3)}`);
+      });
+    }
+    if (params?.fxEnabled === true) {
+      const bass = clampNumber(params.bassBoost, -100, 100) / 100 * 18;
+      const clarity = clampNumber(params.clarity, -100, 100) / 100 * 15;
+      const dynamic = clampNumber(params.dynamicBoost, 0, 100);
+      if (Math.abs(bass) >= 0.01) filters.push(`bass=g=${bass.toFixed(3)}:f=150`);
+      if (Math.abs(clarity) >= 0.01) filters.push(`treble=g=${clarity.toFixed(3)}:f=6000`);
+      if (dynamic > 0) filters.push(`acompressor=threshold=-24dB:ratio=${(1 + dynamic / 100 * 11).toFixed(3)}:attack=10:release=200`, `volume=${(1 + dynamic / 100 * 0.4).toFixed(4)}`);
+    }
+    if (params?.compOn === true && finite(params.compRatio, 1) > 1) {
+      filters.push(`acompressor=threshold=${clampNumber(params.compThreshold, -100, 0, -24)}dB:ratio=${clampNumber(params.compRatio, 1, 20, 1)}:attack=${Math.round(clampNumber(params.compAttack, 0, 1, 0.003) * 1000)}:release=${Math.round(clampNumber(params.compRelease, 0, 1, 0.25) * 1000)}`);
+    }
+    if (params?.reverbEchoEnabled === true) {
+      const amount = Math.max(clampNumber(params.reverbAmount, 0, 100), clampNumber(params.echoAmount, 0, 100));
+      if (amount > 0) {
+        const delay = Math.round(clampNumber(params.echoDelayMs, 40, 600, 300));
+        const decay = Math.min(0.6, amount / 100 * 0.6);
+        filters.push(`aecho=1:${Math.max(0.1, amount / 100 * 0.7).toFixed(3)}:${delay}:${decay.toFixed(3)}`);
+      }
+    }
+    if (params?.playOn === true && params.reverseOn === true) filters.push('areverse');
+    if (params?.playOn === true) {
+      let speed = clampNumber(params.speed, 0.1, 5, 1);
+      while (speed > 2) { filters.push('atempo=2'); speed /= 2; }
+      while (speed < 0.5) { filters.push('atempo=0.5'); speed /= 0.5; }
+      if (Math.abs(speed - 1) >= 0.001) filters.push(`atempo=${speed.toFixed(5)}`);
+    }
+    if (params?.volumeOn === true && finite(params.gainDb) !== 0) filters.push(`volume=${clampNumber(params.gainDb, -60, 24)}dB`);
+    if (params?.volumeOn === true && finite(params.normalizeDb) < 0) filters.push(`loudnorm=I=-16:TP=${clampNumber(params.normalizeDb, -12, -1, -1)}:LRA=11`);
+    if (params?.volumeOn === true && finite(params.limiterDb) < 0) filters.push(`alimiter=limit=${Math.pow(10, clampNumber(params.limiterDb, -12, -0.1, -0.1) / 20).toFixed(6)}`);
+    if (params?.fadeOn === true && finite(params.fadeInSec) > 0) filters.push(`afade=t=in:st=0:d=${clampNumber(params.fadeInSec, 0, 30)}`);
+    if (params?.fadeOn === true && finite(params.fadeOutSec) > 0) filters.push(`areverse`, `afade=t=in:st=0:d=${clampNumber(params.fadeOutSec, 0, 30)}`, 'areverse');
+    const master = clampNumber(params?.masterVolume, 0, 150, 100) / 100;
+    if (Math.abs(master - 1) >= 0.001) filters.push(`volume=${master.toFixed(4)}`);
+    return filters;
+  }
+  async function applyPostprocessPreset(inputFile, outputFile, preset) {
+    const filters = postprocessFilters(preset.params || {});
+    const args = ['-y', '-i', inputFile, ...(filters.length ? ['-af', filters.join(',')] : []), '-c:a', 'pcm_s24le', outputFile];
+    await runFfmpegCli(args, `후처리 프리셋 "${preset.name}" 적용`);
+    if (!(await stat(outputFile).catch(() => null))?.size) throw fail(502, '후처리 결과 파일이 만들어지지 않았습니다.');
+  }
   const resolveLibraryDir = (relative, defaultRelative) => path.join(root, relative.trim() || defaultRelative);
   const settingDir = () => resolveLibraryDir(settings.settingPath, 'library/setting');
   const musicDir = () => resolveLibraryDir(settings.musicPath, 'library/music');
   const examplesDir = () => resolveLibraryDir(settings.examplesPath, 'library/examples');
   const coversDir = () => resolveLibraryDir(settings.coversPath, 'library/cover');
   const abcNotesDir = () => resolveLibraryDir(settings.abcNotesPath, 'library/abc-note');
+  const aiScoreDir = () => path.join(root, 'library', 'AI-MusicProbe');
   // App-level config, not song data - lives under Setting/ (sibling to library/), not inside
   // library/setting: that folder is scanned as song drafts, and library/ is for song-related content only.
   const eqPresetsDir = () => path.join(root, 'Setting', 'EQ-preset');
@@ -289,6 +371,95 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   const postprocessSettingsDir = () => path.join(root, 'Setting', 'PostProcess');
   const resolveConfigPath = (value, defaultRelative) => path.resolve(root, (value || '').trim() || defaultRelative);
   const resolveOptionalConfigPath = (value) => { const trimmed = (value || '').trim(); return trimmed ? path.resolve(root, trimmed) : ''; };
+  // AI Music Probe: a separate local app (own repo, own venv) analyzed over its HTTP API. Never bundled into
+  // SongYUE2 itself, so every call here degrades quietly (skip/"꺼져 있음") when its folder isn't set or it isn't running.
+  const aiMusicProbeRoot = () => resolveConfigPath(settings.aiMusicProbePath, DEFAULT_AI_MUSIC_PROBE_PATH);
+  async function aiMusicProbeHealthy() {
+    try { const response = await fetchImpl(`${AI_MUSIC_PROBE_ENDPOINT}/health`, { signal: AbortSignal.timeout(2000) }); return response.ok; }
+    catch { return false; }
+  }
+  // Starting only waits a short, bounded window (not the full cold-boot time): long enough to catch a
+  // script that fails immediately (missing .venv, wrong folder) and report why, but short enough that a
+  // slow real startup doesn't block the click - the settings page's poll picks up "실행 중" once it's ready.
+  async function startAiMusicProbe() {
+    if (await aiMusicProbeHealthy()) return;
+    const dir = aiMusicProbeRoot();
+    const startScript = path.join(dir, 'start.bat');
+    if (!(await exists(startScript))) throw fail(400, `AI Music Probe의 start.bat을 찾을 수 없습니다: ${startScript}. 설정에서 폴더를 확인해 주세요.`);
+    const child = spawnImpl('cmd.exe', ['/c', startScript], { cwd: dir, windowsHide: true, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let log = '';
+    const collect = (data) => { log = (log + data).slice(-4000); };
+    child.stdout?.on('data', collect);
+    child.stderr?.on('data', collect);
+    let exited = false;
+    let exitCode = null;
+    child.once('exit', (code) => { exited = true; exitCode = code; });
+    child.once('error', (error) => { exited = true; log += `\n${error.message}`; });
+    child.unref();
+    const deadline = Date.now() + 4000;
+    while (Date.now() < deadline) {
+      if (await aiMusicProbeHealthy()) return;
+      if (exited) throw fail(502, `AI Music Probe 실행에 실패했습니다 (종료 코드 ${exitCode}). ${log.trim().split(/\r?\n/).filter(Boolean).slice(-4).join(' ') || '자세한 내용이 없습니다.'}`);
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+  }
+  // AI Music Probe ships its own stop.bat (netstat + taskkill on its port) - reuse it instead of
+  // reimplementing that lookup here. It runs and exits in well under a second, so this is awaited directly.
+  async function stopAiMusicProbe() {
+    const dir = aiMusicProbeRoot();
+    const stopScript = path.join(dir, 'stop.bat');
+    if (!(await exists(stopScript))) throw fail(400, `AI Music Probe의 stop.bat을 찾을 수 없습니다: ${stopScript}. 설정에서 폴더를 확인해 주세요.`);
+    await runBufferedProcess('cmd.exe', ['/c', stopScript], { cwd: dir }).catch(() => {});
+  }
+  // Sends the finished song to AI Music Probe's /api/analyze and keeps the result. The full report (all DSP
+  // parameters, not only the scores) is saved under library/AI-MusicProbe/ so it can be inspected later;
+  // the project's own JSON only keeps the compact aiScore summary the UI reads.
+  async function scoreProjectAudio(entry) {
+    const { project, file } = entry;
+    const audioFile = path.join(path.dirname(file), project.audioPath);
+    if (!(await exists(audioFile))) throw fail(404, '분석할 음원 파일을 찾을 수 없습니다.');
+    if (!(await aiMusicProbeHealthy())) throw fail(503, 'AI Music Probe 서버가 꺼져 있습니다. 설정에서 먼저 실행해 주세요.');
+    const response = await fetchImpl(`${AI_MUSIC_PROBE_ENDPOINT}/api/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paths: [audioFile], recursive: false, save: false }),
+      signal: AbortSignal.timeout(10 * 60 * 1000),
+    }).catch((error) => { throw fail(502, `AI Music Probe 요청에 실패했습니다: ${error.message}`); });
+    if (!response.ok) throw fail(502, `AI Music Probe 응답 오류 (HTTP ${response.status}).`);
+    const data = await response.json();
+    const result = data.results?.[0];
+    if (!result || result.status !== 'completed') throw fail(502, result?.error || 'AI Music Probe 분석에 실패했습니다.');
+    await mkdir(aiScoreDir(), { recursive: true });
+    const reportPath = await uniqueJsonPath(aiScoreDir(), project.title);
+    await saveJson(reportPath, result);
+    const outliersExcluded = result.scoreInfo?.components?.outliersExcluded || [];
+    const aiScore = {
+      status: 'completed',
+      total: Number.isFinite(result.totalScore) ? Math.round(result.totalScore * 10) / 10 : null,
+      confidence: Number.isFinite(result.confidence) ? Math.round(result.confidence * 10) / 10 : null,
+      conclusion: result.conclusion || null,
+      method: AI_MUSIC_PROBE_METHOD_LABELS[result.scoreInfo?.components?.method] || result.scoreInfo?.components?.method || null,
+      outliersExcluded: outliersExcluded.map((name) => AI_MUSIC_PROBE_DETECTOR_LABELS[name] || name),
+      detectors: (result.detectors || []).map((detector) => ({ name: detector.name, label: AI_MUSIC_PROBE_DETECTOR_LABELS[detector.name] || detector.name, score: Number.isFinite(detector.score) ? Math.round(detector.score * 1000) / 10 : null })),
+      reportFile: path.relative(root, reportPath).split(path.sep).join('/'),
+      scoredAt: new Date().toISOString(),
+      error: null,
+    };
+    const updated = { ...project, aiScore };
+    await saveJson(file, updated);
+    return updated;
+  }
+  // Fire-and-forget: called right after a song finishes so a score appears without the user asking, but
+  // never delays or fails the generation response itself. Silently does nothing when the probe is off.
+  function scoreProjectInBackground(project) {
+    (async () => {
+      if (!(await aiMusicProbeHealthy())) return;
+      const entry = await findEntry(project.id);
+      if (!entry) return;
+      try { await scoreProjectAudio(entry); }
+      catch (error) { console.warn(`AI Music Probe scoring skipped: ${error.message}`); }
+    })().catch(() => {});
+  }
   // audiocpp_cli resolves model_specs/*.json relative to its working directory for GGUF
   // packages that embed a "legacy" spec (observed previously with bs_roformer; yue2/htdemucs/
   // mel_band_roformer GGUFs happened not to need it) -- run it from the audio.cpp source root
@@ -407,7 +578,17 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   }
   async function finalizeToMusic(project, file, audioFile, extraFields = {}) {
     const auto = await makeAutoCover(project);
-    try { return await finalizeToMusicCore(auto.project, file, audioFile, extraFields); }
+    if (project.transientExternal === true) {
+      return {
+        ...auto.project, ...extraFields, status: 'completed', audioPath: path.basename(audioFile),
+        _transientAudioFile: audioFile, _transientCoverFile: auto.temp,
+      };
+    }
+    try {
+      const current = await finalizeToMusicCore(auto.project, file, audioFile, extraFields);
+      scoreProjectInBackground(current);
+      return current;
+    }
     finally { if (auto.temp) await unlink(auto.temp).catch(() => {}); }
   }
   async function finalizeToMusicCore(project, file, audioFile, extraFields = {}) {
@@ -1468,6 +1649,124 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       await rm(workDir, { recursive: true, force: true }).catch(() => {});
     }
   }
+  async function findPostprocessPreset(name) {
+    const wanted = text(name, 120).trim().toLocaleLowerCase();
+    if (!wanted) return null;
+    const files = (await readdir(postprocessSettingsDir()).catch(() => [])).filter((entry) => entry.toLowerCase().endsWith('.json'));
+    for (const fileName of files) {
+      const preset = await readJson(path.join(postprocessSettingsDir(), fileName), null);
+      if (preset?.name && String(preset.name).trim().toLocaleLowerCase() === wanted && preset.params && typeof preset.params === 'object') return preset;
+    }
+    return null;
+  }
+  async function exportExternalOutput(inputFile, project, input) {
+    const format = EXTERNAL_OUTPUT_FORMATS.has(input.outputFormat) ? input.outputFormat : 'wav';
+    const sourceExtension = path.extname(inputFile).slice(1).toLowerCase();
+    const requestedFolder = text(input.outputFolder, 2048).trim();
+    const requestedName = text(input.fileName, 240).trim();
+    let outputFolder;
+    try { outputFolder = requestedFolder ? path.resolve(requestedFolder) : path.join(outputDirectory, 'external-output'); }
+    catch { throw fail(400, '출력 폴더 경로가 올바르지 않습니다.'); }
+    await mkdir(outputFolder, { recursive: true });
+    const rawBase = requestedName ? path.basename(requestedName, path.extname(requestedName)) : project.title;
+    const outputFile = await uniqueFilePath(outputFolder, `${safeFilename(rawBase)}.${format}`);
+    if (sourceExtension === format) await copyFile(inputFile, outputFile);
+    else {
+      const sourceCover = project._transientCoverFile || (project.coverPath ? path.join(coversDir(), project.coverPath) : null);
+      const coverFile = sourceCover && await exists(sourceCover) ? sourceCover : null;
+      await runFfmpegCli(FFMPEG_ARGS[format](inputFile, outputFile, coverFile), `${format.toUpperCase()} 출력 변환`);
+    }
+    if (!(await stat(outputFile).catch(() => null))?.size) throw fail(502, '최종 출력 파일이 만들어지지 않았습니다.');
+    return outputFile;
+  }
+  async function runExternalGeneration(input) {
+    const style = text(input.style, 4000);
+    const mode = input.mode === undefined ? 'melody' : text(input.mode, 40).trim().toLowerCase();
+    if (!['melody', 'instrumental'].includes(mode)) throw fail(400, 'mode는 melody 또는 instrumental이어야 합니다.');
+    // Instrumental mode ignores the request lyric: the model only stays vocal-free when the lyric field holds the
+    // section-tag template from <root>/instrumental.lrc.
+    const lyrics = mode === 'instrumental' ? await readInstrumentalLyrics(root) : text(input.lyric ?? input.lyrics);
+    if (!lyrics.trim() || !style.trim()) throw fail(400, mode === 'instrumental' ? 'style이 필요합니다.' : 'lyric과 style이 필요합니다.');
+    if (input.outputFormat !== undefined && !EXTERNAL_OUTPUT_FORMATS.has(input.outputFormat)) throw fail(400, 'outputFormat은 wav, mp3, mp4 중 하나여야 합니다.');
+    if (input.responseMode !== undefined && !['path', 'file'].includes(input.responseMode)) throw fail(400, 'responseMode는 path 또는 file이어야 합니다.');
+    const warnings = [];
+    const installedAdapters = await listAdapters(yueServerPaths(root).adapters);
+    const requestedLora = text(input.loraName, 240).trim();
+    let adapters = [];
+    if (requestedLora) {
+      const wanted = requestedLora.toLocaleLowerCase();
+      const matched = installedAdapters.find((item) => item.name.toLocaleLowerCase() === wanted || text(item.displayName, 240).trim().toLocaleLowerCase() === wanted);
+      if (!matched) warnings.push(`LoRA "${requestedLora}"을(를) 찾지 못해 건너뛰었습니다.`);
+      else if (mode === 'instrumental' && !isInstrumentalAdapter(matched)) warnings.push(`LoRA "${requestedLora}"은(는) 연주곡용이 아니어서 악기만 생성에서 건너뛰었습니다.`);
+      else {
+        const strength = clampNumber(input.loraStrength, 0, 2, 1);
+        adapters = [{ name: matched.name, arScale: strength, narScale: strength }];
+      }
+    }
+    let preset = null;
+    const wantsPostprocess = input.postprocess === true;
+    if (wantsPostprocess) {
+      preset = await findPostprocessPreset(input.postprocessPreset);
+      if (!preset) warnings.push(`후처리 프리셋 "${text(input.postprocessPreset, 120).trim() || '(이름 없음)'}"을(를) 찾지 못해 건너뛰었습니다.`);
+    }
+    const createdAt = new Date().toISOString();
+    const fileTitle = text(input.fileName, 240).trim();
+    const title = text(input.title, 200).trim() || (fileTitle ? path.basename(fileTitle, path.extname(fileTitle)) : '') || 'API 생성곡';
+    const q8Model = path.join(root, 'models', 'audio-cpp', 'Yue2-3B-GGUF', AUDIOCPP_MODELS['yue2-q8'].model);
+    const modelId = text(input.modelId, 200).trim() || (await exists(q8Model) ? 'yue2-q8' : 'yue2-q4');
+    const project = {
+      id: randomUUID(), title, lyrics, style, modelId,
+      // The Python engine rejects a negative seed (plan step fails), so an omitted seed becomes a random one.
+      seed: Number.isSafeInteger(Number(input.seed)) && Number(input.seed) >= 0 ? Number(input.seed) : Math.floor(Math.random() * 2 ** 31),
+      steps: Math.max(1, Math.min(1000, Number(input.steps) || 8)),
+      cot: ['full', 'melody', 'off'].includes(input.cot) ? input.cot : 'full',
+      vocalGender: VOCAL_GENDERS.has(input.vocalGender) ? input.vocalGender : '',
+      instrumental: mode === 'instrumental', abc: text(input.abc, 200000), adapters,
+      mode: 'custom', status: 'draft', favorite: false, notes: '', createdAt, updatedAt: createdAt, transientExternal: true,
+    };
+    const isPython = Boolean(PYTHON_MODELS[project.modelId]);
+    const isComfy = Boolean(COMFYUI_MODELS[project.modelId]);
+    if (!AUDIOCPP_MODELS[project.modelId] && !isPython && !isComfy) throw fail(400, '지원하는 modelId를 입력해 주세요.');
+    const runner = adapters.length ? runYueServer : isPython ? runPythonYue2 : isComfy ? runComfyUi : runAudioCpp;
+    const workDir = path.join(outputDirectory, `external-${randomUUID()}`);
+    let aiPolishStages = [];
+    let generated = null;
+    try {
+      generated = await runner(project, null);
+      if (!generated?._transientAudioFile || !(await exists(generated._transientAudioFile))) throw fail(502, '생성된 오디오 파일 정보를 찾지 못했습니다.');
+      let currentFile = generated._transientAudioFile;
+      await mkdir(workDir, { recursive: true });
+      if (input.aiPolish === true) {
+        const polishSettings = normalizePolishSettings({ denoise: { enabled: true }, lifter: { enabled: true }, naturalize: { enabled: true } });
+        const polishedFile = path.join(workDir, 'polished.flac');
+        const onProgress = (percent, label) => { if (generationStatus) { generationStatus.progress = percent; generationStatus.detail = label; } };
+        try { await (polishRunner || defaultPolishRunner)({ inputFile: currentFile, referenceFile: null, outputFile: polishedFile, settings: polishSettings, workDir, onProgress, vstHost: null }); }
+        catch (error) { throw error?.status ? error : fail(502, `AI 곡 다듬기에 실패했습니다. ${error?.message || ''}`.trim()); }
+        if (!(await exists(polishedFile))) throw fail(502, 'AI 곡 다듬기 결과가 만들어지지 않았습니다.');
+        currentFile = polishedFile;
+        aiPolishStages = enabledStages(polishSettings);
+      }
+      if (preset) {
+        const postprocessedFile = path.join(workDir, 'postprocessed.wav');
+        await applyPostprocessPreset(currentFile, postprocessedFile, preset);
+        currentFile = postprocessedFile;
+      }
+      const outputFile = await exportExternalOutput(currentFile, generated, input);
+      return {
+        responseMode: input.responseMode === 'file' ? 'file' : 'path', outputFile,
+        result: {
+          status: 'completed', requestId: project.id,
+          output: { format: path.extname(outputFile).slice(1).toLowerCase(), folder: path.dirname(outputFile), fileName: path.basename(outputFile), path: outputFile },
+          applied: { lora: adapters[0]?.name || null, loraStrength: adapters.length ? adapters[0].arScale : null, aiPolish: aiPolishStages, postprocessPreset: preset?.name || null },
+          warnings,
+        },
+      };
+    } finally {
+      await rm(workDir, { recursive: true, force: true }).catch(() => {});
+      if (generated?._transientCoverFile) await unlink(generated._transientCoverFile).catch(() => {});
+      await rm(path.join(outputDirectory, project.id), { recursive: true, force: true }).catch(() => {});
+    }
+  }
   async function exportMidi(entry) {
     const engine = resolveConfigPath(settings.enginePath, DEFAULT_ENGINE_PATH);
     if (!(await exists(engine))) throw fail(400, `audio.cpp 실행 파일을 찾을 수 없습니다: ${path.relative(root, engine)}. 설정에서 경로를 확인해 주세요.`);
@@ -1833,7 +2132,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   }
   const publicSettings = () => {
     const env = providerFromEnv(settings.provider);
-    return { provider: settings.provider, endpoint: env.endpoint, llmModel: env.model, enginePath: settings.enginePath, pythonEnginePath: settings.pythonEnginePath, pythonScriptPath: settings.pythonScriptPath, pythonMemoryBudgetGib: settings.pythonMemoryBudgetGib, sheetSagePythonPath: settings.sheetSagePythonPath, comfyUiEndpoint: settings.comfyUiEndpoint, comfyUiEnginePath: settings.comfyUiEnginePath, ddspSvcPath: settings.ddspSvcPath, settingPath: settings.settingPath, musicPath: settings.musicPath, examplesPath: settings.examplesPath, coversPath: settings.coversPath, abcNotesPath: settings.abcNotesPath, stylePresets: settings.stylePresets, visualizerEnabled: settings.visualizerEnabled, visualizerRingCount: settings.visualizerRingCount, visualizerHue: settings.visualizerHue, visualizerLineWidth: settings.visualizerLineWidth, visualizerTrail: settings.visualizerTrail, visualizerSpiral: settings.visualizerSpiral, visualizerRingMode: settings.visualizerRingMode, visualizerTimeStep: settings.visualizerTimeStep, visualizerTimeSkew: settings.visualizerTimeSkew, visualizerRingStep: settings.visualizerRingStep, visualizerAmplitude: settings.visualizerAmplitude, saveFormat: settings.saveFormat, viewMode: settings.viewMode, autoCover: settings.autoCover, outputDirectory: path.relative(root, outputDirectory) || '.', hasApiKey: Boolean(env.apiKey), apiKey: env.apiKey ? '***' : null, apiKeyStorage: 'env' };
+    return { provider: settings.provider, endpoint: env.endpoint, llmModel: env.model, enginePath: settings.enginePath, pythonEnginePath: settings.pythonEnginePath, pythonScriptPath: settings.pythonScriptPath, pythonMemoryBudgetGib: settings.pythonMemoryBudgetGib, sheetSagePythonPath: settings.sheetSagePythonPath, comfyUiEndpoint: settings.comfyUiEndpoint, comfyUiEnginePath: settings.comfyUiEnginePath, ddspSvcPath: settings.ddspSvcPath, aiMusicProbePath: settings.aiMusicProbePath, settingPath: settings.settingPath, musicPath: settings.musicPath, examplesPath: settings.examplesPath, coversPath: settings.coversPath, abcNotesPath: settings.abcNotesPath, stylePresets: settings.stylePresets, visualizerEnabled: settings.visualizerEnabled, visualizerRingCount: settings.visualizerRingCount, visualizerHue: settings.visualizerHue, visualizerLineWidth: settings.visualizerLineWidth, visualizerTrail: settings.visualizerTrail, visualizerSpiral: settings.visualizerSpiral, visualizerRingMode: settings.visualizerRingMode, visualizerTimeStep: settings.visualizerTimeStep, visualizerTimeSkew: settings.visualizerTimeSkew, visualizerRingStep: settings.visualizerRingStep, visualizerAmplitude: settings.visualizerAmplitude, saveFormat: settings.saveFormat, viewMode: settings.viewMode, autoCover: settings.autoCover, outputDirectory: path.relative(root, outputDirectory) || '.', hasApiKey: Boolean(env.apiKey), apiKey: env.apiKey ? '***' : null, apiKeyStorage: 'env' };
   };
   async function localFile(relativePath) {
     const file = path.join(root, relativePath);
@@ -1934,8 +2233,10 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       if (!validHosts.has(req.headers.host)) throw fail(403, '이 PC에서 앱 주소로 접속해 주세요.');
       const allowedOrigins = new Set([`http://127.0.0.1:${ownPort}`, `http://localhost:${ownPort}`, 'http://localhost:5176', 'http://127.0.0.1:5176']);
       const origin = req.headers.origin;
-      if (origin && !allowedOrigins.has(origin)) throw fail(403, '허용되지 않은 앱 주소입니다. 로컬 앱에서 다시 시도해 주세요.');
-      if (req.headers['sec-fetch-site'] === 'cross-site') throw fail(403, '외부 페이지에서는 요청할 수 없습니다.');
+      let loopbackOrigin = false;
+      try { const parsed = new URL(origin); loopbackOrigin = parsed.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(parsed.hostname); } catch {}
+      if (origin && !allowedOrigins.has(origin) && !loopbackOrigin) throw fail(403, '허용되지 않은 앱 주소입니다. 로컬 앱에서 다시 시도해 주세요.');
+      if (req.headers['sec-fetch-site'] === 'cross-site' && !loopbackOrigin) throw fail(403, '외부 페이지에서는 요청할 수 없습니다.');
       if (origin) {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Vary', 'Origin');
@@ -1966,6 +2267,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           if (input.comfyUiEndpoint !== undefined) next.comfyUiEndpoint = text(input.comfyUiEndpoint, 2048);
           if (input.comfyUiEnginePath !== undefined) next.comfyUiEnginePath = text(input.comfyUiEnginePath, 2048);
           if (input.ddspSvcPath !== undefined) next.ddspSvcPath = text(input.ddspSvcPath, 2048);
+          if (input.aiMusicProbePath !== undefined) next.aiMusicProbePath = text(input.aiMusicProbePath, 2048);
           if (input.settingPath !== undefined) next.settingPath = text(input.settingPath, 2048);
           if (input.musicPath !== undefined) next.musicPath = text(input.musicPath, 2048);
           if (input.examplesPath !== undefined) next.examplesPath = text(input.examplesPath, 2048);
@@ -1986,7 +2288,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           if (input.saveFormat !== undefined) next.saveFormat = input.saveFormat;
           if (input.autoCover !== undefined) next.autoCover = input.autoCover === true;
           if (input.viewMode !== undefined) next.viewMode = input.viewMode;
-          await saveJson(settingsFile, { provider: next.provider, enginePath: next.enginePath, pythonEnginePath: next.pythonEnginePath, pythonScriptPath: next.pythonScriptPath, pythonMemoryBudgetGib: next.pythonMemoryBudgetGib, sheetSagePythonPath: next.sheetSagePythonPath, comfyUiEndpoint: next.comfyUiEndpoint, comfyUiEnginePath: next.comfyUiEnginePath, ddspSvcPath: next.ddspSvcPath, settingPath: next.settingPath, musicPath: next.musicPath, examplesPath: next.examplesPath, coversPath: next.coversPath, abcNotesPath: next.abcNotesPath, stylePresets: next.stylePresets, visualizerEnabled: next.visualizerEnabled, visualizerRingCount: next.visualizerRingCount, visualizerHue: next.visualizerHue, visualizerLineWidth: next.visualizerLineWidth, visualizerTrail: next.visualizerTrail, visualizerSpiral: next.visualizerSpiral, visualizerRingMode: next.visualizerRingMode, visualizerTimeStep: next.visualizerTimeStep, visualizerTimeSkew: next.visualizerTimeSkew, visualizerRingStep: next.visualizerRingStep, visualizerAmplitude: next.visualizerAmplitude, saveFormat: next.saveFormat, viewMode: next.viewMode, autoCover: next.autoCover });
+          await saveJson(settingsFile, { provider: next.provider, enginePath: next.enginePath, pythonEnginePath: next.pythonEnginePath, pythonScriptPath: next.pythonScriptPath, pythonMemoryBudgetGib: next.pythonMemoryBudgetGib, sheetSagePythonPath: next.sheetSagePythonPath, comfyUiEndpoint: next.comfyUiEndpoint, comfyUiEnginePath: next.comfyUiEnginePath, ddspSvcPath: next.ddspSvcPath, aiMusicProbePath: next.aiMusicProbePath, settingPath: next.settingPath, musicPath: next.musicPath, examplesPath: next.examplesPath, coversPath: next.coversPath, abcNotesPath: next.abcNotesPath, stylePresets: next.stylePresets, visualizerEnabled: next.visualizerEnabled, visualizerRingCount: next.visualizerRingCount, visualizerHue: next.visualizerHue, visualizerLineWidth: next.visualizerLineWidth, visualizerTrail: next.visualizerTrail, visualizerSpiral: next.visualizerSpiral, visualizerRingMode: next.visualizerRingMode, visualizerTimeStep: next.visualizerTimeStep, visualizerTimeSkew: next.visualizerTimeSkew, visualizerRingStep: next.visualizerRingStep, visualizerAmplitude: next.visualizerAmplitude, saveFormat: next.saveFormat, viewMode: next.viewMode, autoCover: next.autoCover });
           settings = next;
           if (input.settingPath !== undefined) await mkdir(settingDir(), { recursive: true });
           if (input.musicPath !== undefined) await mkdir(musicDir(), { recursive: true });
@@ -1995,6 +2297,23 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           if (input.abcNotesPath !== undefined) await mkdir(abcNotesDir(), { recursive: true });
           return publicSettings();
         }));
+      }
+      if (req.method === 'GET' && pathname === '/api/ai-music-probe/status') {
+        return send(200, { configured: Boolean(settings.aiMusicProbePath.trim()), running: await aiMusicProbeHealthy(), endpoint: AI_MUSIC_PROBE_ENDPOINT });
+      }
+      if (req.method === 'POST' && pathname === '/api/ai-music-probe/start') {
+        await startAiMusicProbe();
+        return send(200, { configured: Boolean(settings.aiMusicProbePath.trim()), running: await aiMusicProbeHealthy(), endpoint: AI_MUSIC_PROBE_ENDPOINT });
+      }
+      if (req.method === 'POST' && pathname === '/api/ai-music-probe/stop') {
+        await stopAiMusicProbe();
+        return send(200, { configured: Boolean(settings.aiMusicProbePath.trim()), running: await aiMusicProbeHealthy(), endpoint: AI_MUSIC_PROBE_ENDPOINT });
+      }
+      const aiScoreMatch = pathname.match(/^\/api\/projects\/([^/]+)\/ai-score$/);
+      if (req.method === 'POST' && aiScoreMatch) {
+        const entry = await findEntry(aiScoreMatch[1]);
+        if (!entry) throw fail(404, '곡을 찾을 수 없습니다.');
+        return send(200, await scoreProjectAudio(entry));
       }
       if (req.method === 'GET' && pathname === '/api/models') {
         const inventory = await inventoryOnDisk(await readJson(path.join(root, 'model-download-status.json'), { schemaVersion: 1, updatedAt: null, state: 'not_started', totalBytes: 0, completedBytes: 0, repositories: [] }));
@@ -2324,6 +2643,32 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
         if (!(await listAdapters(paths.adapters)).some((item) => item.name === name)) throw fail(404, 'LoRA를 찾을 수 없습니다.');
         await rm(path.join(paths.adapters, name), { recursive: true, force: true });
         return send(200, { ok: true });
+      }
+      if (req.method === 'POST' && pathname === '/api/external/generate') {
+        const input = await body(req, 512 * 1024);
+        if (generating) throw fail(409, '이미 다른 곡을 생성하는 중입니다. 완료 후 다시 시도해 주세요.');
+        generating = true;
+        const requestedModel = text(input.modelId, 200).trim() || 'yue2-q4';
+        const useYueServer = Boolean(text(input.loraName, 240).trim());
+        const isPython = Boolean(PYTHON_MODELS[requestedModel]);
+        const isComfy = Boolean(COMFYUI_MODELS[requestedModel]);
+        const expectedMs = useYueServer ? 150000 : isPython ? 240000 : isComfy ? 60000 : Math.round(60000 * (Math.max(1, Number(input.steps) || 8) / 8));
+        generationStatus = { projectId: null, startedAt: Date.now(), expectedMs, detail: '외부 API 요청 준비 중' };
+        try {
+          const external = await runExternalGeneration(input);
+          if (external.responseMode === 'file') {
+            const data = await readFile(external.outputFile);
+            const extension = path.extname(external.outputFile).toLowerCase();
+            res.writeHead(200, {
+              'Content-Type': AUDIO_MIME_TYPES[extension] || 'application/octet-stream',
+              'Content-Length': String(data.length),
+              'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(external.outputFile))}`,
+              'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff',
+            });
+            return res.end(data);
+          }
+          return send(200, external.result);
+        } finally { generating = false; generationStatus = null; }
       }
       if (req.method === 'POST' && pathname === '/api/generate') {
         const input = await body(req);
