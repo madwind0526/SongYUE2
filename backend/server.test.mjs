@@ -493,7 +493,8 @@ test('external generation API accepts one-shot parameters without registering pr
     onProgress(100, '완료');
     return { report: null };
   };
-  const server = await createStudioServer({ root, fetchImpl: async () => Response.json({}), spawnImpl: fakeSpawn.spawnImpl, polishRunner });
+  const fetched = [];
+  const server = await createStudioServer({ root, fetchImpl: async (url) => { fetched.push(String(url)); return Response.json({}); }, spawnImpl: fakeSpawn.spawnImpl, polishRunner });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   const call = async (route, method = 'GET', payload) => fetch(`${base}${route}`, { method, headers: payload === undefined ? undefined : { 'Content-Type': 'application/json' }, body: payload === undefined ? undefined : JSON.stringify(payload) });
@@ -521,6 +522,8 @@ test('external generation API accepts one-shot parameters without registering pr
   assert.match(generated.data.warnings[0], /찾지 못해 건너뛰었습니다/);
   assert.deepEqual(await jsonNames(path.join(root, 'library', 'setting')), [], 'external API requests must not register a draft');
   assert.deepEqual(await jsonNames(path.join(root, 'library', 'music')), [], 'external API requests must not register a completed project');
+  await new Promise(resolve => setTimeout(resolve, 200));
+  assert.deepEqual(fetched.filter(url => url.includes(':8792')), [], 'external API requests must not call AI Music Probe');
 
   const skippedPreset = await callJson('/api/external/generate', 'POST', { lyric: '가사', style: '스타일', mode: 'melody', modelId: 'yue2-q4', cot: 'off', postprocess: true, postprocessPreset: '없음', outputFormat: 'wav' });
   assert.equal(skippedPreset.status, 200);
