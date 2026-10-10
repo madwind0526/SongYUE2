@@ -263,3 +263,18 @@ if (configCache) configCache.lastSettingsKey = settingsKey;
 - `backend/tts.mjs`가 모델 카탈로그(`TTS_FAMILIES`, `ASR_FAMILIES`), CLI 인자 조립(`buildTtsArgs`), 문장 분할(`splitTtsText`, `splitTtsByScript`), 이어받기 다운로드(`downloadTtsModel`)를 한 곳에서 관리한다. 새 모델은 (1) `run-build.ps1`의 `-Models`에 패밀리 추가 후 재빌드 (2) 카탈로그에 파일/크기/정밀도 등록 (3) `buildTtsArgs`에 분기 추가 (4) `bench2.mjs`류 스크립트로 한국어 CER 실측 순서로 넣는다. 프론트는 `/api/audio-tools/tts/models` 응답으로 버튼/크기/정밀도를 자동 구성한다.
 - 변형 `mode`: `design`(음색 설명), `ref`(참조 복제), `preset`(내장 목소리), `asr`. 네이티브 design이 없는 모델은 Qwen3 VoiceDesign이 만든 참조 음성을 대신 쓴다.
 - 클라우드(Typecast)는 `backend/typecast.mjs`(직접 HTTP, 키는 `.env`의 TYPECAST_API_KEY, 백엔드에서만 사용).
+
+## Wave 53 (2026-09-29): 독립형 UI와 외부 원샷 API 공존
+
+- 기존 생성 엔진 코어를 재사용하는 별도 `POST /api/external/generate`를 둔다. 외부 호출이 없으면 시작 방식과 UI 동작은 전혀 바뀌지 않는다. 외부 결과는 transient 프로젝트로 처리해 `library/setting`/`library/music`에 JSON이나 오디오를 등록하지 않고 지정 출력만 남긴다.
+- 긴 GPU 작업은 기존 전역 생성 잠금과 `/api/generate/status`를 공유해야 UI 생성과 외부 생성이 동시에 GPU를 점유하지 않는다.
+- 외부 자동화 입력에서 선택 리소스(LoRA, 후처리 프리셋)는 이름 불일치를 전체 실패로 만들지 말고 `warnings`에 기록한 뒤 건너뛴다. 필수 입력과 엔진 실패는 명확한 4xx/5xx로 반환한다.
+- 출력은 기본적으로 `{folder,fileName,path}` JSON을 반환하고, 필요한 호출자에는 `responseMode: "file"`로 바이너리를 직접 반환한다. 지정 파일이 이미 있으면 덮어쓰지 않고 번호를 붙인다.
+- 브라우저 기반 로컬 앱 연동은 임의 인터넷 Origin을 열지 말고 `localhost`/`127.0.0.1`/`::1`의 HTTP Origin만 포트와 관계없이 허용한다.
+
+## Wave 54 (2026-09-29): 외부 생성 결과의 비등록 수명주기
+
+- 일반 생성 runner가 마지막에 라이브러리 저장을 호출하더라도 transient 플래그에서는 원본 오디오와 임시 커버 경로만 반환하도록 finalizer에서 분기한다.
+- 외부 출력 변환이 끝난 뒤 `runs/<requestId>`와 임시 커버를 `finally`에서 정리한다. 실패한 요청도 초안 JSON을 남기지 않는다.
+- 기본 출력 폴더는 프로젝트 라이브러리가 아니라 `runs/external-output`으로 분리한다. 호출자가 `outputFolder`를 주면 그 위치의 결과 파일만 영구 보존한다.
+- 실제 Q8 생성으로 melody/instrumental 두 경로, AI polish, 후처리 프리셋, MP4 변환, 프로젝트 0건을 종단 확인한다.

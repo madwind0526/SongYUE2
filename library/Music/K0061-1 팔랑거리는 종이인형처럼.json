@@ -21,5 +21,35 @@
   "sourceProjectId": "cc66504f-06c5-46a2-852d-cf23704def8c",
   "audioPath": "K0061-1 팔랑거리는 종이인형처럼.flac",
   "coverPath": "f20730ec-1b38-43c1-a683-1a471406abcf.png",
-  "saveError": null
+  "saveError": null,
+  "aiScore": {
+    "status": "completed",
+    "total": 94,
+    "confidence": 73.1,
+    "conclusion": "AI 생성 흔적이 매우 강함",
+    "method": "이상치 제외 평균",
+    "outliersExcluded": [
+      "lofcz vocoder fakeprint"
+    ],
+    "detectors": [
+      {
+        "name": "sonics",
+        "label": "SONICS (SpecTTTra)",
+        "score": 88
+      },
+      {
+        "name": "artifactnet",
+        "label": "ArtifactNet v9.4",
+        "score": 100
+      },
+      {
+        "name": "lofcz",
+        "label": "lofcz vocoder fakeprint",
+        "score": 0
+      }
+    ],
+    "reportFile": "library/AI-MusicProbe/K0061-1 팔랑거리는 종이인형처럼 (1).json",
+    "scoredAt": "2026-09-27T14:00:16.441Z",
+    "error": null
+  }
 }

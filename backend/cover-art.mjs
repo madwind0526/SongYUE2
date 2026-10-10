@@ -1,4 +1,4 @@
-// Cover art for songs: a Z-Image Turbo picture made by ComfyUI, and the square crop / size limits that every cover follows.
+// Cover art for songs: a Krea 2 Turbo picture made by ComfyUI, and the square crop / size limits that every cover follows.
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,14 +8,14 @@ export const COVER_MAX_SIZE = 2475;
 export const COVER_MIN_SIZE = 1400;
 
 // Model files are looked for by name pattern so the user's own folder layout (sub-folders, fp8 / fp4 variants) still works.
-const UNET_PREFERENCE = [/z[_-]?image[_-]?turbo.*nvfp4/i, /z[_-]?image[_-]?turbo.*fp8/i, /z[_-]?image[_-]?turbo.*bf16/i];
-const CLIP_PREFERENCE = [/qwen_3_4b_fp8_mixed/i, /qwen_3_4b_fp4_mixed/i, /qwen_3_4b\.safetensors$/i];
-const VAE_PREFERENCE = [/(^|[\\/])ae\.safetensors$/i];
+const UNET_PREFERENCE = [/krea2[_-]turbo.*nvfp4/i, /krea2[_-]turbo.*fp8[_-]?scaled/i, /krea2[_-]turbo.*fp8/i];
+const CLIP_PREFERENCE = [/qwen3vl[_-]4b[_-]fp8[_-]?scaled/i, /qwen3vl[_-]4b/i];
+const VAE_PREFERENCE = [/qwen_image_vae\.safetensors$/i];
 
 const firstMatch = (names, patterns) => { for (const pattern of patterns) { const found = names.find((name) => pattern.test(name)); if (found) return found; } return null; };
 const optionsOf = (info, node, field) => (info?.[node]?.input?.required?.[field]?.[0] || []).filter((item) => typeof item === 'string');
 
-// Picks the Z-Image Turbo files that ComfyUI can see (object_info of UNETLoader / CLIPLoader / VAELoader); null when a piece is missing.
+// Picks the Krea 2 Turbo files that ComfyUI can see (object_info of UNETLoader / CLIPLoader / VAELoader); null when a piece is missing.
 export function pickCoverModels(info) {
   const unet = firstMatch(optionsOf(info, 'UNETLoader', 'unet_name'), UNET_PREFERENCE);
   const clip = firstMatch(optionsOf(info, 'CLIPLoader', 'clip_name'), CLIP_PREFERENCE);
@@ -25,7 +25,7 @@ export function pickCoverModels(info) {
 
 const oneLine = (value, max) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
 
-// The picture follows the music style only: Z-Image draws any title or lyric line it is given (Korean too) as letters inside the picture,
+// The picture follows the music style only: Krea 2 draws any title or lyric line it is given (Korean too) as letters inside the picture,
 // so neither is put in the prompt. Vocal gender / instrumental only decide whether a singer belongs in the scene.
 export function buildCoverPrompt({ style, instrumental, vocalGender }) {
   // Only plain English / ASCII goes into the prompt (Korean text would be drawn into the picture)
@@ -42,13 +42,12 @@ export function buildCoverPrompt({ style, instrumental, vocalGender }) {
 export function buildCoverWorkflow({ models, prompt, seed, size = COVER_GENERATE_SIZE }) {
   return {
     '1': { class_type: 'UNETLoader', inputs: { unet_name: models.unet, weight_dtype: 'default' } },
-    '2': { class_type: 'CLIPLoader', inputs: { clip_name: models.clip, type: 'lumina2', device: 'default' } },
+    '2': { class_type: 'CLIPLoader', inputs: { clip_name: models.clip, type: 'krea2', device: 'default' } },
     '3': { class_type: 'VAELoader', inputs: { vae_name: models.vae } },
     '4': { class_type: 'CLIPTextEncode', inputs: { text: prompt, clip: ['2', 0] } },
     '5': { class_type: 'ConditioningZeroOut', inputs: { conditioning: ['4', 0] } },
-    '6': { class_type: 'ModelSamplingAuraFlow', inputs: { model: ['1', 0], shift: 3.0 } },
-    '7': { class_type: 'EmptySD3LatentImage', inputs: { width: size, height: size, batch_size: 1 } },
-    '8': { class_type: 'KSampler', inputs: { model: ['6', 0], seed, steps: 8, cfg: 1.0, sampler_name: 'res_multistep', scheduler: 'simple', positive: ['4', 0], negative: ['5', 0], latent_image: ['7', 0], denoise: 1.0 } },
+    '7': { class_type: 'EmptyLatentImage', inputs: { width: size, height: size, batch_size: 1 } },
+    '8': { class_type: 'KSampler', inputs: { model: ['1', 0], seed, steps: 8, cfg: 1.0, sampler_name: 'euler', scheduler: 'simple', positive: ['4', 0], negative: ['5', 0], latent_image: ['7', 0], denoise: 1.0 } },
     '9': { class_type: 'VAEDecode', inputs: { samples: ['8', 0], vae: ['3', 0] } },
     '10': { class_type: 'PreviewImage', inputs: { images: ['9', 0] } },
   };

@@ -64,7 +64,7 @@ Invoke-RestMethod `
 - **가사 싱크(LRC)**: 곡 메뉴의 "가사 싱크 (LRC)"에서 가사를 소리에 맞춰 줄 단위 시간으로 만듭니다(보컬 분리 + 음성 인식 + 가사 매칭, 한국어·영어·일본어 확인). LRC로 저장하고, 결과가 있는 곡은 재생할 때 하단 플레이어에 현재 가사와 다음 가사가 나옵니다. 줄을 누르면 그 위치부터 재생합니다.
 - **AI 곡 다듬기**: 완성곡 메뉴에서 노이즈 제거, Spectral Lifter(AI 특유의 반짝임·치찰음 완화, 고음역 복원, 타격감), 보컬 자연화, **VST3 플러그인**, 기준곡 마스터링(matchering)을 골라 적용합니다. 미리듣기를 만들고 원본과 같은 재생 위치에서 번갈아 들어 본 뒤 새 곡으로 저장하거나 버립니다(원본은 바뀌지 않음). 알고리듬은 YuE2 Studio(MIT)의 audio-post를 옮긴 것입니다. VST3 플러그인 단계는 내 PC의 VST3(리버브, EQ 등)를 별도 프로세스로 거치며, 플러그인 자체 창에서 정한 설정이 저장되고 체인 프리셋으로 묶을 수 있습니다.
 - **VST3 관리**: 왼쪽 메뉴의 "VST3 관리"에서 플러그인을 검색(표준 VST3 폴더와 `engine/vst-host/plugins/`)하고, 설정 창을 열어 값을 저장하고, 곡의 일부에 플러그인 하나만 적용해 원본과 번갈아 듣고("시험 듣기", 음량 맞추기 포함), 체인 프리셋을 만들고, 추천 무료 플러그인 링크를 봅니다([docs/vst3.md](docs/vst3.md)).
-- **곡 표지 자동 생성**: 곡이 만들어질 때 표지가 자동으로 붙습니다 — ComfyUI의 Z-Image Turbo로 그린 그림, 안 되면 Pixabay 무료 사진(`.env`의 `PIXABAY_API_KEY`), 그것도 안 되면 제목이 들어간 그래픽. 표지는 항상 정사각형(직접 올린 그림도 가운데 기준으로 자름, 최대 2475px)입니다. 설정에서 끌 수 있습니다.
+- **곡 표지 자동 생성**: 곡이 만들어질 때 표지가 자동으로 붙습니다 — ComfyUI의 Krea 2 Turbo로 그린 그림, 안 되면 Pixabay 무료 사진(`.env`의 `PIXABAY_API_KEY`), 그것도 안 되면 제목이 들어간 그래픽. 표지는 항상 정사각형(직접 올린 그림도 가운데 기준으로 자름, 최대 2475px)입니다. 설정에서 끌 수 있습니다.
 - 상단 바에 GPU / VRAM / CPU / RAM 사용률(초록, 70% 넘으면 노랑, 90% 넘으면 빨강)과 하단 플레이어의 스펙트럼 높이 조절(^ / v)이 있습니다.
 - **음색 변조 (실험적)**: 완성곡(또는 라이브러리의 어떤 오디오라도)의 보컬 음색을 바꾸는 통합 팝업 — 두 엔진 중에서 고릅니다.
   - **RVC**: 내장 목소리 4개나 HuggingFace에서 받은 목소리(라이선스 표기, 미리듣기, 관리 팝업 포함)로 보컬을 변환. 참조 오디오는 필요 없고, 음높이(반음)와 검색 블렌딩을 조절합니다. 변환 직후 원본과의 음량 차이를 자동 보정하고, 무음 구간의 잡음은 게이트로 없앱니다.
@@ -202,6 +202,7 @@ npm run dev
 | SheetSage2 Python 실행 파일 | `test\YuE2-source\.venv-sheetsage2\Scripts\python.exe` |
 | ComfyUI 연결 주소 | `http://127.0.0.1:8190` (기본값, 비워두면 자동 사용) |
 | ComfyUI 설치 폴더 | `engine\ComfyUI` (기본값, 비워두면 자동 사용) |
+| ComfyUI를 켤 때 ck_attention으로 실행 | 켜짐(기본). SongYUE2가 ComfyUI를 켜 줄 때 `--use-ck-attention`(Comfy Kitchen INT8 attention)을 붙입니다. 이미 켜져 있는 ComfyUI에는 다시 켠 뒤부터 적용됩니다. 문제가 생기면 끕니다 |
 | DDSP-SVC 설치 폴더 (음색 변조 DDSP 탭) | `test\DDSP-SVC` (기본값) |
 
 경로는 모두 SongYUE2 폴더 기준 상대 경로 또는 절대 경로를 쓸 수 있습니다.
@@ -229,7 +230,7 @@ npm run build   # 프론트엔드 빌드
 - [docs/local-api.md](docs/local-api.md) — 로컬 API 엔드포인트 목록
 - [docs/audiocpp-setup.md](docs/audiocpp-setup.md) — audio.cpp 빌드 및 연결 방법
 - [docs/python-engine-setup.md](docs/python-engine-setup.md) — 원본 Python 엔진 + SheetSage2(커버) 설치 방법
-- [docs/comfyui-setup.md](docs/comfyui-setup.md) — ComfyUI 연동(YuE2 INT8 ConvRot 모델, 표지용 Z-Image Turbo) 설치 방법
+- [docs/comfyui-setup.md](docs/comfyui-setup.md) — ComfyUI 연동(YuE2 INT8 ConvRot 모델, 표지용 Krea 2 Turbo) 설치 방법
 - [docs/lora-training.md](docs/lora-training.md) — LoRA 학습(ComfyUI 학습기) 준비와 사용법
 - [docs/vst3.md](docs/vst3.md) — VST3 플러그인(호스트, 폴더, 곡 다듬기, VST3 관리)
 - [docs/models.md](docs/models.md) — 지원 모델 안내
@@ -259,7 +260,7 @@ YuE2 모델 가중치(GGUF/원본 모두)는 CC BY-NC 4.0을 따릅니다. 비�
 
 곡이 만들어질 때 표지가 없으면 다음 순서로 만듭니다. 앞 단계가 안 되면 다음 단계로 넘어가고, 모두 실패해도 곡은 표지 없이 저장됩니다.
 
-1. **ComfyUI의 Z-Image Turbo**(1536px, 약 15~20초): 모델 파일은 [docs/comfyui-setup.md](docs/comfyui-setup.md)의 "표지 이미지 모델"을 보세요. 프롬프트에는 **음악 스타일의 영어 단어와 가수 성별만** 씁니다(제목·가사를 넣으면 모델이 한글을 그림 속 글자로 그려 버림).
+1. **ComfyUI의 Krea 2 Turbo**(1536px, 약 15~20초): 모델 파일은 [docs/comfyui-setup.md](docs/comfyui-setup.md)의 "표지 이미지 모델"을 보세요. 프롬프트에는 **음악 스타일의 영어 단어와 가수 성별만** 씁니다(제목·가사를 넣으면 모델이 한글을 그림 속 글자로 그려 버림).
 2. **Pixabay 무료 사진**: `.env`의 `PIXABAY_API_KEY`(무료 키: https://pixabay.com/api/docs/)가 있을 때. Pixabay는 한글 검색이 안 되어 가사의 한글 단어(밤, 바다, 사랑 등)를 영어 검색어로 바꿔 찾고, 없으면 스타일 단어, 그것도 없으면 풍경 같은 일반 사진을 씁니다. 정사각형에 가까운 사진을 골라 자르고 1400px로 키웁니다.
 3. **그래픽 표지**: 곡마다 다른 색 그라데이션에 제목과 장르 문구(ffmpeg, 맑은 고딕).
 

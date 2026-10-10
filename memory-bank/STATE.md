@@ -2,9 +2,11 @@
 
 ## Current Wave
 
-- **Wave:** 52
+- **Wave:** 54
 - **Status:** Done
 - **Cache Status:** CLEAN
+- **Last Checkpoint:** 2026-09-29 external API transient/non-library lifecycle, expanded README guide, and real Q8 melody/instrumental MP4 generation validation.
+- **Last Checkpoint:** 2026-09-29 external one-shot generation API with optional LoRA/AI polish/postprocess, path or binary output, loopback app access, tests and docs.
 - **Last Checkpoint:** 2026-09-26 AI polish naturalization Advanced dialog, preview transport, bounded numeric inputs and compare layout.
 - **Last Checkpoint:** 2026-09-25 Installed 필터 추가 및 허깅페이스와 옵션 공유. 월드/민속·중국어 제외, 한 줄 배치. 타입 검사·브라우저 검증 및 남은 일 정리. 실제 모바일 키보드/OS 큰 글꼴은 후속.
 - **Last Checkpoint:** 2026-09-24 Wave 47~49 — 포트 정리(PORTS.md), AuK 전면 제거, Audio Tools를 audio.cpp 기반으로 재구성(TTS 7모델+Typecast, 음성 인식 3모델, 음성 조절), 상세는 todo.md/progress.md.

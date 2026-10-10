@@ -203,7 +203,7 @@ LLM 제공업체의 API 키, 연결 주소, 모델 이름은 **`.env` 파일**�
 
 ## 곡 표지 자동 생성
 
-`PUT /api/settings`의 `autoCover`(기본 true)가 켜져 있으면 새 곡이 저장될 때(`finalizeToMusic`) 표지가 없는 곡(스타일과 제목이 있는 곡만)에 표지를 붙입니다. 순서는 ComfyUI Z-Image Turbo, Pixabay(`PIXABAY_API_KEY`), 그래픽입니다. 구현은 `backend/cover-art.mjs`이고, 진행 중에는 `GET /api/generate/status`의 `detail`이 "표지를 만드는 중"/"표지를 찾는 중"입니다.
+`PUT /api/settings`의 `autoCover`(기본 true)가 켜져 있으면 새 곡이 저장될 때(`finalizeToMusic`) 표지가 없는 곡(스타일과 제목이 있는 곡만)에 표지를 붙입니다. 순서는 ComfyUI Krea 2 Turbo, Pixabay(`PIXABAY_API_KEY`), 그래픽입니다. 구현은 `backend/cover-art.mjs`이고, 진행 중에는 `GET /api/generate/status`의 `detail`이 "표지를 만드는 중"/"표지를 찾는 중"입니다.
 
 ## LoRA 학습 (ComfyUI 학습기)
 

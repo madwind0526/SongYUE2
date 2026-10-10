@@ -6,6 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { createStudioServer } from './server.mjs';
+import { comfyUiLaunchArgs } from './comfyui.mjs';
 
 const ENV_KEYS = ['LLM_PROVIDER', 'OLLAMA_ENDPOINT', 'OLLAMA_MODEL', 'CLAUDE_API_KEY', 'CLAUDE_MODEL', 'OPENAI_API_KEY', 'OPENAI_MODEL', 'GEMINI_API_KEY', 'GEMINI_MODEL', 'ENGINE_PATH'];
 function resetEnv() { for (const key of ENV_KEYS) delete process.env[key]; }
@@ -65,6 +66,12 @@ test('local API persistence, request boundaries, provider adapters, and setting/
   for (const [key, value] of Object.entries(engineSettingsInput)) assert.equal(engineSettingsSaved.data[key], value, `expected ${key} in the PUT response`);
   const engineSettingsFetched = await call('/api/settings');
   for (const [key, value] of Object.entries(engineSettingsInput)) assert.equal(engineSettingsFetched.data[key], value, `expected ${key} in a fresh GET`);
+
+  // ComfyUI starts with ck_attention unless the setting turns it off; the choice survives a save and a fresh read.
+  assert.equal(engineSettingsFetched.data.comfyUiUseCkAttention, true, 'ck_attention is on by default');
+  assert.equal((await call('/api/settings', 'PUT', { comfyUiUseCkAttention: false })).data.comfyUiUseCkAttention, false);
+  assert.equal((await call('/api/settings')).data.comfyUiUseCkAttention, false);
+  assert.equal((await call('/api/settings', 'PUT', { comfyUiUseCkAttention: true })).data.comfyUiUseCkAttention, true);
 
   // library/examples seeded on first boot
   const examples = (await call('/api/examples')).data;
@@ -2346,4 +2353,13 @@ test('FX 프리셋(FX Sound + 리버브/에코): 저장, 목록, 삭제와 값 �
   assert.equal('eq' in list[0].params, false, 'the EQ has its own presets');
   assert.equal((await call(`/api/effect-presets?name=${encodeURIComponent('내 이펙트')}`, 'DELETE')).status, 200);
   assert.deepEqual((await call('/api/effect-presets')).data, []);
+});
+
+test('ComfyUI is launched with --use-ck-attention by default and without it when turned off', () => {
+  const url = new URL('http://127.0.0.1:8190');
+  const base = ['main.py', '--listen', '127.0.0.1', '--port', '8190', '--disable-auto-launch'];
+  assert.deepEqual(comfyUiLaunchArgs(url), [...base, '--use-ck-attention']);
+  assert.deepEqual(comfyUiLaunchArgs(url, { useCkAttention: true }), [...base, '--use-ck-attention']);
+  assert.deepEqual(comfyUiLaunchArgs(url, { useCkAttention: false }), base);
+  assert.equal(comfyUiLaunchArgs(new URL('http://localhost')).includes('8188'), true, 'the port falls back to 8188');
 });

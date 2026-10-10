@@ -19,5 +19,33 @@
   "sourceProjectId": "dcf31bef-1a33-4633-a8c9-626f55791b8d",
   "audioPath": "K0062-1 커튼 뒤의 세상-1.wav",
   "coverPath": "8b12fd1a-00fd-480b-9d3b-352a040381bb.png",
-  "saveError": null
+  "saveError": null,
+  "aiScore": {
+    "status": "completed",
+    "total": 60.9,
+    "confidence": 0,
+    "conclusion": "AI 생성 흔적이 비교적 약함",
+    "method": "이상치 제외 평균",
+    "outliersExcluded": [],
+    "detectors": [
+      {
+        "name": "sonics",
+        "label": "SONICS (SpecTTTra)",
+        "score": 82.7
+      },
+      {
+        "name": "artifactnet",
+        "label": "ArtifactNet v9.4",
+        "score": 100
+      },
+      {
+        "name": "lofcz",
+        "label": "lofcz vocoder fakeprint",
+        "score": 0
+      }
+    ],
+    "reportFile": "library/AI-MusicProbe/K0062-1 커튼 뒤의 세상-1 (2).json",
+    "scoredAt": "2026-09-27T14:01:36.623Z",
+    "error": null
+  }
 }

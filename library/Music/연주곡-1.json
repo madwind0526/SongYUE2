@@ -35,5 +35,33 @@
   "sourceProjectId": "634e6880-7c2e-4e6d-bb7e-687b206e9300",
   "audioPath": "연주곡-1.flac",
   "coverPath": "482d1e48-af99-4df6-ae94-43393f9908df.jpg",
-  "saveError": null
+  "saveError": null,
+  "aiScore": {
+    "status": "completed",
+    "total": 57.2,
+    "confidence": 0,
+    "conclusion": "AI 생성 흔적이 비교적 약함",
+    "method": "이상치 제외 평균",
+    "outliersExcluded": [],
+    "detectors": [
+      {
+        "name": "sonics",
+        "label": "SONICS (SpecTTTra)",
+        "score": 71.7
+      },
+      {
+        "name": "artifactnet",
+        "label": "ArtifactNet v9.4",
+        "score": 100
+      },
+      {
+        "name": "lofcz",
+        "label": "lofcz vocoder fakeprint",
+        "score": 0
+      }
+    ],
+    "reportFile": "library/AI-MusicProbe/연주곡-1 (1).json",
+    "scoredAt": "2026-09-27T14:00:00.477Z",
+    "error": null
+  }
 }

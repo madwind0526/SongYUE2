@@ -54,3 +54,11 @@ export async function execute(fetchImpl, endpoint, job) {
   }
   throw new Error('ComfyUI 작업 제한 시간을 초과했습니다.');
 }
+
+/**
+ * The command line arguments that start ComfyUI for SongYUE2. Comfy Kitchen attention (--use-ck-attention) is on unless
+ * the setting turns it off: it is ComfyUI's own INT8 attention kernel and needs a ComfyUI that has the option.
+ */
+export function comfyUiLaunchArgs(url, { useCkAttention = true } = {}) {
+  return ['main.py', '--listen', url.hostname, '--port', url.port || '8188', '--disable-auto-launch', ...(useCkAttention ? ['--use-ck-attention'] : [])];
+}

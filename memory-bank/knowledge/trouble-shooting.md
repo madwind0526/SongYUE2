@@ -567,7 +567,8 @@ const patched = template
 
 ## Wave 51: 표지 자동 생성 / VST3 / LoRA 학습 (2026-09-26)
 
-- **Z-Image Turbo가 프롬프트의 글자를 그림에 그린다**: 제목·가사(특히 한글)를 프롬프트에 넣으면 깨진 한글이 그림 속에 나타난다. cfg 1.0(Turbo 기본)에서는 negative prompt가 무시되고, cfg 2.0에 negative(text, letters, …)를 넣어도 막지 못했다. 해결: 프롬프트에는 스타일의 영어 단어만 쓰고 "wordless purely visual … without any signs, captions, letters" 문구를 붙인다(한글은 걸러 냄).
+- **표지 모델(Z-Image Turbo → Krea 2 Turbo)이 프롬프트의 글자를 그림에 그린다**: 제목·가사(특히 한글)를 프롬프트에 넣으면 깨진 한글이 그림 속에 나타난다. cfg 1.0(Turbo 기본)에서는 negative prompt가 무시되고, cfg 2.0에 negative(text, letters, …)를 넣어도 막지 못했다. 해결: 프롬프트에는 스타일의 영어 단어만 쓰고 "wordless purely visual … without any signs, captions, letters" 문구를 붙인다(한글은 걸러 냄).
+- **ComfyUI 표지 모델을 교체할 때**: 모델 종류가 바뀌면 모델 파일 3개뿐 아니라 CLIPLoader `type`, latent 노드, sampler가 같이 바뀐다. Krea 2 Turbo는 Z-Image와 달리 `CLIPLoader type='krea2'` + `EmptyLatentImage` + `KSampler(sampler_name='euler', cfg=1.0, steps=8)`이고 `ModelSamplingAuraFlow`/`EmptySD3LatentImage` 노드가 없다. VAE도 Flux용 `ae.safetensors`가 아니라 `qwen_image_vae.safetensors`여야 한다(틀리면 모델이 없어서 조용히 Pixabay로 넘어간다). 정답 워크플로는 ComfyUI 공식 템플릿 `comfyui_workflow_templates_json/templates/image_krea2_turbo_t2i.json`의 `Text to Image (Krea-2 Turbo)` 서브그래프를 보면 된다. 사용 가능한 타입과 모델은 `nodes.py`의 CLIPLoader type enum, `blueprints/*.json`의 서브그래프에서 확인한다.
 - **Pixabay는 한글 검색이 안 된다**(`lang=ko`여도 10개 단어 전부 0건). 가사의 한글 단어를 영어 검색어로 바꾸는 사전을 쓴다. 무료 API의 `largeImageURL`은 긴 변 1280px까지라 세로로 긴 사진을 정사각형으로 자르면 작아진다 → `per_page=200`에서 정사각형에 가까운 것만 고르고 자른 변이 너무 작은 것은 제외, 남은 것은 1400px로 확대.
 - **VST3 설정 상태는 플러그인 창을 정상적으로 닫을 때만 저장된다**(`vst-host --gui --state`). 프로세스를 죽이면 저장이 안 된다. `Process.CloseMainWindow()`(또는 `taskkill /PID`, /F 없음)는 정상 종료로 저장된다.
 - **vst-host의 표준 검색은 표준 VST3 폴더만 본다.** 앱 전용 폴더(`engine/vst-host/plugins/`)는 앱이 직접 찾는다. `--process-chain`의 체인 JSON은 `{plugins:[{path, enabled, state}]}`이고 스캔 결과는 stdout의 JSON 배열(로그는 stderr).

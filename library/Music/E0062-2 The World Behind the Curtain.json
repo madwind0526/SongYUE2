@@ -21,5 +21,33 @@
   "sourceProjectId": "977ddc46-446f-4064-994c-ed2795e6dc97",
   "audioPath": "E0062-2 The World Behind the Curtain.flac",
   "coverPath": "40b6ebc6-c711-4c7d-bc64-073064cfec80.png",
-  "saveError": null
+  "saveError": null,
+  "aiScore": {
+    "status": "completed",
+    "total": 54.9,
+    "confidence": 0,
+    "conclusion": "AI 생성 흔적이 비교적 약함",
+    "method": "이상치 제외 평균",
+    "outliersExcluded": [],
+    "detectors": [
+      {
+        "name": "sonics",
+        "label": "SONICS (SpecTTTra)",
+        "score": 64.9
+      },
+      {
+        "name": "artifactnet",
+        "label": "ArtifactNet v9.4",
+        "score": 99.9
+      },
+      {
+        "name": "lofcz",
+        "label": "lofcz vocoder fakeprint",
+        "score": 0
+      }
+    ],
+    "reportFile": "library/AI-MusicProbe/E0062-2 The World Behind the Curtain (1).json",
+    "scoredAt": "2026-09-27T14:01:23.583Z",
+    "error": null
+  }
 }

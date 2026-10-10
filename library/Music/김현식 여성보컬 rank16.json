@@ -30,5 +30,33 @@
   "sourceProjectId": "d63cd5b4-6405-4eda-abc9-8382b6832f4f",
   "audioPath": "김현식 여성보컬 rank16.flac",
   "coverPath": "6be07a8a-7957-4934-8ddc-70f141a8c5fb.jpg",
-  "saveError": null
+  "saveError": null,
+  "aiScore": {
+    "status": "completed",
+    "total": 59.9,
+    "confidence": 0,
+    "conclusion": "AI 생성 흔적이 비교적 약함",
+    "method": "이상치 제외 평균",
+    "outliersExcluded": [],
+    "detectors": [
+      {
+        "name": "sonics",
+        "label": "SONICS (SpecTTTra)",
+        "score": 80.3
+      },
+      {
+        "name": "artifactnet",
+        "label": "ArtifactNet v9.4",
+        "score": 99.4
+      },
+      {
+        "name": "lofcz",
+        "label": "lofcz vocoder fakeprint",
+        "score": 0
+      }
+    ],
+    "reportFile": "library/AI-MusicProbe/김현식 여성보컬 rank16 (2).json",
+    "scoredAt": "2026-09-27T13:59:14.636Z",
+    "error": null
+  }
 }

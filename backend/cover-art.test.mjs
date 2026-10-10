@@ -8,11 +8,13 @@ const info = (unets, clips, vaes) => ({
   VAELoader: { input: { required: { vae_name: [vaes] } } },
 });
 
-test('the Z-Image Turbo files are picked by preference (nvfp4, then fp8, then bf16) and missing pieces give null', () => {
-  const all = info(['Z-image\\z_image_turbo_bf16.safetensors', 'Z-image\\z_image_turbo_nvfp4.safetensors', 'Wan2.2\\x.safetensors'], ['qwen_3_4b.safetensors', 'Qwen\\qwen_3_4b_fp8_mixed.safetensors'], ['flux\\ae.safetensors', 'ae.safetensors']);
-  assert.deepEqual(pickCoverModels(all), { unet: 'Z-image\\z_image_turbo_nvfp4.safetensors', clip: 'Qwen\\qwen_3_4b_fp8_mixed.safetensors', vae: 'flux\\ae.safetensors' });
-  assert.equal(pickCoverModels(info(['other.safetensors'], ['qwen_3_4b.safetensors'], ['ae.safetensors'])), null);
-  assert.equal(pickCoverModels(info(['z_image_turbo_bf16.safetensors'], ['clip_l.safetensors'], ['ae.safetensors'])), null);
+test('the Krea 2 Turbo files are picked by preference (nvfp4, then fp8 scaled, then fp8) and missing pieces give null', () => {
+  const all = info(['Krea\\krea2_turbo_fp8.safetensors', 'Krea\\krea2_turbo_fp8_scaled.safetensors', 'Krea\\krea2_turbo_nvfp4.safetensors', 'Wan2.2\\x.safetensors'], ['Qwen\\qwen3vl_8b_fp8_scaled.safetensors', 'Qwen\\qwen3vl_4b_fp8_scaled.safetensors'], ['flux\\ae.safetensors', 'qwen\\qwen_image_vae.safetensors']);
+  assert.deepEqual(pickCoverModels(all), { unet: 'Krea\\krea2_turbo_nvfp4.safetensors', clip: 'Qwen\\qwen3vl_4b_fp8_scaled.safetensors', vae: 'qwen\\qwen_image_vae.safetensors' });
+  assert.deepEqual(pickCoverModels(info(['Krea\\krea2_turbo_fp8_scaled.safetensors'], ['qwen3vl_4b_fp8_scaled.safetensors'], ['qwen_image_vae.safetensors'])), { unet: 'Krea\\krea2_turbo_fp8_scaled.safetensors', clip: 'qwen3vl_4b_fp8_scaled.safetensors', vae: 'qwen_image_vae.safetensors' }, 'fp8 scaled is the fallback when there is no nvfp4');
+  assert.equal(pickCoverModels(info(['krea2_turbo_fp8.safetensors'], ['qwen3vl_4b_fp8_scaled.safetensors'], ['ae.safetensors'])), null, 'ae.safetensors is the Flux VAE and cannot decode Krea 2');
+  assert.equal(pickCoverModels(info(['krea2_turbo_fp8.safetensors'], ['clip_l.safetensors'], ['qwen_image_vae.safetensors'])), null);
+  assert.equal(pickCoverModels(info(['z_image_turbo_nvfp4.safetensors'], ['qwen_3_4b_fp8_mixed.safetensors'], ['ae.safetensors'])), null, 'the old Z-Image files are not used any more');
   assert.equal(pickCoverModels({}), null);
 });
 
@@ -30,6 +32,11 @@ test('the prompt follows the music style only: no title or lyrics (they would be
 test('the workflow is a square picture at the native size (never below the minimum cover size)', () => {
   assert.ok(COVER_GENERATE_SIZE >= COVER_MIN_SIZE);
   const workflow = buildCoverWorkflow({ models: { unet: 'u', clip: 'c', vae: 'v' }, prompt: 'p', seed: 3 });
+  assert.equal(workflow['2'].inputs.type, 'krea2');
+  assert.equal(workflow['7'].class_type, 'EmptyLatentImage');
+  assert.equal(workflow['8'].inputs.model[0], '1', 'the Krea 2 Turbo model goes straight into the sampler');
+  assert.equal(workflow['8'].inputs.sampler_name, 'euler');
+  assert.equal(workflow['8'].inputs.cfg, 1.0);
   assert.equal(workflow['7'].inputs.width, COVER_GENERATE_SIZE);
   assert.equal(workflow['7'].inputs.height, COVER_GENERATE_SIZE);
   assert.equal(workflow['8'].inputs.steps, 8);
@@ -39,7 +46,7 @@ test('the workflow is a square picture at the native size (never below the minim
 
 test('a picture is fetched from ComfyUI after the run completes; without models nothing is queued', async () => {
   const calls = [];
-  const models = info(['z_image_turbo_nvfp4.safetensors'], ['qwen_3_4b_fp8_mixed.safetensors'], ['ae.safetensors']);
+  const models = info(['Krea\\krea2_turbo_nvfp4.safetensors'], ['Qwen\\qwen3vl_4b_fp8_scaled.safetensors'], ['qwen\\qwen_image_vae.safetensors']);
   let polls = 0;
   const fetchImpl = async (url) => {
     calls.push(url);

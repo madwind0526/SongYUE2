@@ -30,5 +30,35 @@
   "sourceProjectId": "71e86b85-3f7e-4438-9295-081d2e208a2b",
   "audioPath": "LoRA 학습-원곡 (남자 보컬).flac",
   "coverPath": "468eb0e4-30b3-4539-a483-5aa6163f27ff.jpg",
-  "saveError": null
+  "saveError": null,
+  "aiScore": {
+    "status": "completed",
+    "total": 85.1,
+    "confidence": 60.2,
+    "conclusion": "AI 생성 흔적이 비교적 강함",
+    "method": "이상치 제외 평균",
+    "outliersExcluded": [
+      "lofcz vocoder fakeprint"
+    ],
+    "detectors": [
+      {
+        "name": "sonics",
+        "label": "SONICS (SpecTTTra)",
+        "score": 90.2
+      },
+      {
+        "name": "artifactnet",
+        "label": "ArtifactNet v9.4",
+        "score": 80.1
+      },
+      {
+        "name": "lofcz",
+        "label": "lofcz vocoder fakeprint",
+        "score": 0
+      }
+    ],
+    "reportFile": "library/AI-MusicProbe/LoRA 학습-원곡 (남자 보컬) (1).json",
+    "scoredAt": "2026-09-27T13:59:02.163Z",
+    "error": null
+  }
 }

@@ -12,3 +12,11 @@
 ## Wave 52 flush
 
 Advanced naturalization controls, preview wiring, bounded numeric inputs, and audio-compare layout were documented in knowledge/trouble-shooting.md.
+
+## Wave 53 flush
+
+External one-shot generation API compatibility, shared GPU locking, optional-resource skip behavior, dual path/file responses, and loopback-only browser access were documented in knowledge/PATTERNS.md.
+
+## Wave 54 flush
+
+Transient external generation cleanup, library non-registration, separate default output location, and real melody/instrumental API validation were documented in knowledge/PATTERNS.md.

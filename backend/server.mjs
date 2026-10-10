@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash, randomInt, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
-import { comfyUiAlive, execute as executeComfyUi } from './comfyui.mjs';
+import { comfyUiAlive, comfyUiLaunchArgs, execute as executeComfyUi } from './comfyui.mjs';
 import { parseNoteEvents, encodeMidiFile } from './midi.mjs';
 import { startDdspJob, killDdspJob } from './ddsp-svc.mjs';
 import { searchRvcVoices, downloadRvcVoice, listInstalledRvcVoices, resolveUserRvcVoice, deleteRvcVoice } from './rvcvoices.mjs';
@@ -274,6 +274,8 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     saveFormat: SAVE_FORMATS.has(stored.saveFormat) ? stored.saveFormat : (SAVE_FORMATS.has(process.env.SAVE_FORMAT) ? process.env.SAVE_FORMAT : 'wav'),
     viewMode: VIEW_MODES.has(stored.viewMode) ? stored.viewMode : 'list',
     autoCover: stored.autoCover !== false,
+    // ComfyUI is started with Comfy Kitchen attention (--use-ck-attention) unless this is turned off.
+    comfyUiUseCkAttention: stored.comfyUiUseCkAttention !== false,
     outputDirectory,
   };
   // Shared child-runner with a hard deadline + output cap. The older inline spawn promises resolved
@@ -541,7 +543,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
       return { buffer: result.buffer, extension: result.extension, notice: small ? `해상도가 낮습니다 (${result.size.width}×${result.size.height}). ${COVER_MIN_SIZE}px 이상을 권장합니다.` : '' };
     } catch { return { buffer, extension, notice: '' }; }
   }
-  // A new song without a cover gets a Z-Image Turbo picture from ComfyUI (title / style / lyrics as the prompt); without ComfyUI or its image models
+  // A new song without a cover gets a Krea 2 Turbo picture from ComfyUI (title / style / lyrics as the prompt); without ComfyUI or its image models
   // (or when it fails) a free Pixabay photo is used when PIXABAY_API_KEY is set, and last a simple gradient cover with the title is drawn.
   async function makeAutoCover(project) {
     if (!settings.autoCover || project.coverPath || !project.style || !project.title) return { project, temp: null };
@@ -2007,7 +2009,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     try { url = new URL(endpoint); } catch { throw fail(400, 'ComfyUI 연결 주소가 올바르지 않습니다. 설정에서 확인해 주세요.'); }
     // ComfyUI is a long-running server, not a spawn-per-request CLI like audio.cpp/Python --
     // detached + unref so it outlives this request and is reused by later generations.
-    const child = spawnImpl(python, ['main.py', '--listen', url.hostname, '--port', url.port || '8188', '--disable-auto-launch'], { cwd: enginePath, windowsHide: true, detached: true, stdio: 'ignore' });
+    const child = spawnImpl(python, comfyUiLaunchArgs(url, { useCkAttention: settings.comfyUiUseCkAttention !== false }), { cwd: enginePath, windowsHide: true, detached: true, stdio: 'ignore' });
     if (typeof child.unref === 'function') child.unref();
     const deadline = Date.now() + 60000;
     while (Date.now() < deadline) {
@@ -2132,7 +2134,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
   }
   const publicSettings = () => {
     const env = providerFromEnv(settings.provider);
-    return { provider: settings.provider, endpoint: env.endpoint, llmModel: env.model, enginePath: settings.enginePath, pythonEnginePath: settings.pythonEnginePath, pythonScriptPath: settings.pythonScriptPath, pythonMemoryBudgetGib: settings.pythonMemoryBudgetGib, sheetSagePythonPath: settings.sheetSagePythonPath, comfyUiEndpoint: settings.comfyUiEndpoint, comfyUiEnginePath: settings.comfyUiEnginePath, ddspSvcPath: settings.ddspSvcPath, aiMusicProbePath: settings.aiMusicProbePath, settingPath: settings.settingPath, musicPath: settings.musicPath, examplesPath: settings.examplesPath, coversPath: settings.coversPath, abcNotesPath: settings.abcNotesPath, stylePresets: settings.stylePresets, visualizerEnabled: settings.visualizerEnabled, visualizerRingCount: settings.visualizerRingCount, visualizerHue: settings.visualizerHue, visualizerLineWidth: settings.visualizerLineWidth, visualizerTrail: settings.visualizerTrail, visualizerSpiral: settings.visualizerSpiral, visualizerRingMode: settings.visualizerRingMode, visualizerTimeStep: settings.visualizerTimeStep, visualizerTimeSkew: settings.visualizerTimeSkew, visualizerRingStep: settings.visualizerRingStep, visualizerAmplitude: settings.visualizerAmplitude, saveFormat: settings.saveFormat, viewMode: settings.viewMode, autoCover: settings.autoCover, outputDirectory: path.relative(root, outputDirectory) || '.', hasApiKey: Boolean(env.apiKey), apiKey: env.apiKey ? '***' : null, apiKeyStorage: 'env' };
+    return { provider: settings.provider, endpoint: env.endpoint, llmModel: env.model, enginePath: settings.enginePath, pythonEnginePath: settings.pythonEnginePath, pythonScriptPath: settings.pythonScriptPath, pythonMemoryBudgetGib: settings.pythonMemoryBudgetGib, sheetSagePythonPath: settings.sheetSagePythonPath, comfyUiEndpoint: settings.comfyUiEndpoint, comfyUiEnginePath: settings.comfyUiEnginePath, comfyUiUseCkAttention: settings.comfyUiUseCkAttention, ddspSvcPath: settings.ddspSvcPath, aiMusicProbePath: settings.aiMusicProbePath, settingPath: settings.settingPath, musicPath: settings.musicPath, examplesPath: settings.examplesPath, coversPath: settings.coversPath, abcNotesPath: settings.abcNotesPath, stylePresets: settings.stylePresets, visualizerEnabled: settings.visualizerEnabled, visualizerRingCount: settings.visualizerRingCount, visualizerHue: settings.visualizerHue, visualizerLineWidth: settings.visualizerLineWidth, visualizerTrail: settings.visualizerTrail, visualizerSpiral: settings.visualizerSpiral, visualizerRingMode: settings.visualizerRingMode, visualizerTimeStep: settings.visualizerTimeStep, visualizerTimeSkew: settings.visualizerTimeSkew, visualizerRingStep: settings.visualizerRingStep, visualizerAmplitude: settings.visualizerAmplitude, saveFormat: settings.saveFormat, viewMode: settings.viewMode, autoCover: settings.autoCover, outputDirectory: path.relative(root, outputDirectory) || '.', hasApiKey: Boolean(env.apiKey), apiKey: env.apiKey ? '***' : null, apiKeyStorage: 'env' };
   };
   async function localFile(relativePath) {
     const file = path.join(root, relativePath);
@@ -2266,6 +2268,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           if (input.sheetSagePythonPath !== undefined) next.sheetSagePythonPath = text(input.sheetSagePythonPath, 2048);
           if (input.comfyUiEndpoint !== undefined) next.comfyUiEndpoint = text(input.comfyUiEndpoint, 2048);
           if (input.comfyUiEnginePath !== undefined) next.comfyUiEnginePath = text(input.comfyUiEnginePath, 2048);
+          if (input.comfyUiUseCkAttention !== undefined) next.comfyUiUseCkAttention = input.comfyUiUseCkAttention !== false;
           if (input.ddspSvcPath !== undefined) next.ddspSvcPath = text(input.ddspSvcPath, 2048);
           if (input.aiMusicProbePath !== undefined) next.aiMusicProbePath = text(input.aiMusicProbePath, 2048);
           if (input.settingPath !== undefined) next.settingPath = text(input.settingPath, 2048);
@@ -2288,7 +2291,7 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
           if (input.saveFormat !== undefined) next.saveFormat = input.saveFormat;
           if (input.autoCover !== undefined) next.autoCover = input.autoCover === true;
           if (input.viewMode !== undefined) next.viewMode = input.viewMode;
-          await saveJson(settingsFile, { provider: next.provider, enginePath: next.enginePath, pythonEnginePath: next.pythonEnginePath, pythonScriptPath: next.pythonScriptPath, pythonMemoryBudgetGib: next.pythonMemoryBudgetGib, sheetSagePythonPath: next.sheetSagePythonPath, comfyUiEndpoint: next.comfyUiEndpoint, comfyUiEnginePath: next.comfyUiEnginePath, ddspSvcPath: next.ddspSvcPath, aiMusicProbePath: next.aiMusicProbePath, settingPath: next.settingPath, musicPath: next.musicPath, examplesPath: next.examplesPath, coversPath: next.coversPath, abcNotesPath: next.abcNotesPath, stylePresets: next.stylePresets, visualizerEnabled: next.visualizerEnabled, visualizerRingCount: next.visualizerRingCount, visualizerHue: next.visualizerHue, visualizerLineWidth: next.visualizerLineWidth, visualizerTrail: next.visualizerTrail, visualizerSpiral: next.visualizerSpiral, visualizerRingMode: next.visualizerRingMode, visualizerTimeStep: next.visualizerTimeStep, visualizerTimeSkew: next.visualizerTimeSkew, visualizerRingStep: next.visualizerRingStep, visualizerAmplitude: next.visualizerAmplitude, saveFormat: next.saveFormat, viewMode: next.viewMode, autoCover: next.autoCover });
+          await saveJson(settingsFile, { provider: next.provider, enginePath: next.enginePath, pythonEnginePath: next.pythonEnginePath, pythonScriptPath: next.pythonScriptPath, pythonMemoryBudgetGib: next.pythonMemoryBudgetGib, sheetSagePythonPath: next.sheetSagePythonPath, comfyUiEndpoint: next.comfyUiEndpoint, comfyUiEnginePath: next.comfyUiEnginePath, comfyUiUseCkAttention: next.comfyUiUseCkAttention, ddspSvcPath: next.ddspSvcPath, aiMusicProbePath: next.aiMusicProbePath, settingPath: next.settingPath, musicPath: next.musicPath, examplesPath: next.examplesPath, coversPath: next.coversPath, abcNotesPath: next.abcNotesPath, stylePresets: next.stylePresets, visualizerEnabled: next.visualizerEnabled, visualizerRingCount: next.visualizerRingCount, visualizerHue: next.visualizerHue, visualizerLineWidth: next.visualizerLineWidth, visualizerTrail: next.visualizerTrail, visualizerSpiral: next.visualizerSpiral, visualizerRingMode: next.visualizerRingMode, visualizerTimeStep: next.visualizerTimeStep, visualizerTimeSkew: next.visualizerTimeSkew, visualizerRingStep: next.visualizerRingStep, visualizerAmplitude: next.visualizerAmplitude, saveFormat: next.saveFormat, viewMode: next.viewMode, autoCover: next.autoCover });
           settings = next;
           if (input.settingPath !== undefined) await mkdir(settingDir(), { recursive: true });
           if (input.musicPath !== undefined) await mkdir(musicDir(), { recursive: true });

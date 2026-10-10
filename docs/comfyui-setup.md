@@ -12,6 +12,11 @@ INT8 ConvRot 체크포인트(`yue2_3b_int8_convrot.safetensors`)는 audio.cpp도
 
 독립 설치 시 약 **8~8.5GB**가 필요합니다(`.venv` 약 4.1GB + ComfyUI 코드 약 0.1GB + YuE2 INT8 체크포인트 3.96GB). 체크포인트는 `scripts/download_models.py`로 이미 받아 둔 파일을 하드링크로 연결하므로 실질 추가 용량은 **약 4.2GB**(venv+코드)입니다. 설치 중 pip 다운로드 캐시가 일시적으로 2~3GB 더 잡힐 수 있으나 설치 후 지워도 됩니다.
 
+## 실행 옵션과 버전
+
+- SongYUE2가 ComfyUI를 켤 때 기본으로 `--use-ck-attention`을 붙입니다(설정 화면의 "ComfyUI를 켤 때 ck_attention으로 실행하기"로 끌 수 있음). ComfyUI의 Comfy Kitchen INT8 attention을 쓰는 옵션이며 RTX 5070에서 동작을 확인했습니다. 로그에 `Using Comfy Kitchen attention`이 나옵니다.
+- `engine/ComfyUI`는 2026-10-10에 v0.36.0에서 v0.39.1로 올렸습니다(Qwen Image 2.1 지원이 필요해서). 올리기 전 상태는 브랜치 `backup-before-update-20261010`과 `engine/comfyui-pip-freeze-before-update.txt`에 있습니다. v0.39.1 태그에 고정되어(detached HEAD) 있으니 더 올릴 때는 `git pull` 대신 새 태그를 체크아웃합니다.
+
 ## 1. ComfyUI 설치
 
 SongYUE2 전용으로 `engine/ComfyUI/`에 독립 설치합니다(`engine/`은 `.gitignore` 대상이라 저장소에는 남지 않습니다, `engine/audio.cpp/`와 같은 위치 규칙).
@@ -75,17 +80,17 @@ New-Item -ItemType HardLink `
 
 작곡 계획이 "계획 없이 생성"(`cot=off`)이 아닌 한(기본값은 "멜로디와 코드 계획"), ComfyUI로 생성하기 전에 심볼릭 작곡(ABC 악보) 단계를 먼저 거칩니다 — 이 단계는 ComfyUI가 아니라 기존 Python 엔진을 씁니다. 즉 이 모델을 기본 설정으로 쓰려면 [docs/python-engine-setup.md](python-engine-setup.md)의 Python 실행 파일/스크립트 경로도 설정되어 있어야 합니다. "계획 없이 생성"으로 바꾸면 이 요구사항은 없어집니다.
 
-## 5. 표지 이미지 모델 (Z-Image Turbo, 선택)
+## 5. 표지 이미지 모델 (Krea 2 Turbo, 선택)
 
 곡 표지 자동 생성이 쓰는 모델입니다. 없으면 자동으로 Pixabay 사진이나 그래픽 표지로 넘어갑니다. ComfyUI가 기본으로 지원하므로 새 노드는 필요 없고, 아래 세 파일이 ComfyUI에 보이면 됩니다.
 
 | 파일 | 폴더 | 크기(권장 변형) |
 |---|---|---|
-| `z_image_turbo_nvfp4.safetensors` (없으면 fp8, bf16 순으로 사용) | `models/diffusion_models/` | 4.5GB |
-| `qwen_3_4b_fp8_mixed.safetensors` (없으면 fp4_mixed, qwen_3_4b 순) | `models/text_encoders/` | 5.6GB |
-| `ae.safetensors` | `models/vae/` | 0.34GB |
+| `krea2_turbo_nvfp4.safetensors` (없으면 fp8_scaled, fp8 순으로 사용) | `models/diffusion_models/` | 7.3GB |
+| `qwen3vl_4b_fp8_scaled.safetensors` | `models/text_encoders/` | 5.0GB |
+| `qwen_image_vae.safetensors` | `models/vae/` | 0.24GB |
 
-받는 곳은 Hugging Face의 Comfy-Org/z_image_turbo(`split_files/`)입니다. 다른 ComfyUI의 모델 폴더를 그대로 쓰려면 `engine/ComfyUI/extra_model_paths.yaml`에 그 폴더를 적으세요(이 파일은 ComfyUI가 시작할 때 읽으므로 **ComfyUI를 다시 시작**해야 합니다). 예:
+받는 곳은 Hugging Face의 Comfy-Org/Krea-2(`diffusion_models/`, `text_encoders/`, `vae/`)입니다. 다른 ComfyUI의 모델 폴더를 그대로 쓰려면 `engine/ComfyUI/extra_model_paths.yaml`에 그 폴더를 적으세요(이 파일은 ComfyUI가 시작할 때 읽으므로 **ComfyUI를 다시 시작**해야 합니다). 예:
 
 ```yaml
 sd_lib:

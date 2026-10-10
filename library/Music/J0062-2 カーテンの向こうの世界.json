@@ -21,5 +21,33 @@
   "sourceProjectId": "c75375b4-b11a-45c4-b562-554c1ff16b9b",
   "audioPath": "J0062-2 カーテンの向こうの世界.flac",
   "coverPath": "1384793d-cdeb-4916-8997-aa99e1b139bd.png",
-  "saveError": null
+  "saveError": null,
+  "aiScore": {
+    "status": "completed",
+    "total": 59.9,
+    "confidence": 0,
+    "conclusion": "AI 생성 흔적이 비교적 약함",
+    "method": "이상치 제외 평균",
+    "outliersExcluded": [],
+    "detectors": [
+      {
+        "name": "sonics",
+        "label": "SONICS (SpecTTTra)",
+        "score": 79.7
+      },
+      {
+        "name": "artifactnet",
+        "label": "ArtifactNet v9.4",
+        "score": 99.9
+      },
+      {
+        "name": "lofcz",
+        "label": "lofcz vocoder fakeprint",
+        "score": 0
+      }
+    ],
+    "reportFile": "library/AI-MusicProbe/J0062-2 カーテンの向こうの世界 (1).json",
+    "scoredAt": "2026-09-27T14:01:12.034Z",
+    "error": null
+  }
 }
