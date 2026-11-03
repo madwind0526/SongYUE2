@@ -43,6 +43,7 @@ Invoke-RestMethod `
 - `aiPolish`: 노이즈 제거, Spectral Lifter, 보컬 자연화 자동 적용 여부
 - `postprocess`, `postprocessPreset`: 저장된 전체 후처리 프리셋 적용 여부와 이름. 이름이 맞지 않으면 경고 후 건너뜁니다.
 - `outputFormat`: `wav`, `mp3`, `mp4`
+- MP4는 앨범 표지가 포함된 1024×1024 정사각형 영상(H.264 + AAC)으로 저장됩니다.
 - `outputFolder`, `fileName`: 결과 저장 위치와 이름. 기존 파일은 덮어쓰지 않고 번호를 붙입니다.
 - `responseMode`: `path`는 저장 경로 JSON을, `file`은 완성 파일을 직접 반환합니다.
 

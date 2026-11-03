@@ -6,7 +6,7 @@
 
 | # | 유형 | 발견사항 | 상태 |
 |---|------|----------|------|
-| - | - | (Wave 50 필터 규칙·검증 내용은 knowledge/로 flush 완료) | - |
+| - | - | (Wave 55 MP4 정사각형 출력 설정을 knowledge/PATTERNS.md로 flush 완료) | - |
 
 
 ## Wave 52 flush

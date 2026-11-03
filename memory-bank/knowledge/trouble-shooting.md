@@ -125,7 +125,7 @@ stdout 파싱에 의존하지 말고, 스크립트가 결과를 디스크에 진
 
 ### 해결
 
-세로도 자동계산(`-2`) 대신 목표 해상도를 그대로 명시한다: `scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=...` (ffmpeg wiki의 표준 letterbox 레시피). `-2` 자동계산은 원본 비율이 목표와 비슷할 때만 쓰고, 임의의 사용자 업로드 이미지(비율 예측 불가) 앞에서는 양쪽 다 명시하는 편이 안전하다.
+세로도 자동계산(`-2`) 대신 목표 해상도를 그대로 명시한다: `scale=1024:1024:force_original_aspect_ratio=decrease,pad=1024:1024:(ow-iw)/2:(oh-ih)/2:color=...` (ffmpeg wiki의 표준 letterbox 레시피). `-2` 자동계산은 원본 비율이 목표와 비슷할 때만 쓰고, 임의의 사용자 업로드 이미지(비율 예측 불가) 앞에서는 양쪽 다 명시하는 편이 안전하다.
 
 ### 재사용 가능한 교훈
 

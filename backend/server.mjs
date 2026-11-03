@@ -82,9 +82,9 @@ const FFMPEG_ARGS = {
   mp3: (input, output) => ['-y', '-i', input, '-c:a', 'libmp3lame', '-b:a', '320k', output],
   mp4: (input, output, coverFile) => [
     '-y',
-    ...(coverFile ? ['-loop', '1', '-i', coverFile] : ['-f', 'lavfi', '-i', 'color=c=1b2a1d:s=1280x720:r=1']),
+    ...(coverFile ? ['-loop', '1', '-i', coverFile] : ['-f', 'lavfi', '-i', 'color=c=1b2a1d:s=1024x1024:r=1']),
     '-i', input,
-    '-c:v', 'libx264', '-tune', 'stillimage', '-pix_fmt', 'yuv420p', '-vf', 'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2:color=0x1b2a1d',
+    '-c:v', 'libx264', '-tune', 'stillimage', '-pix_fmt', 'yuv420p', '-vf', 'scale=1024:1024:force_original_aspect_ratio=decrease,pad=1024:1024:(ow-iw)/2:(oh-ih)/2:color=0x1b2a1d',
     '-c:a', 'aac', '-b:a', '256k', '-shortest', output,
   ],
 };

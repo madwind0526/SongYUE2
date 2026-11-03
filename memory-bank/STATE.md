@@ -2,10 +2,10 @@
 
 ## Current Wave
 
-- **Wave:** 54
+- **Wave:** 55
 - **Status:** Done
 - **Cache Status:** CLEAN
-- **Last Checkpoint:** 2026-09-29 external API transient/non-library lifecycle, expanded README guide, and real Q8 melody/instrumental MP4 generation validation.
+- **Last Checkpoint:** 2026-11-03 SongYUE2 MP4 outputs changed from 1280×720 to 1024×1024; a library-based 5-second MP4 was confirmed with ffprobe and audio present.
 - **Last Checkpoint:** 2026-09-29 external one-shot generation API with optional LoRA/AI polish/postprocess, path or binary output, loopback app access, tests and docs.
 - **Last Checkpoint:** 2026-09-26 AI polish naturalization Advanced dialog, preview transport, bounded numeric inputs and compare layout.
 - **Last Checkpoint:** 2026-09-25 Installed 필터 추가 및 허깅페이스와 옵션 공유. 월드/민속·중국어 제외, 한 줄 배치. 타입 검사·브라우저 검증 및 남은 일 정리. 실제 모바일 키보드/OS 큰 글꼴은 후속.
