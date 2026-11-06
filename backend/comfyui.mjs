@@ -59,6 +59,14 @@ export async function execute(fetchImpl, endpoint, job) {
  * The command line arguments that start ComfyUI for SongYUE2. Comfy Kitchen attention (--use-ck-attention) is on unless
  * the setting turns it off: it is ComfyUI's own INT8 attention kernel and needs a ComfyUI that has the option.
  */
+/**
+ * How a portable ComfyUI (python_embeded next to a ComfyUI folder, e.g. the Rev0 build the video app shares) is started:
+ * the python is run from the portable root with ComfyUI/main.py.
+ */
+export function comfyUiPortableArgs(url, { useCkAttention = true } = {}) {
+  return ['-I', '-W', 'ignore::FutureWarning', 'ComfyUI/main.py', '--windows-standalone-build', '--listen', url.hostname, '--port', url.port || '8188', '--disable-auto-launch', ...(useCkAttention ? ['--use-ck-attention'] : [])];
+}
+
 export function comfyUiLaunchArgs(url, { useCkAttention = true } = {}) {
   return ['main.py', '--listen', url.hostname, '--port', url.port || '8188', '--disable-auto-launch', ...(useCkAttention ? ['--use-ck-attention'] : [])];
 }

@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash, randomInt, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import os from 'node:os';
-import { comfyUiAlive, comfyUiLaunchArgs, execute as executeComfyUi } from './comfyui.mjs';
+import { comfyUiAlive, comfyUiLaunchArgs, comfyUiPortableArgs, execute as executeComfyUi } from './comfyui.mjs';
 import { parseNoteEvents, encodeMidiFile } from './midi.mjs';
 import { startDdspJob, killDdspJob } from './ddsp-svc.mjs';
 import { searchRvcVoices, downloadRvcVoice, listInstalledRvcVoices, resolveUserRvcVoice, deleteRvcVoice } from './rvcvoices.mjs';
@@ -2003,13 +2003,17 @@ export async function createStudioServer({ root = ROOT, port = 4311, fetchImpl =
     const endpoint = settings.comfyUiEndpoint || DEFAULT_COMFYUI_ENDPOINT;
     if (await comfyUiAlive(fetchImpl, endpoint)) return endpoint;
     const enginePath = resolveConfigPath(settings.comfyUiEnginePath, DEFAULT_COMFYUI_ENGINE_PATH);
-    const python = path.join(enginePath, '.venv', 'Scripts', 'python.exe');
+    const venvPython = path.join(enginePath, '.venv', 'Scripts', 'python.exe');
+    // A portable ComfyUI (python_embeded) is started its own way; the venv install stays the default.
+    const portablePython = path.join(enginePath, 'python_embeded', 'python.exe');
+    const portable = !(await exists(venvPython)) && (await exists(portablePython));
+    const python = portable ? portablePython : venvPython;
     if (!(await exists(python))) throw fail(400, `ComfyUI 실행 파일을 찾을 수 없습니다: ${path.relative(root, python) || python}. 설정에서 ComfyUI 설치 경로를 확인해 주세요.`);
     let url;
     try { url = new URL(endpoint); } catch { throw fail(400, 'ComfyUI 연결 주소가 올바르지 않습니다. 설정에서 확인해 주세요.'); }
     // ComfyUI is a long-running server, not a spawn-per-request CLI like audio.cpp/Python --
     // detached + unref so it outlives this request and is reused by later generations.
-    const child = spawnImpl(python, comfyUiLaunchArgs(url, { useCkAttention: settings.comfyUiUseCkAttention !== false }), { cwd: enginePath, windowsHide: true, detached: true, stdio: 'ignore' });
+    const child = spawnImpl(python, (portable ? comfyUiPortableArgs : comfyUiLaunchArgs)(url, { useCkAttention: settings.comfyUiUseCkAttention !== false }), { cwd: enginePath, windowsHide: true, detached: true, stdio: 'ignore' });
     if (typeof child.unref === 'function') child.unref();
     const deadline = Date.now() + 60000;
     while (Date.now() < deadline) {

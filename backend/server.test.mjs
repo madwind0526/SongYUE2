@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { createStudioServer } from './server.mjs';
-import { comfyUiLaunchArgs } from './comfyui.mjs';
+import { comfyUiLaunchArgs, comfyUiPortableArgs } from './comfyui.mjs';
 
 const ENV_KEYS = ['LLM_PROVIDER', 'OLLAMA_ENDPOINT', 'OLLAMA_MODEL', 'CLAUDE_API_KEY', 'CLAUDE_MODEL', 'OPENAI_API_KEY', 'OPENAI_MODEL', 'GEMINI_API_KEY', 'GEMINI_MODEL', 'ENGINE_PATH'];
 function resetEnv() { for (const key of ENV_KEYS) delete process.env[key]; }
@@ -2362,4 +2362,6 @@ test('ComfyUI is launched with --use-ck-attention by default and without it when
   assert.deepEqual(comfyUiLaunchArgs(url, { useCkAttention: true }), [...base, '--use-ck-attention']);
   assert.deepEqual(comfyUiLaunchArgs(url, { useCkAttention: false }), base);
   assert.equal(comfyUiLaunchArgs(new URL('http://localhost')).includes('8188'), true, 'the port falls back to 8188');
+  assert.deepEqual(comfyUiPortableArgs(url), ['-I', '-W', 'ignore::FutureWarning', 'ComfyUI/main.py', '--windows-standalone-build', '--listen', '127.0.0.1', '--port', '8190', '--disable-auto-launch', '--use-ck-attention']);
+  assert.ok(!comfyUiPortableArgs(url, { useCkAttention: false }).includes('--use-ck-attention'));
 });
