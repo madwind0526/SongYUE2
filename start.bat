@@ -29,4 +29,5 @@ if exist "%AI_MUSIC_PROBE_DIR%\start.bat" (
 )
 
 echo Starting SongYUE2...
+start "" /min C:\Claude\open-url.bat http://127.0.0.1:5176
 call npm run dev
